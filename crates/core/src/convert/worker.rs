@@ -54,6 +54,8 @@ struct Ready {
     ready: bool,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    soffice_pid: Option<u32>,
 }
 
 pub(super) struct Worker {
@@ -67,6 +69,8 @@ pub(super) struct Worker {
     pub jobs: u64,
     pub last_used: Instant,
     next_request: u64,
+    /// The `soffice` the bridge reported, in its own session; killed by pid.
+    soffice_pid: Option<u32>,
 }
 
 impl Worker {
@@ -85,6 +89,10 @@ impl Worker {
             }
             None => tokio::fs::create_dir(&profile).await?,
         }
+        // LibreOffice honours TMPDIR for its temporary files; the private
+        // worker directory keeps them away from other local users.
+        let tmp = dir.path().join("tmp");
+        tokio::fs::create_dir(&tmp).await?;
         let pipe = format!(
             "rusticdoc-{}-{id}-{}",
             std::process::id(),
@@ -99,10 +107,12 @@ impl Worker {
             .arg("--soffice")
             .arg(&launch.soffice)
             .env("HOME", dir.path())
+            .env("TMPDIR", &tmp)
             .current_dir(dir.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
+            .process_group(0)
             .kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| {
             engine(format!(
@@ -121,6 +131,7 @@ impl Worker {
             jobs: 0,
             last_used: Instant::now(),
             next_request: 1,
+            soffice_pid: None,
         };
         let line = match tokio::time::timeout(start_timeout, worker.stdout.next_line()).await {
             Ok(Ok(Some(line))) => line,
@@ -137,6 +148,7 @@ impl Worker {
         };
         let ready: Ready = serde_json::from_str(&line)
             .map_err(|e| engine(format!("unexpected bridge greeting '{line}': {e}")))?;
+        worker.soffice_pid = ready.soffice_pid;
         if !ready.ready {
             worker.kill().await;
             return Err(engine(format!(
@@ -190,10 +202,34 @@ impl Worker {
         Ok(resp)
     }
 
-    /// Kills the bridge; on Linux the kernel kills its `soffice` with it.
+    /// Kills the bridge's process group and its `soffice`, and reaps the
+    /// bridge.
     pub async fn kill(&mut self) {
-        let _ = self.child.start_kill();
+        self.kill_tree();
         let _ = self.child.wait().await;
+    }
+
+    /// SIGKILLs the bridge's process group (the bridge leads it) and the
+    /// `soffice` it reported, which runs in a session of its own.
+    fn kill_tree(&mut self) {
+        let targets = self
+            .child
+            .id()
+            .map(|pid| -(pid as i32))
+            .into_iter()
+            .chain(self.soffice_pid.take().map(|pid| pid as i32));
+        for target in targets {
+            // SAFETY: kill(2) takes two integers and touches no memory.
+            unsafe {
+                libc::kill(target, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.kill_tree();
     }
 }
 

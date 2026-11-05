@@ -127,6 +127,30 @@ check "portrait page is taller than wide" \
 echo "verapdf ua1 on the PDF/UA output (informational; LibreOffice does not pass every rule):"
 tool verapdf -f ua1 --format text /o/pdfua.pdf 2>/dev/null | grep -v '^WARNING' | head -5 || true
 
+echo "== batch 3: soffice killed between two requests"
+cat > "$WORK/killtest.py" <<EOF
+import json, os, signal, stat, subprocess, sys, time
+p = subprocess.Popen([sys.executable, "/w/unobridge.py", "--soffice", "$SOFFICE", "--profile", "/tmp/profile-kill",
+                      "--socket-path", "rd-kill"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+ready = json.loads(p.stdout.readline())
+pipe = "/tmp/OSL_PIPE_%d_rd-kill" % os.getuid()
+mode = stat.S_IMODE(os.stat(pipe).st_mode)
+print("pipe", pipe, oct(mode))
+assert mode == 0o700, "the UNO pipe must be private to this user"
+def ask(i):
+    p.stdin.write(json.dumps({"id": i, "input": "/w/sample.docx", "output": "/w/out/kill%d.pdf" % i, "filter": "pdf",
+                              "filter_options": {}, "password": None, "landscape": False}) + "\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+first = ask(1)
+os.kill(ready["soffice_pid"], signal.SIGKILL); time.sleep(0.5)
+second = ask(2)
+code = p.wait(timeout=10)
+print("first", first, "second", second, "exit", code)
+sys.exit(0 if first["ok"] and second["error"] == "libreoffice gone" and code != 0 else 1)
+EOF
+check "dead soffice is reported and the bridge exits non-zero" \
+  docker run --rm --platform "$PLATFORM" -v "$WORK:/w" --entrypoint python3 "$OFFICE_IMAGE" /w/killtest.py
+
 echo "== timing: warm DOCX->PDF, bridge-side ms per conversion (requests 101-110)"
 grep -E '"id": 1(0[1-9]|10),' "$WORK/batch2.jsonl" | sed -E 's/.*"ms": ([0-9]+).*/\1/' \
   | awk '{s+=$1; if (NR==1||$1<min) min=$1; if ($1>max) max=$1} END {printf "  n=%d avg=%.0f ms min=%d ms max=%d ms\n", NR, s/NR, min, max}'

@@ -57,16 +57,9 @@ SERVICES = [
 ]
 
 
-def prop(name, value):
-    p = PropertyValue()
-    p.Name = name
-    p.Value = value
-    return p
-
-
 def props(mapping):
     return uno.Any("[]com.sun.star.beans.PropertyValue",
-                   tuple(prop(k, v) for k, v in mapping.items()))
+                   tuple(PropertyValue(Name=k, Value=v) for k, v in mapping.items()))
 
 
 def set_pdeathsig():
@@ -107,15 +100,18 @@ class Office:
                     raise RuntimeError("libreoffice exited with %d during start" % code)
                 if time.monotonic() > deadline:
                     self.proc.kill()
+                    self.proc.wait()
                     raise RuntimeError("libreoffice did not accept a connection in time")
                 time.sleep(0.05)
         self.desktop = self.ctx.ServiceManager.createInstanceWithContext(
             "com.sun.star.frame.Desktop", self.ctx)
 
     def launch(self):
+        # Its own session, so a signal to the bridge's group misses it and
+        # the Rust side kills it by pid; umask 077 keeps the UNO pipe private.
         self.proc = subprocess.Popen(
             self.args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            preexec_fn=set_pdeathsig, env=self.env)
+            preexec_fn=set_pdeathsig, env=self.env, start_new_session=True)
 
     def alive(self):
         return self.proc.poll() is None
@@ -128,6 +124,7 @@ class Office:
             pass
         if self.alive():
             self.proc.kill()
+            self.proc.wait()
 
     def convert(self, req):
         load = {"Hidden": True, "ReadOnly": True, "UpdateDocMode": 0,
@@ -200,16 +197,15 @@ def page_count(doc, app):
 
 
 def reply(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
+    print(json.dumps(obj), flush=True)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--socket-path", required=True, help="pipe name for --accept")
-    ap.add_argument("--profile", required=True)
-    ap.add_argument("--soffice", required=True)
+    for name in ("--socket-path", "--profile", "--soffice"):
+        ap.add_argument(name, required=True)
     args = ap.parse_args()
+    os.umask(0o077)
     try:
         office = Office(args.soffice, args.profile, args.socket_path)
     except Exception as e:
