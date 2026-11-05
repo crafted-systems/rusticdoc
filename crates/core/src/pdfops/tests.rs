@@ -1016,6 +1016,12 @@ async fn request_sizes_are_capped() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
+    let zero = SplitMode::Intervals { span: 0 };
+    let err = LopdfEngine::default()
+        .split(&input, &zero, T)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
     let big_overlay = Overlay {
         kind: OverlayKind::Image {
             bytes: vec![0; 11],
