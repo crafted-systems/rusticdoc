@@ -7,6 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 hex = "0.4.3"
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
 quick-xml = "0.41.0"
