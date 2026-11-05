@@ -392,10 +392,14 @@ pub struct Validation {
     /// SHA-256 of the template, the cache key.
     pub template_hash: String,
     pub format: String,
-    /// The engine that would handle it.
+    /// The engine that would handle it: `office`, `text` or `none`.
     pub engine: &'static str,
-    /// Present when `ok` is false.
+    /// The first error, when `ok` is false.
     pub error: Option<String>,
+    /// Every problem found: `severity`, `message`, and a `location` with
+    /// `part`, `place` and `snippet` where known.
+    #[schema(value_type = Vec<Object>)]
+    pub diagnostics: Vec<serde_json::Value>,
 }
 
 /// Checks a template against sample data without converting anything.
@@ -414,21 +418,40 @@ pub async fn validate(
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
     let format = template.extension();
-    let engine = if template::is_text_template(&format) {
+    let engine = if template::is_office_format(&format) {
+        "office"
+    } else if template::is_text_template(&format) {
         "text"
-    } else if template::is_office_format(&format) {
-        "office (phase 1)"
     } else {
         "none"
     };
-    let error = template::render(&template, &data, &ctx)
-        .err()
-        .map(|e| e.to_string());
+    let hash = template::template_hash(&template.bytes);
+    let diagnostics =
+        tokio::task::spawn_blocking(move || template::validate(&template, &data, &ctx))
+            .await
+            .map_err(|e| {
+                ApiError::new(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "io_error",
+                    e.to_string(),
+                )
+            })?;
+    let error = diagnostics
+        .iter()
+        .find(|d| matches!(d.severity, rusticdoc_template::Severity::Error))
+        .map(|d| match &d.location {
+            Some(l) => format!("{} ({} {}: {})", d.message, l.part, l.place, l.snippet),
+            None => d.message.clone(),
+        });
     Ok(Json(Validation {
         ok: error.is_none(),
-        template_hash: template::template_hash(&template.bytes),
+        template_hash: hash,
         format,
         engine,
         error,
+        diagnostics: diagnostics
+            .iter()
+            .map(|d| serde_json::to_value(d).unwrap_or_default())
+            .collect(),
     }))
 }

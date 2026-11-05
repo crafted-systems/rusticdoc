@@ -37,7 +37,7 @@ impl Engines {
         serde_json::json!({
             "libreoffice": self.libreoffice.as_ref().map(|l| l.bin().display().to_string()),
             "pdf": self.pdf.names(),
-            "templates": { "text": template::TEXT_FORMATS, "office": "phase 1" },
+            "templates": { "text": template::TEXT_FORMATS, "office": template::OFFICE_FORMATS },
         })
     }
 
@@ -49,6 +49,11 @@ impl Engines {
         })
     }
 }
+
+/// Most steps one request may run.
+pub const MAX_STEPS: usize = 50;
+/// Most documents one request may have in flight after splits.
+pub const MAX_DOCUMENTS: usize = 1_000;
 
 #[derive(Debug, Clone)]
 pub struct Pipeline {
@@ -86,6 +91,12 @@ impl Pipeline {
         let started = Instant::now();
         let mut timings: Vec<(String, u128)> = Vec::new();
         req.convert_options.validate()?;
+        if req.steps.len() > MAX_STEPS {
+            return Err(Error::InvalidRequest(format!(
+                "{} steps is more than the {MAX_STEPS} one request may run",
+                req.steps.len()
+            )));
+        }
 
         let has_data = !is_empty_object(&req.data);
         let ext = req.template.extension();
@@ -131,6 +142,11 @@ impl Pipeline {
                     let mut out = Vec::new();
                     for doc in &current {
                         out.extend(self.engines.pdf.split(doc, mode, timeout).await?);
+                        if out.len() > MAX_DOCUMENTS {
+                            return Err(Error::InvalidRequest(format!(
+                                "splitting would leave more than {MAX_DOCUMENTS} documents in flight"
+                            )));
+                        }
                     }
                     out
                 }
@@ -306,10 +322,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn office_file_with_data_is_refused_as_unsupported() {
+    async fn office_file_with_data_goes_through_the_template_engine() {
+        // Not a real ZIP, so the engine reports a template error rather
+        // than converting it as it is.
         let mut req = RenderRequest::new(Document::new("report.docx", vec![0x50, 0x4b, 3, 4]));
         req.data = json!({"a": 1});
         let err = pipeline().run(req).await.unwrap_err();
-        assert!(matches!(err, Error::Unsupported(_)), "{err}");
+        assert!(matches!(err, Error::Template(_)), "{err}");
     }
 }
