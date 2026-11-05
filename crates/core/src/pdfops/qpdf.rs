@@ -113,7 +113,7 @@ impl PdfEngine for QpdfEngine {
         ))
     }
 
-    /// `qpdf --pages in.pdf 1-3 -- out.pdf` per range, or
+    /// `qpdf --empty --pages in.pdf 1-3 -- out.pdf` per range, or
     /// `qpdf --split-pages=N in.pdf out-%d.pdf` for intervals.
     async fn split(
         &self,
@@ -140,6 +140,7 @@ impl PdfEngine for QpdfEngine {
                 for (i, spec) in specs.iter().enumerate() {
                     let out = dir.path().join(format!("part-{i}.pdf"));
                     let args = vec![
+                        "--empty".to_string(),
                         "--pages".to_string(),
                         input.display().to_string(),
                         spec.clone(),
@@ -162,11 +163,13 @@ impl PdfEngine for QpdfEngine {
                     dir.path().join("part-%d.pdf").display().to_string(),
                 ];
                 self.run(dir.path(), &args, timeout).await?;
-                let mut parts: Vec<PathBuf> = std::fs::read_dir(dir.path())?
+                // Parts are named `part-01-02.pdf`; order them by first page.
+                let mut parts: Vec<(u32, PathBuf)> = std::fs::read_dir(dir.path())?
                     .filter_map(|e| e.ok().map(|e| e.path()))
-                    .filter(|p| {
-                        p.file_name()
-                            .is_some_and(|n| n.to_string_lossy().starts_with("part-"))
+                    .filter_map(|p| {
+                        let name = p.file_stem()?.to_str()?.strip_prefix("part-")?.to_string();
+                        let first = name.split('-').next()?.parse().ok()?;
+                        Some((first, p))
                     })
                     .collect();
                 parts.sort();
@@ -176,7 +179,7 @@ impl PdfEngine for QpdfEngine {
                         message: format!("expected {} parts, found {}", ranges.len(), parts.len()),
                     });
                 }
-                for (part, range) in parts.iter().zip(&ranges) {
+                for ((_, part), range) in parts.iter().zip(&ranges) {
                     outputs.push(Document::new(
                         format!("{stem}-{}.pdf", range.label()),
                         tokio::fs::read(part).await?,

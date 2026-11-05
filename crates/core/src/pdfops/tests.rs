@@ -6,10 +6,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ::lopdf::{Document as Pdf, Object};
+use ::lopdf::{Document as Pdf, Object, dictionary};
 
 use super::fixtures;
-use super::lopdf::{embedded_file_names, read_outline, xmp_packet};
+use super::lopdf::{embedded_file_names, read_outline, write_outline, xmp_packet};
 use super::*;
 
 const T: Duration = Duration::from_secs(20);
@@ -44,7 +44,7 @@ fn text_overlay(text: &str) -> Overlay {
 
 #[tokio::test]
 async fn merge_keeps_pages_bookmarks_and_fields() {
-    let out = LopdfEngine
+    let out = LopdfEngine::default()
         .merge(
             &[
                 doc("a.pdf", fixtures::pages(2)),
@@ -61,7 +61,7 @@ async fn merge_keeps_pages_bookmarks_and_fields() {
     assert!(page_text(&pdf, 1).contains("(Page 1)"));
     assert!(page_text(&pdf, 3).contains("(Chapter 1)"));
     assert!(page_text(&pdf, 6).contains("(Form)"));
-    let bookmarks = read_outline(&pdf);
+    let bookmarks = read_outline(&pdf, fixtures::far()).unwrap();
     assert_eq!(bookmarks.len(), 2);
     assert_eq!(bookmarks[0].page, 3);
     assert_eq!(bookmarks[0].children[0].page, 4);
@@ -83,7 +83,7 @@ async fn merge_keeps_pages_bookmarks_and_fields() {
 #[tokio::test]
 async fn split_by_ranges_unified_and_by_interval() {
     let input = doc("report.pdf", fixtures::pages(5));
-    let parts = LopdfEngine
+    let parts = LopdfEngine::default()
         .split(
             &input,
             &SplitMode::Pages {
@@ -102,7 +102,7 @@ async fn split_by_ranges_unified_and_by_interval() {
     assert_eq!(p5.get_pages().len(), 1);
     assert!(page_text(&p5, 1).contains("(Page 5)"));
 
-    let unified = LopdfEngine
+    let unified = LopdfEngine::default()
         .split(
             &input,
             &SplitMode::Pages {
@@ -117,7 +117,7 @@ async fn split_by_ranges_unified_and_by_interval() {
     assert_eq!(unified[0].name, "report-1-3_5.pdf");
     assert_eq!(parse(&unified[0]).get_pages().len(), 4);
 
-    let spans = LopdfEngine
+    let spans = LopdfEngine::default()
         .split(&input, &SplitMode::Intervals { span: 2 }, T)
         .await
         .unwrap();
@@ -125,7 +125,7 @@ async fn split_by_ranges_unified_and_by_interval() {
     assert_eq!(names, ["report-1-2.pdf", "report-3-4.pdf", "report-5.pdf"]);
 
     // Bookmarks follow their pages.
-    let parts = LopdfEngine
+    let parts = LopdfEngine::default()
         .split(
             &doc("o.pdf", fixtures::outlined()),
             &SplitMode::Pages {
@@ -136,14 +136,14 @@ async fn split_by_ranges_unified_and_by_interval() {
         )
         .await
         .unwrap();
-    let bookmarks = read_outline(&parse(&parts[0]));
+    let bookmarks = read_outline(&parse(&parts[0]), fixtures::far()).unwrap();
     assert_eq!(bookmarks.len(), 1);
     assert_eq!(
         (bookmarks[0].title.as_str(), bookmarks[0].page),
         ("Chapter 2", 2)
     );
 
-    let err = LopdfEngine
+    let err = LopdfEngine::default()
         .split(
             &input,
             &SplitMode::Pages {
@@ -160,11 +160,11 @@ async fn split_by_ranges_unified_and_by_interval() {
 #[tokio::test]
 async fn rotate_adds_to_the_existing_rotation() {
     let input = doc("r.pdf", fixtures::pages(3));
-    let once = LopdfEngine
+    let once = LopdfEngine::default()
         .rotate(&input, Rotation::R90, "1-2", T)
         .await
         .unwrap();
-    let twice = LopdfEngine
+    let twice = LopdfEngine::default()
         .rotate(&once, Rotation::R270, "2", T)
         .await
         .unwrap();
@@ -182,7 +182,10 @@ async fn rotate_adds_to_the_existing_rotation() {
 #[tokio::test]
 async fn metadata_round_trips_through_info_and_xmp() {
     let input = doc("meta.pdf", fixtures::pdfa_like());
-    let before = LopdfEngine.read_metadata(&input, T).await.unwrap();
+    let before = LopdfEngine::default()
+        .read_metadata(&input, T)
+        .await
+        .unwrap();
     assert_eq!(before["Title"], "Fixture");
     assert_eq!(before["xmp"]["dc:creator"], "rusticdoc");
     assert_eq!(before["xmp"]["pdfaid:part"], "2");
@@ -196,12 +199,12 @@ async fn metadata_round_trips_through_info_and_xmp() {
     update.insert("ModDate".into(), "2025-06-07T08:09:10+02:00".into());
     update.insert("Producer".into(), serde_json::Value::Null);
     update.insert("Department".into(), "Billing".into());
-    let out = LopdfEngine
+    let out = LopdfEngine::default()
         .write_metadata(&input, &update, T)
         .await
         .unwrap();
     let pdf = parse(&out);
-    let after = LopdfEngine.read_metadata(&out, T).await.unwrap();
+    let after = LopdfEngine::default().read_metadata(&out, T).await.unwrap();
     assert_eq!(after["Title"], "Invoice 42 & co");
     assert_eq!(after["Author"], "Zoë");
     assert_eq!(after["ModDate"], "D:20250607080910+02'00'");
@@ -248,14 +251,17 @@ async fn metadata_round_trips_through_info_and_xmp() {
     );
 
     // A plain PDF gets an Info dictionary and no XMP.
-    let plain = LopdfEngine
+    let plain = LopdfEngine::default()
         .write_metadata(&doc("p.pdf", fixtures::pages(1)), &update, T)
         .await
         .unwrap();
     let pdf = parse(&plain);
     assert!(xmp_packet(&pdf).is_none());
     assert_eq!(
-        LopdfEngine.read_metadata(&plain, T).await.unwrap()["Title"],
+        LopdfEngine::default()
+            .read_metadata(&plain, T)
+            .await
+            .unwrap()["Title"],
         "Invoice 42 & co"
     );
 }
@@ -264,7 +270,10 @@ async fn metadata_round_trips_through_info_and_xmp() {
 async fn bookmarks_round_trip() {
     let input = doc("o.pdf", fixtures::outlined());
     assert_eq!(
-        LopdfEngine.read_bookmarks(&input, T).await.unwrap(),
+        LopdfEngine::default()
+            .read_bookmarks(&input, T)
+            .await
+            .unwrap(),
         fixtures::outline()
     );
     let new = vec![
@@ -279,14 +288,23 @@ async fn bookmarks_round_trip() {
             children: vec![],
         },
     ];
-    let out = LopdfEngine.write_bookmarks(&input, &new, T).await.unwrap();
-    let read = LopdfEngine.read_bookmarks(&out, T).await.unwrap();
+    let out = LopdfEngine::default()
+        .write_bookmarks(&input, &new, T)
+        .await
+        .unwrap();
+    let read = LopdfEngine::default()
+        .read_bookmarks(&out, T)
+        .await
+        .unwrap();
     assert_eq!(read.len(), 2);
     assert_eq!((read[0].title.as_str(), read[0].page), ("Début", 2));
     assert_eq!(read[1].page, 3, "pages past the end are clamped");
-    let none = LopdfEngine.write_bookmarks(&out, &[], T).await.unwrap();
+    let none = LopdfEngine::default()
+        .write_bookmarks(&out, &[], T)
+        .await
+        .unwrap();
     assert!(
-        LopdfEngine
+        LopdfEngine::default()
             .read_bookmarks(&none, T)
             .await
             .unwrap()
@@ -310,7 +328,10 @@ async fn embed_and_facturx_attach_files() {
             mime: "application/json".into(),
         },
     ];
-    let out = LopdfEngine.embed(&input, &files, T).await.unwrap();
+    let out = LopdfEngine::default()
+        .embed(&input, &files, T)
+        .await
+        .unwrap();
     let pdf = parse(&out);
     assert_eq!(embedded_file_names(&pdf), ["data.json", "notes.txt"]);
     assert_eq!(
@@ -325,7 +346,7 @@ async fn embed_and_facturx_attach_files() {
     );
 
     let xml = b"<rsm:CrossIndustryInvoice/>".to_vec();
-    let out = LopdfEngine
+    let out = LopdfEngine::default()
         .facturx(&out, &xml, FacturxProfile::En16931, T)
         .await
         .unwrap();
@@ -370,7 +391,7 @@ async fn embed_and_facturx_attach_files() {
     // A PDF/A-3 input gets conformance B; a second run replaces the file.
     let three = fixtures::pdfa_like();
     let three = String::from_utf8_lossy(&three).replace("<pdfaid:part>2", "<pdfaid:part>3");
-    let out = LopdfEngine
+    let out = LopdfEngine::default()
         .facturx(
             &doc("a3.pdf", three.into_bytes()),
             &xml,
@@ -379,7 +400,7 @@ async fn embed_and_facturx_attach_files() {
         )
         .await
         .unwrap();
-    let out = LopdfEngine
+    let out = LopdfEngine::default()
         .facturx(&out, &xml, FacturxProfile::Minimum, T)
         .await
         .unwrap();
@@ -397,7 +418,7 @@ async fn embed_and_facturx_attach_files() {
 #[tokio::test]
 async fn flatten_draws_widgets_into_the_page() {
     let input = doc("form.pdf", fixtures::form());
-    let out = LopdfEngine.flatten(&input, T).await.unwrap();
+    let out = LopdfEngine::default().flatten(&input, T).await.unwrap();
     let pdf = parse(&out);
     let page = pdf.get_dictionary(pdf.get_pages()[&1]).unwrap();
     assert!(page.get(b"Annots").is_err());
@@ -444,7 +465,10 @@ async fn flatten_draws_widgets_into_the_page() {
     let needle = b"/AP";
     let at = raw.windows(needle.len()).position(|w| w == needle).unwrap();
     raw[at..at + 3].copy_from_slice(b"/XP");
-    let out = LopdfEngine.flatten(&doc("f.pdf", raw), T).await.unwrap();
+    let out = LopdfEngine::default()
+        .flatten(&doc("f.pdf", raw), T)
+        .await
+        .unwrap();
     let pdf = parse(&out);
     assert!(pdf.catalog().unwrap().get(b"AcroForm").is_ok());
     assert_eq!(
@@ -458,7 +482,10 @@ async fn text_stamps_go_over_and_watermarks_under_the_content() {
     let input = doc("t.pdf", fixtures::pages(2));
     let mut overlay = text_overlay("DRAFT (v1)");
     overlay.pages = "2".into();
-    let stamped = LopdfEngine.stamp(&input, &overlay, T).await.unwrap();
+    let stamped = LopdfEngine::default()
+        .stamp(&input, &overlay, T)
+        .await
+        .unwrap();
     let pdf = parse(&stamped);
     assert!(!page_text(&pdf, 1).contains("DRAFT"));
     let content = page_text(&pdf, 2);
@@ -466,7 +493,16 @@ async fn text_stamps_go_over_and_watermarks_under_the_content() {
     let stamp_at = content.find("(DRAFT \\(v1\\))").unwrap();
     assert!(stamp_at > text_at, "{content}");
     assert!(content.contains(" gs "));
-    assert!(content.contains("/Helvetica") || true);
+    let resources = pdf
+        .get_page_resources(pdf.get_pages()[&2])
+        .unwrap()
+        .0
+        .unwrap();
+    let states = resources.get(b"ExtGState").unwrap().as_dict().unwrap();
+    let gs = pdf
+        .get_dictionary(states.iter().next().unwrap().1.as_reference().unwrap())
+        .unwrap();
+    assert_eq!(gs.get(b"ca").unwrap().as_float().unwrap(), 0.4);
     assert!(content.contains("1 0 0 rg"));
     let fonts = pdf.get_page_fonts(pdf.get_pages()[&2]).unwrap();
     assert!(
@@ -478,7 +514,10 @@ async fn text_stamps_go_over_and_watermarks_under_the_content() {
     overlay.pages.clear();
     overlay.position = Position::BottomRight;
     overlay.rotation = 0.0;
-    let marked = LopdfEngine.watermark(&input, &overlay, T).await.unwrap();
+    let marked = LopdfEngine::default()
+        .watermark(&input, &overlay, T)
+        .await
+        .unwrap();
     let pdf = parse(&marked);
     let content = page_text(&pdf, 1);
     assert!(
@@ -492,7 +531,7 @@ async fn text_stamps_go_over_and_watermarks_under_the_content() {
 
     let mut bad = text_overlay("x");
     bad.pages = "7".into();
-    assert!(LopdfEngine.stamp(&input, &bad, T).await.is_err());
+    assert!(LopdfEngine::default().stamp(&input, &bad, T).await.is_err());
 }
 
 #[tokio::test]
@@ -509,7 +548,10 @@ async fn image_and_pdf_overlays() {
         scale: 0.25,
         pages: String::new(),
     };
-    let out = LopdfEngine.stamp(&input, &image, T).await.unwrap();
+    let out = LopdfEngine::default()
+        .stamp(&input, &image, T)
+        .await
+        .unwrap();
     let pdf = parse(&out);
     assert!(
         page_text(&pdf, 1).contains("153 0 0 153"),
@@ -527,7 +569,10 @@ async fn image_and_pdf_overlays() {
         ..image.clone()
     };
     assert!(matches!(
-        LopdfEngine.stamp(&input, &not_image, T).await.unwrap_err(),
+        LopdfEngine::default()
+            .stamp(&input, &not_image, T)
+            .await
+            .unwrap_err(),
         Error::InvalidRequest(_)
     ));
 
@@ -538,7 +583,10 @@ async fn image_and_pdf_overlays() {
         },
         ..image
     };
-    let out = LopdfEngine.watermark(&input, &overlay, T).await.unwrap();
+    let out = LopdfEngine::default()
+        .watermark(&input, &overlay, T)
+        .await
+        .unwrap();
     let pdf = parse(&out);
     assert_eq!(pdf.get_pages().len(), 2);
     for n in 1..=2 {
@@ -633,10 +681,10 @@ async fn multi_engine_falls_through_unsupported_operations() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Engine { engine: "qpdf", .. }), "{err}");
-    let engines: Vec<Arc<dyn PdfEngine>> = vec![Arc::new(LopdfEngine)];
+    let engines: Vec<Arc<dyn PdfEngine>> = vec![Arc::new(LopdfEngine::default())];
     assert!(!MultiEngine::new(engines).is_empty());
     assert!(matches!(
-        LopdfEngine
+        LopdfEngine::default()
             .rotate(
                 &doc("x.pdf", b"%PDF-1.4 junk".to_vec()),
                 Rotation::R90,
@@ -648,7 +696,7 @@ async fn multi_engine_falls_through_unsupported_operations() {
         Error::InvalidRequest(_)
     ));
     assert!(matches!(
-        LopdfEngine
+        LopdfEngine::default()
             .rotate(&doc("x.txt", fixtures::pages(1)), Rotation::R90, "", T)
             .await
             .unwrap_err(),
@@ -807,7 +855,10 @@ async fn pdfcpu_engine_against_the_binary() {
         .write_bookmarks(&input, &fixtures::outline(), T)
         .await
         .unwrap();
-    assert_eq!(read_outline(&parse(&written)), fixtures::outline());
+    assert_eq!(
+        read_outline(&parse(&written), fixtures::far()).unwrap(),
+        fixtures::outline()
+    );
 }
 
 #[test]
@@ -828,4 +879,155 @@ fn fixtures_parse() {
         FacturxProfile::parse("basic-wl").unwrap(),
         FacturxProfile::BasicWl
     );
+}
+
+/// The outlined fixture with a `Names/Dests` tree whose only node lists
+/// itself as a kid, and whose first outline item uses a named destination.
+fn cyclic_name_tree() -> Vec<u8> {
+    let mut pdf = Pdf::load_mem(&fixtures::outlined()).unwrap();
+    let page3 = pdf.get_pages()[&3];
+    let node = pdf.new_object_id();
+    pdf.objects.insert(
+        node,
+        dictionary! {
+            "Limits" => vec![Object::string_literal("target"), Object::string_literal("target")],
+            "Names" => vec![
+                Object::string_literal("target"),
+                vec![Object::Reference(page3), "Fit".into()].into(),
+            ],
+            "Kids" => vec![Object::Reference(node), Object::Reference(node), Object::Reference(node)],
+        }
+        .into(),
+    );
+    let root = pdf.add_object(dictionary! {
+        "Kids" => vec![Object::Reference(node), Object::Reference(node)],
+    });
+    pdf.catalog_mut().unwrap().set(
+        "Names",
+        dictionary! { "Dests" => root, "EmbeddedFiles" => root },
+    );
+    let outlines = pdf
+        .catalog()
+        .unwrap()
+        .get(b"Outlines")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let first = pdf
+        .get_dictionary(outlines)
+        .unwrap()
+        .get(b"First")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let item = pdf
+        .get_object_mut(first)
+        .and_then(Object::as_dict_mut)
+        .unwrap();
+    item.set("Dest", Object::string_literal("target"));
+    let next = item.get(b"Next").unwrap().as_reference().unwrap();
+    pdf.get_object_mut(next)
+        .and_then(Object::as_dict_mut)
+        .unwrap()
+        .set("Dest", Object::string_literal("missing"));
+    let mut out = Vec::new();
+    pdf.save_to(&mut out).unwrap();
+    out
+}
+
+#[tokio::test]
+async fn cyclic_name_trees_are_walked_once() {
+    let input = doc("cyclic.pdf", cyclic_name_tree());
+    let started = std::time::Instant::now();
+    let bookmarks = LopdfEngine::default()
+        .read_bookmarks(&input, T)
+        .await
+        .unwrap();
+    assert_eq!(
+        bookmarks[0].page, 3,
+        "named destination resolved through /Limits"
+    );
+    assert_eq!(bookmarks[1].page, 1, "unknown names fall back to page 1");
+    let names = embedded_file_names(&parse(&input));
+    assert_eq!(names, ["target"], "each node is visited once");
+    // Embedding into the cyclic tree rebuilds it flat.
+    let files = [Attachment {
+        name: "a.txt".into(),
+        bytes: b"a".to_vec(),
+        mime: "text/plain".into(),
+    }];
+    let out = LopdfEngine::default()
+        .embed(&input, &files, T)
+        .await
+        .unwrap();
+    assert_eq!(embedded_file_names(&parse(&out)), ["a.txt", "target"]);
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn an_expired_deadline_stops_every_loop() {
+    let expired = Deadline::new(Duration::ZERO);
+    let input = doc("d.pdf", fixtures::outlined());
+    let timeout = |r: Result<()>| assert!(matches!(r.unwrap_err(), Error::Timeout(_)));
+    timeout(lopdf::merge(std::slice::from_ref(&input), expired).map(drop));
+    let mode = SplitMode::Intervals { span: 1 };
+    timeout(lopdf::split(&input, &mode, expired).map(drop));
+    timeout(lopdf::rotate(&input, Rotation::R90, "", expired).map(drop));
+    timeout(read_outline(&parse(&input), expired).map(drop));
+    timeout(write_outline(
+        &mut parse(&input),
+        &fixtures::outline(),
+        expired,
+    ));
+    timeout(draw::flatten(
+        &mut parse(&doc("f.pdf", fixtures::form())),
+        expired,
+    ));
+    timeout(draw::overlay(
+        &mut parse(&input),
+        &text_overlay("x"),
+        true,
+        expired,
+    ));
+    let err = LopdfEngine::default()
+        .rotate(&input, Rotation::R90, "", Duration::ZERO)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Timeout(_)), "{err}");
+    assert!(Deadline::new(Duration::from_secs(5)).check().is_ok());
+}
+
+#[tokio::test]
+async fn request_sizes_are_capped() {
+    let input = doc("big.pdf", fixtures::pages(1));
+    let small = LopdfEngine::new().with_max_bytes(10);
+    let err = small
+        .rotate(&input, Rotation::R90, "", T)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
+    let spec = vec!["1"; lopdf::MAX_SPLIT_PARTS + 1].join(",");
+    let mode = SplitMode::Pages {
+        ranges: spec,
+        unify: false,
+    };
+    let err = LopdfEngine::default()
+        .split(&input, &mode, T)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
+    let big_overlay = Overlay {
+        kind: OverlayKind::Image {
+            bytes: vec![0; 11],
+            name: "x.png".into(),
+        },
+        ..text_overlay("x")
+    };
+    assert!(matches!(
+        small
+            .stamp(&doc("s.pdf", vec![]), &big_overlay, T)
+            .await
+            .unwrap_err(),
+        Error::InvalidRequest(_)
+    ));
 }

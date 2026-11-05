@@ -63,6 +63,11 @@ fn base(texts: &[&str]) -> (Pdf, Vec<ObjectId>, ObjectId) {
     (pdf, kids, font_id)
 }
 
+/// A deadline far enough away for fixture building.
+pub fn far() -> super::Deadline {
+    super::Deadline::new(std::time::Duration::from_secs(60))
+}
+
 fn bytes(mut pdf: Pdf) -> Vec<u8> {
     let mut out = Vec::new();
     pdf.save_to(&mut out).expect("fixture saves");
@@ -99,7 +104,7 @@ pub fn outline() -> Vec<Bookmark> {
 /// Three pages with [`outline`].
 pub fn outlined() -> Vec<u8> {
     let (mut pdf, _, _) = base(&["Chapter 1", "Section 1.1", "Chapter 2"]);
-    super::lopdf::write_outline(&mut pdf, &outline()).expect("outline writes");
+    super::lopdf::write_outline(&mut pdf, &outline(), far()).expect("outline writes");
     bytes(pdf)
 }
 

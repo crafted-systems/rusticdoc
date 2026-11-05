@@ -13,30 +13,84 @@ use ::lopdf::{Dictionary, Document as Pdf, Object, ObjectId, Stream, StringForma
 use async_trait::async_trait;
 
 use super::{
-    Attachment, Bookmark, FacturxProfile, Metadata, Overlay, PdfEngine, Rotation, SplitMode, draw,
-    pages, require_pdf, xmp,
+    Attachment, Bookmark, Deadline, FacturxProfile, Metadata, Overlay, OverlayKind, PdfEngine,
+    Rotation, SplitMode, draw, pages, require_pdf, xmp,
 };
 use crate::error::{Error, Result};
 use crate::job::Document;
 
 pub(super) const ENGINE: &str = "lopdf";
 
+/// Largest document the engine parses unless configured otherwise.
+pub const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+/// Most parts one split request may produce.
+pub const MAX_SPLIT_PARTS: usize = 1_000;
+
+/// Most name-tree nodes or entries one walk visits.
+const TREE_LIMIT: usize = 10_000;
+
+/// Blocking PDF jobs that may run at once, so a burst cannot take every
+/// blocking thread of the runtime.
+static PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
 /// The pure-Rust engine.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct LopdfEngine;
+#[derive(Debug, Clone, Copy)]
+pub struct LopdfEngine {
+    max_bytes: usize,
+}
+
+impl Default for LopdfEngine {
+    fn default() -> Self {
+        Self {
+            max_bytes: DEFAULT_MAX_BYTES,
+        }
+    }
+}
+
+impl LopdfEngine {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Refuses documents (and overlay files) larger than `bytes`.
+    pub fn with_max_bytes(mut self, bytes: usize) -> Self {
+        self.max_bytes = bytes;
+        self
+    }
+
+    fn accept(&self, doc: &Document) -> Result<()> {
+        require_pdf(doc)?;
+        self.accept_size(doc.bytes.len(), &doc.name)
+    }
+
+    fn accept_size(&self, len: usize, name: &str) -> Result<()> {
+        if len > self.max_bytes {
+            return Err(Error::InvalidRequest(format!(
+                "'{name}' is {len} bytes, over the {} byte limit",
+                self.max_bytes
+            )));
+        }
+        Ok(())
+    }
+}
 
 /// Runs CPU-bound PDF work off the async threads, under the step timeout.
-/// A task that overruns is abandoned, not killed; it ends on its own.
+/// The work checks the deadline itself; a task that still overruns is
+/// abandoned, not killed, and ends on its own.
 async fn blocking<T: Send + 'static>(
     timeout: Duration,
-    f: impl FnOnce() -> Result<T> + Send + 'static,
+    f: impl FnOnce(Deadline) -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(f)).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(join)) => Err(Error::Engine {
-            engine: ENGINE,
-            message: join.to_string(),
-        }),
+    let deadline = Deadline::new(timeout);
+    let work = async {
+        let _permit = PERMITS.acquire().await.map_err(engine_error)?;
+        tokio::task::spawn_blocking(move || f(deadline))
+            .await
+            .map_err(engine_error)?
+    };
+    match tokio::time::timeout(timeout, work).await {
+        Ok(result) => result,
         Err(_) => Err(Error::Timeout(timeout)),
     }
 }
@@ -51,9 +105,9 @@ impl PdfEngine for LopdfEngine {
         if docs.is_empty() {
             return Err(Error::InvalidRequest("merge needs at least one PDF".into()));
         }
-        docs.iter().try_for_each(require_pdf)?;
+        docs.iter().try_for_each(|d| self.accept(d))?;
         let docs = docs.to_vec();
-        blocking(timeout, move || merge(&docs)).await
+        blocking(timeout, move |deadline| merge(&docs, deadline)).await
     }
 
     async fn split(
@@ -62,17 +116,17 @@ impl PdfEngine for LopdfEngine {
         mode: &SplitMode,
         timeout: Duration,
     ) -> Result<Vec<Document>> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
         let (doc, mode) = (doc.clone(), mode.clone());
-        blocking(timeout, move || split(&doc, &mode)).await
+        blocking(timeout, move |deadline| split(&doc, &mode, deadline)).await
     }
 
     async fn flatten(&self, doc: &Document, timeout: Duration) -> Result<Document> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
         let doc = doc.clone();
-        blocking(timeout, move || {
+        blocking(timeout, move |deadline| {
             let mut pdf = load(&doc)?;
-            draw::flatten(&mut pdf)?;
+            draw::flatten(&mut pdf, deadline)?;
             save(pdf, doc.name.clone())
         })
         .await
@@ -85,15 +139,18 @@ impl PdfEngine for LopdfEngine {
         pages: &str,
         timeout: Duration,
     ) -> Result<Document> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
         let (doc, spec) = (doc.clone(), pages.to_string());
-        blocking(timeout, move || rotate(&doc, rotation, &spec)).await
+        blocking(timeout, move |deadline| {
+            rotate(&doc, rotation, &spec, deadline)
+        })
+        .await
     }
 
     async fn read_metadata(&self, doc: &Document, timeout: Duration) -> Result<Metadata> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
         let doc = doc.clone();
-        blocking(timeout, move || read_metadata(&load(&doc)?)).await
+        blocking(timeout, move |_| read_metadata(&load(&doc)?)).await
     }
 
     async fn write_metadata(
@@ -102,9 +159,9 @@ impl PdfEngine for LopdfEngine {
         metadata: &Metadata,
         timeout: Duration,
     ) -> Result<Document> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
         let (doc, metadata) = (doc.clone(), metadata.clone());
-        blocking(timeout, move || {
+        blocking(timeout, move |_| {
             let mut pdf = load(&doc)?;
             write_metadata(&mut pdf, &metadata)?;
             save(pdf, doc.name.clone())
@@ -113,9 +170,12 @@ impl PdfEngine for LopdfEngine {
     }
 
     async fn read_bookmarks(&self, doc: &Document, timeout: Duration) -> Result<Vec<Bookmark>> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
         let doc = doc.clone();
-        blocking(timeout, move || Ok(read_outline(&load(&doc)?))).await
+        blocking(timeout, move |deadline| {
+            read_outline(&load(&doc)?, deadline)
+        })
+        .await
     }
 
     async fn write_bookmarks(
@@ -124,11 +184,11 @@ impl PdfEngine for LopdfEngine {
         bookmarks: &[Bookmark],
         timeout: Duration,
     ) -> Result<Document> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
         let (doc, bookmarks) = (doc.clone(), bookmarks.to_vec());
-        blocking(timeout, move || {
+        blocking(timeout, move |deadline| {
             let mut pdf = load(&doc)?;
-            write_outline(&mut pdf, &bookmarks)?;
+            write_outline(&mut pdf, &bookmarks, deadline)?;
             save(pdf, doc.name.clone())
         })
         .await
@@ -140,12 +200,15 @@ impl PdfEngine for LopdfEngine {
         files: &[Attachment],
         timeout: Duration,
     ) -> Result<Document> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
+        for file in files {
+            self.accept_size(file.bytes.len(), &file.name)?;
+        }
         let (doc, files) = (doc.clone(), files.to_vec());
-        blocking(timeout, move || {
+        blocking(timeout, move |deadline| {
             let mut pdf = load(&doc)?;
             for file in &files {
-                embed_file(&mut pdf, file, "Data")?;
+                embed_file(&mut pdf, file, "Data", deadline)?;
             }
             save(pdf, doc.name.clone())
         })
@@ -158,11 +221,11 @@ impl PdfEngine for LopdfEngine {
         overlay: &Overlay,
         timeout: Duration,
     ) -> Result<Document> {
-        require_pdf(doc)?;
+        self.accept_overlay(doc, overlay)?;
         let (doc, overlay) = (doc.clone(), overlay.clone());
-        blocking(timeout, move || {
+        blocking(timeout, move |deadline| {
             let mut pdf = load(&doc)?;
-            draw::overlay(&mut pdf, &overlay, false)?;
+            draw::overlay(&mut pdf, &overlay, false, deadline)?;
             save(pdf, doc.name.clone())
         })
         .await
@@ -174,11 +237,11 @@ impl PdfEngine for LopdfEngine {
         overlay: &Overlay,
         timeout: Duration,
     ) -> Result<Document> {
-        require_pdf(doc)?;
+        self.accept_overlay(doc, overlay)?;
         let (doc, overlay) = (doc.clone(), overlay.clone());
-        blocking(timeout, move || {
+        blocking(timeout, move |deadline| {
             let mut pdf = load(&doc)?;
-            draw::overlay(&mut pdf, &overlay, true)?;
+            draw::overlay(&mut pdf, &overlay, true, deadline)?;
             save(pdf, doc.name.clone())
         })
         .await
@@ -191,14 +254,27 @@ impl PdfEngine for LopdfEngine {
         profile: FacturxProfile,
         timeout: Duration,
     ) -> Result<Document> {
-        require_pdf(doc)?;
+        self.accept(doc)?;
+        self.accept_size(xml.len(), "factur-x.xml")?;
         let (doc, xml) = (doc.clone(), xml.to_vec());
-        blocking(timeout, move || {
+        blocking(timeout, move |deadline| {
             let mut pdf = load(&doc)?;
-            facturx(&mut pdf, xml, profile)?;
+            facturx(&mut pdf, xml, profile, deadline)?;
             save(pdf, doc.name.clone())
         })
         .await
+    }
+}
+
+impl LopdfEngine {
+    fn accept_overlay(&self, doc: &Document, overlay: &Overlay) -> Result<()> {
+        self.accept(doc)?;
+        match &overlay.kind {
+            OverlayKind::Image { bytes, name } | OverlayKind::Pdf { bytes, name } => {
+                self.accept_size(bytes.len(), name)
+            }
+            OverlayKind::Text { .. } => Ok(()),
+        }
     }
 }
 
@@ -298,7 +374,7 @@ fn catalog_dict_mut<'a>(pdf: &'a mut Pdf, key: &[u8]) -> Result<&'a mut Dictiona
 
 // ------------------------------------------------------------------ merge
 
-fn merge(docs: &[Document]) -> Result<Document> {
+pub(super) fn merge(docs: &[Document], deadline: Deadline) -> Result<Document> {
     let mut out = Pdf::with_version("1.7");
     let mut page_ids: Vec<ObjectId> = Vec::new();
     let mut bookmarks: Vec<Bookmark> = Vec::new();
@@ -306,13 +382,15 @@ fn merge(docs: &[Document]) -> Result<Document> {
     let mut acroform: Option<Dictionary> = None;
     let mut next_id = 1;
     for doc in docs {
+        deadline.check()?;
         let mut pdf = load(doc)?;
         let offset = page_ids.len() as u32;
-        let mut outline = read_outline(&pdf);
+        let mut outline = read_outline(&pdf, deadline)?;
         shift_pages(&mut outline, offset);
         bookmarks.extend(outline);
         // Pages lose their old page tree, so inherited attributes move in.
         for id in pdf.page_iter().collect::<Vec<_>>() {
+            deadline.check()?;
             for key in [&b"Resources"[..], b"MediaBox", b"CropBox", b"Rotate"] {
                 if pdf.get_dictionary(id).map(|d| d.has(key)).unwrap_or(true) {
                     continue;
@@ -376,7 +454,7 @@ fn merge(docs: &[Document]) -> Result<Document> {
     }
     let catalog_id = out.add_object(catalog);
     out.trailer.set("Root", catalog_id);
-    write_outline(&mut out, &bookmarks)?;
+    write_outline(&mut out, &bookmarks, deadline)?;
     out.prune_objects();
     out.renumber_objects();
     save(out, docs[0].with_extension("pdf"))
@@ -391,7 +469,7 @@ fn shift_pages(bookmarks: &mut [Bookmark], offset: u32) {
 
 // ------------------------------------------------------------------ split
 
-fn split(doc: &Document, mode: &SplitMode) -> Result<Vec<Document>> {
+pub(super) fn split(doc: &Document, mode: &SplitMode, deadline: Deadline) -> Result<Vec<Document>> {
     let pdf = load(doc)?;
     let count = pdf.get_pages().len() as u32;
     let selections: Vec<(String, Vec<u32>)> = match mode {
@@ -414,16 +492,23 @@ fn split(doc: &Document, mode: &SplitMode) -> Result<Vec<Document>> {
             .map(|r| (r.label(), r.pages().collect()))
             .collect(),
     };
-    let outline = read_outline(&pdf);
+    if selections.len() > MAX_SPLIT_PARTS {
+        return Err(Error::InvalidRequest(format!(
+            "split would produce {} parts, over the limit of {MAX_SPLIT_PARTS}",
+            selections.len()
+        )));
+    }
+    let outline = read_outline(&pdf, deadline)?;
     let stem = doc.with_extension("");
     let stem = stem.trim_end_matches('.');
     let mut outputs = Vec::with_capacity(selections.len());
     for (label, keep) in selections {
+        deadline.check()?;
         let mut part = pdf.clone();
         let delete: Vec<u32> = (1..=count).filter(|n| !keep.contains(n)).collect();
         part.delete_pages(&delete);
         let bookmarks = keep_bookmarks(&outline, &keep);
-        write_outline(&mut part, &bookmarks)?;
+        write_outline(&mut part, &bookmarks, deadline)?;
         part.prune_objects();
         part.renumber_objects();
         outputs.push(save(part, format!("{stem}-{label}.pdf"))?);
@@ -448,10 +533,16 @@ fn keep_bookmarks(bookmarks: &[Bookmark], keep: &[u32]) -> Vec<Bookmark> {
 
 // ----------------------------------------------------------------- rotate
 
-fn rotate(doc: &Document, rotation: Rotation, spec: &str) -> Result<Document> {
+pub(super) fn rotate(
+    doc: &Document,
+    rotation: Rotation,
+    spec: &str,
+    deadline: Deadline,
+) -> Result<Document> {
     let mut pdf = load(doc)?;
     let pages = pdf.get_pages();
     for n in pages::select(spec, pages.len() as u32)? {
+        deadline.check()?;
         let id = pages[&n];
         let current = inherited(&pdf, id, b"Rotate")
             .and_then(|o| o.as_i64().ok())
@@ -614,7 +705,7 @@ pub(super) fn set_xmp_packet(pdf: &mut Pdf, xml: String) -> Result<()> {
 
 /// The outline tree, with destinations resolved to page numbers. Items
 /// whose destination cannot be resolved point at page 1.
-pub(super) fn read_outline(pdf: &Pdf) -> Vec<Bookmark> {
+pub(super) fn read_outline(pdf: &Pdf, deadline: Deadline) -> Result<Vec<Bookmark>> {
     let index: HashMap<ObjectId, u32> =
         pdf.get_pages().into_iter().map(|(n, id)| (id, n)).collect();
     let first = pdf
@@ -625,7 +716,7 @@ pub(super) fn read_outline(pdf: &Pdf) -> Vec<Bookmark> {
         .and_then(|(_, o)| o.as_dict().ok())
         .and_then(|o| o.get(b"First").ok())
         .and_then(|f| f.as_reference().ok());
-    walk_outline(pdf, first, &index, &mut HashSet::new(), 0)
+    walk_outline(pdf, first, &index, &mut HashSet::new(), 0, deadline)
 }
 
 fn walk_outline(
@@ -634,9 +725,11 @@ fn walk_outline(
     index: &HashMap<ObjectId, u32>,
     seen: &mut HashSet<ObjectId>,
     depth: usize,
-) -> Vec<Bookmark> {
+    deadline: Deadline,
+) -> Result<Vec<Bookmark>> {
     let mut out = Vec::new();
     while let Some(id) = current {
+        deadline.check()?;
         if depth > 64 || !seen.insert(id) {
             break;
         }
@@ -650,9 +743,9 @@ fn walk_outline(
             .and_then(|(_, o)| o.as_str().ok())
             .map(text)
             .unwrap_or_default();
-        let page = destination_page(pdf, item, index).unwrap_or(1);
+        let page = destination_page(pdf, item, index, deadline)?.unwrap_or(1);
         let first = item.get(b"First").ok().and_then(|f| f.as_reference().ok());
-        let children = walk_outline(pdf, first, index, seen, depth + 1);
+        let children = walk_outline(pdf, first, index, seen, depth + 1, deadline)?;
         out.push(Bookmark {
             title,
             page,
@@ -660,22 +753,33 @@ fn walk_outline(
         });
         current = item.get(b"Next").ok().and_then(|n| n.as_reference().ok());
     }
-    out
+    Ok(out)
 }
 
-fn destination_page(pdf: &Pdf, item: &Dictionary, index: &HashMap<ObjectId, u32>) -> Option<u32> {
+/// The page an outline item points at; `None` when it cannot be resolved.
+/// Only a deadline is an error.
+fn destination_page(
+    pdf: &Pdf,
+    item: &Dictionary,
+    index: &HashMap<ObjectId, u32>,
+    deadline: Deadline,
+) -> Result<Option<u32>> {
     let dest = match item.get(b"Dest") {
         Ok(dest) => dest.clone(),
         Err(_) => {
-            let (_, action) = pdf.dereference(item.get(b"A").ok()?).ok()?;
-            let action = action.as_dict().ok()?;
-            if action.get(b"S").ok()?.as_name().ok()? != b"GoTo" {
-                return None;
+            let action = item
+                .get(b"A")
+                .ok()
+                .and_then(|a| pdf.dereference(a).ok())
+                .and_then(|(_, a)| a.as_dict().ok())
+                .filter(|a| a.get(b"S").and_then(Object::as_name).ok() == Some(b"GoTo"));
+            match action.and_then(|a| a.get(b"D").ok()) {
+                Some(d) => d.clone(),
+                None => return Ok(None),
             }
-            action.get(b"D").ok()?.clone()
         }
     };
-    resolve_destination(pdf, &dest, index, 0)
+    resolve_destination(pdf, &dest, index, 0, deadline)
 }
 
 fn resolve_destination(
@@ -683,84 +787,158 @@ fn resolve_destination(
     dest: &Object,
     index: &HashMap<ObjectId, u32>,
     depth: usize,
-) -> Option<u32> {
+    deadline: Deadline,
+) -> Result<Option<u32>> {
     if depth > 8 {
-        return None;
+        return Ok(None);
     }
-    match dest {
-        Object::Reference(id) => {
-            resolve_destination(pdf, pdf.get_object(*id).ok()?, index, depth + 1)
-        }
-        Object::Array(items) => match items.first()? {
-            Object::Reference(page) => index.get(page).copied(),
-            Object::Integer(n) => Some(*n as u32 + 1),
+    Ok(match dest {
+        Object::Reference(id) => match pdf.get_object(*id) {
+            Ok(target) => resolve_destination(pdf, target, index, depth + 1, deadline)?,
+            Err(_) => None,
+        },
+        Object::Array(items) => match items.first() {
+            Some(Object::Reference(page)) => index.get(page).copied(),
+            Some(Object::Integer(n)) => Some(*n as u32 + 1),
             _ => None,
         },
-        Object::Dictionary(d) => resolve_destination(pdf, d.get(b"D").ok()?, index, depth + 1),
+        Object::Dictionary(d) => match d.get(b"D") {
+            Ok(inner) => resolve_destination(pdf, inner, index, depth + 1, deadline)?,
+            Err(_) => None,
+        },
         Object::String(name, _) | Object::Name(name) => {
-            let target = named_destination(pdf, name)?;
-            resolve_destination(pdf, &target, index, depth + 1)
+            match named_destination(pdf, name, deadline)? {
+                Some(target) => resolve_destination(pdf, &target, index, depth + 1, deadline)?,
+                None => None,
+            }
         }
         _ => None,
-    }
+    })
 }
 
-fn named_destination(pdf: &Pdf, name: &[u8]) -> Option<Object> {
-    let catalog = pdf.catalog().ok()?;
+/// Looks `name` up in the catalog's `Dests` dictionary or the `Names/Dests`
+/// name tree, following `/Limits` rather than reading every entry.
+fn named_destination(pdf: &Pdf, name: &[u8], deadline: Deadline) -> Result<Option<Object>> {
+    let Ok(catalog) = pdf.catalog() else {
+        return Ok(None);
+    };
     if let Ok(dests) = catalog
         .get(b"Dests")
         .and_then(|d| pdf.dereference(d).map(|(_, o)| o))
         && let Ok(dests) = dests.as_dict()
     {
-        return dests.get(name).ok().cloned();
+        return Ok(dests.get(name).ok().cloned());
     }
-    let names = pdf
-        .dereference(catalog.get(b"Names").ok()?)
-        .ok()?
-        .1
-        .as_dict()
-        .ok()?;
-    let tree = pdf
-        .dereference(names.get(b"Dests").ok()?)
-        .ok()?
-        .1
-        .as_dict()
-        .ok()?;
-    let mut entries = Vec::new();
-    name_tree_entries(pdf, tree, &mut entries, 0);
-    entries.into_iter().find(|(k, _)| k == name).map(|(_, v)| v)
+    let tree = catalog
+        .get(b"Names")
+        .ok()
+        .and_then(|n| pdf.dereference(n).ok())
+        .and_then(|(_, n)| n.as_dict().ok())
+        .and_then(|n| n.get(b"Dests").ok())
+        .and_then(|t| pdf.dereference(t).ok())
+        .and_then(|(_, t)| t.as_dict().ok());
+    match tree {
+        Some(tree) => {
+            let mut found = Vec::new();
+            let mut walk = TreeWalk::new(deadline);
+            walk.visit(pdf, tree, Some(name), &mut found, 0)?;
+            Ok(found.pop().map(|(_, v)| v))
+        }
+        None => Ok(None),
+    }
 }
 
-/// Every `(key, value)` of a name tree, leaves first to last.
-fn name_tree_entries(pdf: &Pdf, node: &Dictionary, out: &mut Vec<(Vec<u8>, Object)>, depth: usize) {
-    if depth > 32 {
-        return;
-    }
-    if let Ok(Object::Array(names)) = node
-        .get(b"Names")
-        .and_then(|n| pdf.dereference(n).map(|(_, o)| o))
-    {
-        for pair in names.chunks(2) {
-            if let [Object::String(key, _), value] = pair {
-                out.push((key.clone(), value.clone()));
-            }
+/// A bounded walk over a name tree: nodes are visited once, at most
+/// [`TREE_LIMIT`] of them, and the deadline is checked at each.
+struct TreeWalk {
+    seen: HashSet<ObjectId>,
+    nodes: usize,
+    deadline: Deadline,
+}
+
+impl TreeWalk {
+    fn new(deadline: Deadline) -> Self {
+        Self {
+            seen: HashSet::new(),
+            nodes: 0,
+            deadline,
         }
     }
-    if let Ok(Object::Array(kids)) = node
-        .get(b"Kids")
-        .and_then(|k| pdf.dereference(k).map(|(_, o)| o))
-    {
-        for kid in kids {
-            if let Ok((_, Object::Dictionary(kid))) = pdf.dereference(kid) {
-                name_tree_entries(pdf, kid, out, depth + 1);
+
+    /// Collects `(key, value)` pairs into `out`, leaves first to last. With
+    /// `key`, only that entry is collected and subtrees whose `/Limits`
+    /// exclude it are skipped; returns `true` once it is found.
+    fn visit(
+        &mut self,
+        pdf: &Pdf,
+        node: &Dictionary,
+        key: Option<&[u8]>,
+        out: &mut Vec<(Vec<u8>, Object)>,
+        depth: usize,
+    ) -> Result<bool> {
+        self.deadline.check()?;
+        self.nodes += 1;
+        if depth > 32 || self.nodes > TREE_LIMIT || out.len() >= TREE_LIMIT {
+            return Ok(false);
+        }
+        let deref = |k: &[u8]| node.get(k).and_then(|o| pdf.dereference(o).map(|(_, o)| o));
+        if let (Some(key), Ok(Object::Array(limits))) = (key, deref(b"Limits"))
+            && let [Object::String(low, _), Object::String(high, _)] = limits.as_slice()
+            && (key < low.as_slice() || key > high.as_slice())
+        {
+            return Ok(false);
+        }
+        if let Ok(Object::Array(names)) = deref(b"Names") {
+            for pair in names.chunks(2) {
+                if let [Object::String(k, _), value] = pair {
+                    if key.is_some_and(|key| key != k.as_slice()) {
+                        continue;
+                    }
+                    out.push((k.clone(), value.clone()));
+                    if key.is_some() || out.len() >= TREE_LIMIT {
+                        return Ok(key.is_some());
+                    }
+                }
             }
         }
+        if let Ok(Object::Array(kids)) = deref(b"Kids") {
+            for kid in kids {
+                if let Ok(id) = kid.as_reference()
+                    && !self.seen.insert(id)
+                {
+                    continue;
+                }
+                if let Ok((_, Object::Dictionary(kid))) = pdf.dereference(kid)
+                    && self.visit(pdf, kid, key, out, depth + 1)?
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
+}
+
+/// Every `(key, value)` of a name tree, leaves first to last, up to
+/// [`TREE_LIMIT`] entries.
+fn name_tree_entries(
+    pdf: &Pdf,
+    node: &Dictionary,
+    out: &mut Vec<(Vec<u8>, Object)>,
+    deadline: Deadline,
+) -> Result<()> {
+    TreeWalk::new(deadline)
+        .visit(pdf, node, None, out, 0)
+        .map(|_| ())
 }
 
 /// Replaces the outline tree. Pages outside the document are clamped to
 /// its last page.
-pub(super) fn write_outline(pdf: &mut Pdf, bookmarks: &[Bookmark]) -> Result<()> {
+pub(super) fn write_outline(
+    pdf: &mut Pdf,
+    bookmarks: &[Bookmark],
+    deadline: Deadline,
+) -> Result<()> {
     let _ = pdf.delete_outlines();
     pdf.catalog_mut()?.remove(b"Outlines");
     if bookmarks.is_empty() {
@@ -772,7 +950,7 @@ pub(super) fn write_outline(pdf: &mut Pdf, bookmarks: &[Bookmark]) -> Result<()>
         return Err(Error::InvalidRequest("the PDF has no pages".into()));
     }
     let outlines_id = pdf.new_object_id();
-    let (first, last, total) = outline_items(pdf, bookmarks, outlines_id, &pages, count);
+    let (first, last, total) = outline_items(pdf, bookmarks, outlines_id, &pages, count, deadline)?;
     pdf.objects.insert(
         outlines_id,
         dictionary! {
@@ -793,10 +971,12 @@ fn outline_items(
     parent: ObjectId,
     pages: &std::collections::BTreeMap<u32, ObjectId>,
     count: u32,
-) -> (Option<ObjectId>, Option<ObjectId>, i64) {
+    deadline: Deadline,
+) -> Result<(Option<ObjectId>, Option<ObjectId>, i64)> {
     let ids: Vec<ObjectId> = items.iter().map(|_| pdf.new_object_id()).collect();
     let mut total = 0;
     for (i, item) in items.iter().enumerate() {
+        deadline.check()?;
         let page_id = pages[&item.page.clamp(1, count)];
         let mut dict = dictionary! {
             "Title" => text_object(&item.title),
@@ -809,7 +989,7 @@ fn outline_items(
         if i + 1 < ids.len() {
             dict.set("Next", ids[i + 1]);
         }
-        let (first, last, n) = outline_items(pdf, &item.children, ids[i], pages, count);
+        let (first, last, n) = outline_items(pdf, &item.children, ids[i], pages, count, deadline)?;
         if let (Some(first), Some(last)) = (first, last) {
             dict.set("First", first);
             dict.set("Last", last);
@@ -818,7 +998,7 @@ fn outline_items(
         pdf.objects.insert(ids[i], dict.into());
         total += 1 + n;
     }
-    (ids.first().copied(), ids.last().copied(), total)
+    Ok((ids.first().copied(), ids.last().copied(), total))
 }
 
 // ---------------------------------------------------------- embedded files
@@ -826,7 +1006,12 @@ fn outline_items(
 /// Embeds a file into the `EmbeddedFiles` name tree and lists it in the
 /// catalog's `/AF`, with the given `/AFRelationship`. A file of the same
 /// name is replaced.
-pub(super) fn embed_file(pdf: &mut Pdf, file: &Attachment, relationship: &str) -> Result<()> {
+pub(super) fn embed_file(
+    pdf: &mut Pdf,
+    file: &Attachment,
+    relationship: &str,
+    deadline: Deadline,
+) -> Result<()> {
     if file.name.is_empty() {
         return Err(Error::InvalidRequest("an attachment needs a name".into()));
     }
@@ -850,7 +1035,7 @@ pub(super) fn embed_file(pdf: &mut Pdf, file: &Attachment, relationship: &str) -
     });
     let mut entries = Vec::new();
     if let Some(tree) = embedded_files_tree(pdf) {
-        name_tree_entries(pdf, &tree, &mut entries, 0);
+        name_tree_entries(pdf, &tree, &mut entries, deadline)?;
     }
     entries.retain(|(k, _)| k != file.name.as_bytes());
     entries.push((file.name.as_bytes().to_vec(), Object::Reference(spec_id)));
@@ -899,11 +1084,16 @@ fn embedded_files_tree(pdf: &Pdf) -> Option<Dictionary> {
     tree.as_dict().ok().cloned()
 }
 
-/// The embedded file names, in name-tree order.
+/// The embedded file names, in name-tree order (at most 10,000).
 pub fn embedded_file_names(pdf: &Pdf) -> Vec<String> {
     let mut entries = Vec::new();
     if let Some(tree) = embedded_files_tree(pdf) {
-        name_tree_entries(pdf, &tree, &mut entries, 0);
+        let _ = name_tree_entries(
+            pdf,
+            &tree,
+            &mut entries,
+            Deadline::new(Duration::from_secs(30)),
+        );
     }
     entries.into_iter().map(|(k, _)| text(&k)).collect()
 }
@@ -920,7 +1110,7 @@ impl From<::lopdf::Error> for Error {
 /// is only touched when the input already declares PDF/A-3 (its conformance
 /// becomes `B`); a plain PDF gets the attachment and the `fx:` properties but
 /// no PDF/A claim, since true PDF/A-3 needs the input exported as PDF/A-3.
-fn facturx(pdf: &mut Pdf, xml: Vec<u8>, profile: FacturxProfile) -> Result<()> {
+fn facturx(pdf: &mut Pdf, xml: Vec<u8>, profile: FacturxProfile, deadline: Deadline) -> Result<()> {
     let (level, relationship) = match profile {
         FacturxProfile::Minimum => ("MINIMUM", "Data"),
         FacturxProfile::BasicWl => ("BASIC WL", "Data"),
@@ -936,6 +1126,7 @@ fn facturx(pdf: &mut Pdf, xml: Vec<u8>, profile: FacturxProfile) -> Result<()> {
             mime: "text/xml".into(),
         },
         relationship,
+        deadline,
     )?;
     let mut packet = xmp_packet(pdf).unwrap_or_else(xmp::empty_packet);
     if !packet.contains(xmp::FACTURX_NS) {

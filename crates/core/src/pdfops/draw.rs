@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use ::lopdf::{Dictionary, Document as Pdf, Object, ObjectId, Stream, dictionary};
 
 use super::lopdf::{engine_error, inherited, load};
-use super::{Overlay, OverlayKind, Position, pages};
+use super::{Deadline, Overlay, OverlayKind, Position, pages};
 use crate::error::{Error, Result};
 use crate::job::Document;
 
@@ -144,9 +144,10 @@ fn wrap_content(pdf: &mut Pdf, page_id: ObjectId, before: Vec<u8>, after: Vec<u8
 /// Draws every widget's normal appearance into its page and removes the
 /// widgets and the AcroForm. Widgets without an appearance stream stay,
 /// and so does the AcroForm while any remain.
-pub(super) fn flatten(pdf: &mut Pdf) -> Result<()> {
+pub(super) fn flatten(pdf: &mut Pdf, deadline: Deadline) -> Result<()> {
     let mut widgets_left = false;
     for page_id in pdf.page_iter().collect::<Vec<_>>() {
+        deadline.check()?;
         let annots: Vec<Object> = match pdf.get_dictionary(page_id)?.get(b"Annots") {
             Ok(a) => match pdf.dereference(a) {
                 Ok((_, Object::Array(list))) => list.clone(),
@@ -308,7 +309,12 @@ enum Art {
 /// (a stamp), under it otherwise (a watermark). PDF overlays are drawn at
 /// their own size over the page of the same number; position and scale do
 /// not apply to them.
-pub(super) fn overlay(pdf: &mut Pdf, overlay: &Overlay, over: bool) -> Result<()> {
+pub(super) fn overlay(
+    pdf: &mut Pdf,
+    overlay: &Overlay,
+    over: bool,
+    deadline: Deadline,
+) -> Result<()> {
     let page_ids = pdf.get_pages();
     let selected = pages::select(&overlay.pages, page_ids.len() as u32)?;
     let opacity = overlay.opacity.clamp(0.0, 1.0);
@@ -345,10 +351,13 @@ pub(super) fn overlay(pdf: &mut Pdf, overlay: &Overlay, over: bool) -> Result<()
         OverlayKind::Pdf { bytes, name } => Art::Forms(import_pages(
             pdf,
             &Document::new(name.clone(), bytes.clone()),
+            deadline,
         )?),
     };
     for n in selected {
+        deadline.check()?;
         let page_id = page_ids[&n];
+        add_resource(pdf, page_id, "ExtGState", &gs_name, gs_id)?;
         let bx = page_box(pdf, page_id);
         let pw = bx[2] - bx[0];
         let (sin, cos) = overlay.rotation.to_radians().sin_cos();
@@ -489,11 +498,12 @@ fn parse_colour(hex: &str) -> Result<[f32; 3]> {
 
 /// Imports every page of `source` into `pdf` as a form XObject and returns
 /// their ids in page order.
-fn import_pages(pdf: &mut Pdf, source: &Document) -> Result<Vec<ObjectId>> {
+fn import_pages(pdf: &mut Pdf, source: &Document, deadline: Deadline) -> Result<Vec<ObjectId>> {
     let mut src = load(source)?;
     src.renumber_objects_with(pdf.max_id + 1);
     let mut forms = Vec::new();
     for page_id in src.page_iter().collect::<Vec<_>>() {
+        deadline.check()?;
         let bbox = page_box(&src, page_id);
         let resources = match src.get_page_resources(page_id).map_err(engine_error)? {
             (Some(direct), _) => Object::Dictionary(direct.clone()),

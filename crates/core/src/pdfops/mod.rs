@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,33 @@ pub mod xmp;
 pub use lopdf::LopdfEngine;
 pub use pdfcpu::PdfcpuEngine;
 pub use qpdf::QpdfEngine;
+
+/// When blocking work must stop. `tokio::time::timeout` cannot interrupt
+/// CPU work, so every loop over pages, outline items, name-tree nodes or
+/// split parts checks the deadline and gives up with [`Error::Timeout`].
+#[derive(Debug, Clone, Copy)]
+pub struct Deadline {
+    at: Instant,
+    timeout: Duration,
+}
+
+impl Deadline {
+    pub fn new(timeout: Duration) -> Self {
+        let at = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(|| Instant::now() + Duration::from_secs(86_400));
+        Self { at, timeout }
+    }
+
+    /// `Ok` while there is time left.
+    pub fn check(&self) -> Result<()> {
+        if Instant::now() >= self.at {
+            Err(Error::Timeout(self.timeout))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// The number of pages, read with lopdf. The process engines use it to
 /// validate page selections before spawning anything.
@@ -361,7 +388,7 @@ impl MultiEngine {
     /// The standard order: lopdf first, then qpdf and pdfcpu when their
     /// binaries are configured.
     pub fn standard(qpdf_bin: Option<PathBuf>, pdfcpu_bin: Option<PathBuf>) -> Self {
-        let mut engines: Vec<Arc<dyn PdfEngine>> = vec![Arc::new(LopdfEngine)];
+        let mut engines: Vec<Arc<dyn PdfEngine>> = vec![Arc::new(LopdfEngine::default())];
         if let Some(bin) = qpdf_bin {
             engines.push(Arc::new(QpdfEngine::new(bin)));
         }
