@@ -19,10 +19,26 @@ pub struct Entry {
     pub stored: bool,
 }
 
+/// The most a single part may inflate to.
+pub const MAX_PART_BYTES: u64 = 64 * 1024 * 1024;
+/// The most the whole package may inflate to.
+pub const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+/// The most entries a package may hold.
+pub const MAX_ENTRIES: usize = 10_000;
+
+/// Reads every entry, inflating at most [`MAX_PART_BYTES`] per part and
+/// [`MAX_TOTAL_BYTES`] in all. The sizes a ZIP declares are not trusted.
 pub fn read(bytes: &[u8]) -> Result<Vec<Entry>, TemplateError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| TemplateError::new(format!("not a valid Office file (ZIP): {e}")))?;
-    let mut entries = Vec::with_capacity(archive.len());
+    if archive.len() > MAX_ENTRIES {
+        return Err(TemplateError::new(format!(
+            "the package has {} entries; at most {MAX_ENTRIES} are allowed",
+            archive.len()
+        )));
+    }
+    let mut entries = Vec::new();
+    let mut total: u64 = 0;
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
@@ -30,11 +46,21 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Entry>, TemplateError> {
         if file.is_dir() {
             continue;
         }
-        let mut data = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut data)
-            .map_err(|e| TemplateError::new(format!("cannot read {}: {e}", file.name())))?;
+        let name = file.name().to_string();
+        let allowed = MAX_PART_BYTES.min(MAX_TOTAL_BYTES - total);
+        let mut data = Vec::new();
+        file.by_ref()
+            .take(allowed + 1)
+            .read_to_end(&mut data)
+            .map_err(|e| TemplateError::new(format!("cannot read {name}: {e}")))?;
+        if data.len() as u64 > allowed {
+            return Err(TemplateError::new(format!(
+                "{name} inflates past the limit ({MAX_PART_BYTES} bytes per part, {MAX_TOTAL_BYTES} in all)"
+            )));
+        }
+        total += data.len() as u64;
         entries.push(Entry {
-            name: file.name().to_string(),
+            name,
             data,
             stored: file.compression() == CompressionMethod::Stored,
         });
@@ -318,10 +344,9 @@ pub fn apply_slides(
         .children_named("Relationship")
         .filter_map(|r| Some((resolve("ppt", &r.attr("Target")?), r.attr("Id")?)))
         .collect();
-    let mut next_rid = max_number(rid_of.values().cloned(), "rId", "") + 1;
-    for (copy, _) in &new_rels {
-        let rid = format!("rId{next_rid}");
-        next_rid += 1;
+    let first_rid = max_number(rid_of.values().cloned(), "rId", "") + 1;
+    for (n, (copy, _)) in new_rels.iter().enumerate() {
+        let rid = format!("rId{}", first_rid + n as u32);
         root.children.push(Node::Elem(Elem::new(
             "Relationship",
             &[
@@ -438,6 +463,30 @@ mod tests {
             rels_name("ppt/slides/slide1.xml"),
             "ppt/slides/_rels/slide1.xml.rels"
         );
+    }
+
+    #[test]
+    fn refuses_bombs_and_too_many_entries() {
+        let zeros = vec![0u8; MAX_PART_BYTES as usize + 1];
+        let bomb = write(&[Entry {
+            name: "big.xml".into(),
+            data: zeros,
+            stored: false,
+        }])
+        .unwrap();
+        assert!(bomb.len() < 200_000, "deflated zeros are small");
+        let err = read(&bomb).unwrap_err();
+        assert!(err.message.contains("inflates past the limit"), "{err}");
+
+        let many: Vec<Entry> = (0..=MAX_ENTRIES)
+            .map(|i| Entry {
+                name: format!("e{i}"),
+                data: Vec::new(),
+                stored: true,
+            })
+            .collect();
+        let err = read(&write(&many).unwrap()).unwrap_err();
+        assert!(err.message.contains("entries"), "{err}");
     }
 
     #[test]

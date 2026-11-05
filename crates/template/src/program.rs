@@ -1092,8 +1092,8 @@ impl Writer<'_> {
         self.line += inner.matches('\n').count();
         self.lit(open);
         self.out.push_str(concat!(
-            "{% if __v is number %}><v>{{ __v }}</v></c>",
-            "{% elif __v is boolean %} t=\"b\"><v>{{ 1 if __v else 0 }}</v></c>",
+            "{% if __v is boolean %} t=\"b\"><v>{{ 1 if __v else 0 }}</v></c>",
+            "{% elif __v is number %}><v>{{ __v }}</v></c>",
             "{% elif __v is none %}/>",
             "{% else %} t=\"inlineStr\"><is><t xml:space=\"preserve\">{{ __v }}</t></is></c>",
             "{% endif %}"
