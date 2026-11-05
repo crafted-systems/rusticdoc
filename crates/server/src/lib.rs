@@ -65,6 +65,7 @@ pub fn app(state: AppState) -> Router {
         ))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID))
         .layer(SetRequestIdLayer::new(REQUEST_ID, MakeRequestUuid))
+        .layer(axum::middleware::from_fn(gotenberg_headers))
         .layer(cors(&state.config))
         .layer(CatchPanicLayer::new())
         .with_state(state.clone());
@@ -76,6 +77,61 @@ pub fn app(state: AppState) -> Router {
     } else {
         Router::new().nest(root, router)
     }
+}
+
+/// Gotenberg's request conventions: `Gotenberg-Trace` becomes the request
+/// id and is echoed back, and `Gotenberg-Output-Filename` renames the file
+/// in the response, keeping the extension the route produced.
+async fn gotenberg_headers(
+    mut req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Some(trace) = req.headers().get("gotenberg-trace").cloned()
+        && trace
+            .to_str()
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false)
+    {
+        req.headers_mut().insert(REQUEST_ID, trace);
+    }
+    let wanted = req
+        .headers()
+        .get("gotenberg-output-filename")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let mut res = next.run(req).await;
+    if let Some(id) = res.headers().get(REQUEST_ID).cloned() {
+        res.headers_mut().insert("gotenberg-trace", id);
+    }
+    if let Some(name) = wanted
+        && let Some(current) = res
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split("filename=\"").nth(1))
+            .map(|v| v.trim_end_matches('"').to_string())
+    {
+        let ext = std::path::Path::new(&current)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{e}"))
+            .unwrap_or_default();
+        let base = name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&name)
+            .replace('"', "");
+        let renamed = if std::path::Path::new(&base).extension().is_some() {
+            base
+        } else {
+            format!("{base}{ext}")
+        };
+        if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{renamed}\"")) {
+            res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+        }
+    }
+    res
 }
 
 /// Cross-origin access is off unless `RUSTICDOC_CORS_ORIGINS` lists origins,

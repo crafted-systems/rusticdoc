@@ -38,6 +38,10 @@ pub struct Config {
     pub cors_origins: Vec<String>,
     /// Most elements one batch render may hold.
     pub batch_limit: usize,
+    /// Refuse the `downloadFrom` form field entirely.
+    pub download_from_disabled: bool,
+    /// Most URLs one request may fetch through `downloadFrom`.
+    pub download_from_max_entries: usize,
     /// `json` or `pretty`.
     pub log_format: String,
     /// A `tracing` filter such as `info` or `rusticdoc=debug`.
@@ -75,6 +79,8 @@ impl Default for Config {
             webhook_attempts: 3,
             cors_origins: Vec::new(),
             batch_limit: 100,
+            download_from_disabled: false,
+            download_from_max_entries: 10,
             log_format: "json".into(),
             log_level: "info".into(),
         }
@@ -148,6 +154,12 @@ impl Config {
         if let Some(v) = get("WEBHOOK_ATTEMPTS").and_then(|v| v.parse().ok()) {
             c.webhook_attempts = v;
         }
+        if let Some(v) = get("DOWNLOAD_FROM_DISABLED") {
+            c.download_from_disabled = matches!(v.as_str(), "1" | "true" | "yes");
+        }
+        if let Some(v) = get("DOWNLOAD_FROM_MAX_ENTRIES").and_then(|v| v.parse().ok()) {
+            c.download_from_max_entries = v;
+        }
         if let Some(v) = get("BATCH_LIMIT").and_then(|v| v.parse().ok()) {
             c.batch_limit = v;
         }
@@ -217,6 +229,15 @@ impl Config {
         }
         if matches!(get("WEBHOOK_ALLOW_PRIVATE").as_deref(), Some("true" | "1")) {
             self.webhook_allow_private = true;
+        }
+        if matches!(
+            get("API_DISABLE_DOWNLOAD_FROM").as_deref(),
+            Some("true" | "1")
+        ) {
+            self.download_from_disabled = true;
+        }
+        if let Some(v) = get("API_DOWNLOAD_FROM_MAX_ENTRIES").and_then(|v| v.parse().ok()) {
+            self.download_from_max_entries = v;
         }
     }
 }

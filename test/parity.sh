@@ -21,8 +21,8 @@ fi
 
 python3 "$SLIM/test/parity/replay.py" --features "$UPSTREAM/test/integration/features" \
     --testdata "$UPSTREAM/test/integration/testdata" --out "$OUT" --platform "$PLATFORM" \
-    --office-only --slim-office "$IMAGE" --only '^(?!chromium_)' "${@:3}"
+    --office-only --slim-office "$IMAGE" --only '^(?!chromium_)' --slim-env RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true "${@:3}"
 python3 "$SLIM/test/parity/replay.py" --features "$UPSTREAM/test/integration/features" \
     --testdata "$UPSTREAM/test/integration/testdata" --out "$OUT" --platform "$PLATFORM" \
-    --office-only --slim-office "$IMAGE" --only '^(?!chromium_)' --workers 1 --retry-failed
+    --office-only --slim-office "$IMAGE" --only '^(?!chromium_)' --slim-env RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true --workers 1 --retry-failed
 python3 "$SLIM/test/parity/summarize.py" "$OUT/results.jsonl"

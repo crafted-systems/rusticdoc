@@ -51,7 +51,7 @@ pub async fn merge(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     if form.files.len() < 2 {
         return Err(ApiError::bad_request("merge needs at least two PDF files"));
     }
@@ -84,17 +84,25 @@ pub async fn encrypt(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let file = form.require_file("one PDF")?;
+    // Gotenberg accepts either password; the owner password defaults to the
+    // user password when only that one is given.
+    let user_password = form.field("userPassword").unwrap_or("").to_string();
     let owner_password = form
         .field("ownerPassword")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::bad_request("'ownerPassword' is required"))?
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(|| user_password.clone());
+    if owner_password.is_empty() {
+        return Err(ApiError::bad_request(
+            "'userPassword' or 'ownerPassword' is required",
+        ));
+    }
     let mut req = RenderRequest::new(file);
     req.templating = false;
     req.steps = vec![Step::Encrypt {
-        user_password: form.field("userPassword").unwrap_or("").to_string(),
+        user_password,
         owner_password,
     }];
     req.output_name = form

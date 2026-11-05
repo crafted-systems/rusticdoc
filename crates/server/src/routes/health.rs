@@ -15,6 +15,8 @@ pub struct Health {
     pub status: &'static str,
     pub uptime_seconds: u64,
     pub engines: EngineStatus,
+    /// Per-module status in Gotenberg's shape.
+    pub details: serde_json::Value,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -41,6 +43,15 @@ pub async fn health(State(state): State<AppState>) -> Json<Health> {
             libreoffice: state.engines.libreoffice.is_some(),
             qpdf: state.engines.qpdf.is_some(),
         },
+        details: serde_json::json!({
+            "libreoffice": {
+                "status": if state.engines.libreoffice.is_some() { "up" } else { "down" },
+                "timestamp": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            }
+        }),
     })
 }
 
@@ -67,7 +78,7 @@ pub async fn metrics(State(state): State<AppState>) -> Response {
         StatusCode::OK,
         [(
             header::CONTENT_TYPE,
-            "application/openmetrics-text; version=1.0.0; charset=utf-8",
+            "text/plain; version=0.0.4; charset=utf-8",
         )],
         state.metrics.render(),
     )

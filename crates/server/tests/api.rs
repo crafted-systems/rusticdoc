@@ -505,6 +505,89 @@ async fn root_path_prefixes_every_route() {
 }
 
 #[tokio::test]
+async fn gotenberg_headers_rename_the_file_and_carry_the_trace() {
+    let router = app(AppState::new(config()));
+    let mut req = post_form("/v1/render", &[("template", Some("letter.txt"), "Hi")]);
+    req.headers_mut()
+        .insert("gotenberg-output-filename", "foo".parse().unwrap());
+    req.headers_mut()
+        .insert("gotenberg-trace", "trace-123".parse().unwrap());
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"foo.txt\""
+    );
+    assert_eq!(res.headers().get("gotenberg-trace").unwrap(), "trace-123");
+    assert_eq!(res.headers().get("x-request-id").unwrap(), "trace-123");
+
+    let res = router
+        .oneshot(Request::get("/favicon.ico").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn download_from_fetches_files_with_extra_headers() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<axum::http::HeaderMap>(4);
+    let server = Router::new().route(
+        "/letter.txt",
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let tx = tx.clone();
+            async move {
+                tx.send(headers).await.unwrap();
+                "Dear {{ name }}"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+
+    let mut c = config();
+    c.webhook_allow_private = true;
+    let router = app(AppState::new(c));
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("downloadFrom", None, &format!(r#"[{{"url":"http://{addr}/letter.txt","extraHttpHeaders":{{"X-Foo":"bar"}}}}]"#)),
+                ("data", None, r#"{"name":"Ada"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"letter.txt\""
+    );
+    assert_eq!(text(res).await, "Dear Ada");
+    let headers = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(headers.get("x-foo").unwrap(), "bar");
+
+    // Without allow-private, a loopback download is refused like a webhook.
+    let router = app(AppState::new(config()));
+    let res = router
+        .oneshot(post_form(
+            "/v1/render",
+            &[(
+                "downloadFrom",
+                None,
+                &format!(r#"[{{"url":"http://{addr}/letter.txt"}}]"#),
+            )],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn state_is_shareable() {
     let state = Arc::new(AppState::new(config()));
     assert!(state.engines.libreoffice.is_none());
