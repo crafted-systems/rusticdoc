@@ -188,7 +188,7 @@ async fn errors_are_json_with_a_kind() {
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY); // not a real DOCX: a template error
 
     // A convert with no LibreOffice configured is a 503, not a crash.
     let res = router
