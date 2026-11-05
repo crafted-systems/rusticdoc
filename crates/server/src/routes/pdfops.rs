@@ -5,18 +5,19 @@
 
 use std::collections::BTreeMap;
 
+use axum::Json;
 use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::Json;
 use rusticdoc_core::pdfops::{
-    require_pdf, Attachment, Bookmark, FacturxProfile, Metadata, Overlay, OverlayKind, Position, Rotation, SplitMode,
+    Attachment, Bookmark, FacturxProfile, Metadata, Overlay, OverlayKind, Position, Rotation,
+    SplitMode, require_pdf,
 };
 use rusticdoc_core::{Document, Output};
 use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
-use crate::routes::form::{request_id, zip, Form};
+use crate::routes::form::{Form, request_id, zip};
 use crate::routes::forms::finish;
 use crate::state::AppState;
 use crate::webhook::Webhook;
@@ -176,17 +177,34 @@ fn pdf_output(name: String, doc: Document, stage: &str) -> Output {
     responses((status = 200, description = "A PDF, or a ZIP of PDFs", content_type = "application/octet-stream", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn split(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn split(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
-    let span = form.field("splitSpan").map(str::trim).unwrap_or("").to_string();
+    let span = form
+        .field("splitSpan")
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
     let mode = match form.field("splitMode").map(str::trim).unwrap_or("pages") {
-        "pages" => SplitMode::Pages { ranges: span.clone(), unify: form.bool("splitUnify") },
-        "intervals" => SplitMode::Intervals {
-            span: span.parse().map_err(|_| ApiError::bad_request("'splitSpan' must be a page count for intervals"))?,
+        "pages" => SplitMode::Pages {
+            ranges: span.clone(),
+            unify: form.bool("splitUnify"),
         },
-        other => return Err(ApiError::bad_request(format!("'splitMode' must be pages or intervals, not '{other}'"))),
+        "intervals" => SplitMode::Intervals {
+            span: span.parse().map_err(|_| {
+                ApiError::bad_request("'splitSpan' must be a page count for intervals")
+            })?,
+        },
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "'splitMode' must be pages or intervals, not '{other}'"
+            )));
+        }
     };
     if span.is_empty() {
         return Err(ApiError::bad_request("'splitSpan' is required"));
@@ -195,10 +213,20 @@ pub async fn split(State(state): State<AppState>, headers: HeaderMap, multipart:
         .field("outputFilename")
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| std::path::Path::new(&doc.name).file_stem().and_then(|s| s.to_str()).unwrap_or("split").to_string());
+        .unwrap_or_else(|| {
+            std::path::Path::new(&doc.name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("split")
+                .to_string()
+        });
     let st = state.clone();
     let job = async move {
-        let parts = st.engines.pdf.split(&doc, &mode, st.config.api_timeout).await?;
+        let parts = st
+            .engines
+            .pdf
+            .split(&doc, &mode, st.config.api_timeout)
+            .await?;
         let outputs: Vec<Output> = parts
             .into_iter()
             .enumerate()
@@ -222,13 +250,23 @@ pub async fn split(State(state): State<AppState>, headers: HeaderMap, multipart:
     responses((status = 200, description = "The flattened PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn flatten(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn flatten(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let name = output_name(&form, &doc, "");
     let st = state.clone();
-    let job = async move { Ok(pdf_output(name, st.engines.pdf.flatten(&doc, st.config.api_timeout).await?, "flatten")) };
+    let job = async move {
+        Ok(pdf_output(
+            name,
+            st.engines.pdf.flatten(&doc, st.config.api_timeout).await?,
+            "flatten",
+        ))
+    };
     finish(state, hook, request_id(&headers), job).await
 }
 
@@ -239,7 +277,11 @@ pub async fn flatten(State(state): State<AppState>, headers: HeaderMap, multipar
     responses((status = 200, description = "The rotated PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn rotate(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn rotate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
@@ -248,7 +290,14 @@ pub async fn rotate(State(state): State<AppState>, headers: HeaderMap, multipart
     let name = output_name(&form, &doc, "");
     let st = state.clone();
     let job = async move {
-        Ok(pdf_output(name, st.engines.pdf.rotate(&doc, rotation, &pages, st.config.api_timeout).await?, "rotate"))
+        Ok(pdf_output(
+            name,
+            st.engines
+                .pdf
+                .rotate(&doc, rotation, &pages, st.config.api_timeout)
+                .await?,
+            "rotate",
+        ))
     };
     finish(state, hook, request_id(&headers), job).await
 }
@@ -260,13 +309,23 @@ pub async fn rotate(State(state): State<AppState>, headers: HeaderMap, multipart
     responses((status = 200, description = "The smaller PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn optimize(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn optimize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let name = output_name(&form, &doc, "");
     let st = state.clone();
-    let job = async move { Ok(pdf_output(name, st.engines.pdf.optimize(&doc, st.config.api_timeout).await?, "optimize")) };
+    let job = async move {
+        Ok(pdf_output(
+            name,
+            st.engines.pdf.optimize(&doc, st.config.api_timeout).await?,
+            "optimize",
+        ))
+    };
     finish(state, hook, request_id(&headers), job).await
 }
 
@@ -288,7 +347,11 @@ pub async fn metadata_read(
     let mut all = BTreeMap::new();
     for doc in std::mem::take(&mut form.files) {
         require_pdf(&doc)?;
-        let meta = state.engines.pdf.read_metadata(&doc, state.config.api_timeout).await?;
+        let meta = state
+            .engines
+            .pdf
+            .read_metadata(&doc, state.config.api_timeout)
+            .await?;
         all.insert(doc.name.clone(), meta);
     }
     Ok(Json(all))
@@ -301,18 +364,33 @@ pub async fn metadata_read(
     responses((status = 200, description = "The PDF with its metadata changed", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn metadata_write(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn metadata_write(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let metadata: Metadata = match form.json("metadata")? {
         serde_json::Value::Object(map) if !map.is_empty() => map.into_iter().collect(),
-        _ => return Err(ApiError::bad_request("'metadata' must be a non-empty JSON object")),
+        _ => {
+            return Err(ApiError::bad_request(
+                "'metadata' must be a non-empty JSON object",
+            ));
+        }
     };
     let name = output_name(&form, &doc, "");
     let st = state.clone();
     let job = async move {
-        Ok(pdf_output(name, st.engines.pdf.write_metadata(&doc, &metadata, st.config.api_timeout).await?, "metadata"))
+        Ok(pdf_output(
+            name,
+            st.engines
+                .pdf
+                .write_metadata(&doc, &metadata, st.config.api_timeout)
+                .await?,
+            "metadata",
+        ))
     };
     finish(state, hook, request_id(&headers), job).await
 }
@@ -335,7 +413,11 @@ pub async fn bookmarks_read(
     let mut all = BTreeMap::new();
     for doc in std::mem::take(&mut form.files) {
         require_pdf(&doc)?;
-        let marks = state.engines.pdf.read_bookmarks(&doc, state.config.api_timeout).await?;
+        let marks = state
+            .engines
+            .pdf
+            .read_bookmarks(&doc, state.config.api_timeout)
+            .await?;
         all.insert(doc.name.clone(), marks);
     }
     Ok(Json(all))
@@ -348,16 +430,31 @@ pub async fn bookmarks_read(
     responses((status = 200, description = "The PDF with its outline replaced", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn bookmarks_write(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn bookmarks_write(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
-    let bookmarks: Vec<Bookmark> = serde_json::from_value(form.json("bookmarks")?)
-        .map_err(|e| ApiError::bad_request(format!("'bookmarks' must be an array of {{title, page, children}}: {e}")))?;
+    let bookmarks: Vec<Bookmark> =
+        serde_json::from_value(form.json("bookmarks")?).map_err(|e| {
+            ApiError::bad_request(format!(
+                "'bookmarks' must be an array of {{title, page, children}}: {e}"
+            ))
+        })?;
     let name = output_name(&form, &doc, "");
     let st = state.clone();
     let job = async move {
-        Ok(pdf_output(name, st.engines.pdf.write_bookmarks(&doc, &bookmarks, st.config.api_timeout).await?, "bookmarks"))
+        Ok(pdf_output(
+            name,
+            st.engines
+                .pdf
+                .write_bookmarks(&doc, &bookmarks, st.config.api_timeout)
+                .await?,
+            "bookmarks",
+        ))
     };
     finish(state, hook, request_id(&headers), job).await
 }
@@ -369,20 +466,39 @@ pub async fn bookmarks_write(State(state): State<AppState>, headers: HeaderMap, 
     responses((status = 200, description = "The PDF with attachments", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn embed(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn embed(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     if form.files.is_empty() {
-        return Err(ApiError::bad_request("send the PDF first, then at least one file to attach"));
+        return Err(ApiError::bad_request(
+            "send the PDF first, then at least one file to attach",
+        ));
     }
     let files: Vec<Attachment> = std::mem::take(&mut form.files)
         .into_iter()
-        .map(|f| Attachment { mime: f.content_type().to_string(), name: f.name, bytes: f.bytes.to_vec() })
+        .map(|f| Attachment {
+            mime: f.content_type().to_string(),
+            name: f.name,
+            bytes: f.bytes.to_vec(),
+        })
         .collect();
     let name = output_name(&form, &doc, "");
     let st = state.clone();
-    let job = async move { Ok(pdf_output(name, st.engines.pdf.embed(&doc, &files, st.config.api_timeout).await?, "embed")) };
+    let job = async move {
+        Ok(pdf_output(
+            name,
+            st.engines
+                .pdf
+                .embed(&doc, &files, st.config.api_timeout)
+                .await?,
+            "embed",
+        ))
+    };
     finish(state, hook, request_id(&headers), job).await
 }
 
@@ -390,8 +506,15 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
     let kind = if let Some(text) = form.field("text").map(str::trim).filter(|t| !t.is_empty()) {
         OverlayKind::Text {
             text: text.to_string(),
-            font_size: form.field("fontSize").and_then(|v| v.parse().ok()).unwrap_or(24.0),
-            colour: form.field("colour").or(form.field("color")).unwrap_or("#808080").to_string(),
+            font_size: form
+                .field("fontSize")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(24.0),
+            colour: form
+                .field("colour")
+                .or(form.field("color"))
+                .unwrap_or("#808080")
+                .to_string(),
         }
     } else if let Some(mark) = form.files.first().cloned() {
         form.files.remove(0);
@@ -400,20 +523,26 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
         match mark.extension().as_str() {
             "pdf" => {
                 require_pdf(&mark)?;
-                OverlayKind::Pdf { bytes: mark.bytes.to_vec(), name: mark.name }
+                OverlayKind::Pdf {
+                    bytes: mark.bytes.to_vec(),
+                    name: mark.name,
+                }
             }
-            "png" | "jpg" | "jpeg" if png || jpeg => {
-                OverlayKind::Image { bytes: mark.bytes.to_vec(), name: mark.name }
-            }
+            "png" | "jpg" | "jpeg" if png || jpeg => OverlayKind::Image {
+                bytes: mark.bytes.to_vec(),
+                name: mark.name,
+            },
             other => {
                 return Err(ApiError::bad_request(format!(
                     "a mark must be text, a PNG or JPEG image, or a PDF; '{}' (.{other}) is none of these",
                     mark.name
-                )))
+                )));
             }
         }
     } else {
-        return Err(ApiError::bad_request("send 'text', or an image or PDF as a second file"));
+        return Err(ApiError::bad_request(
+            "send 'text', or an image or PDF as a second file",
+        ));
     };
     let position = match form.field("position").map(str::trim).unwrap_or("center") {
         "top-left" => Position::TopLeft,
@@ -425,7 +554,11 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
         "bottom-right" => Position::BottomRight,
         other => return Err(ApiError::bad_request(format!("unknown position '{other}'"))),
     };
-    let num = |name: &str, default: f32| form.field(name).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(default);
+    let num = |name: &str, default: f32| {
+        form.field(name)
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(default)
+    };
     let opacity = num("opacity", 1.0);
     if !(0.0..=1.0).contains(&opacity) {
         return Err(ApiError::bad_request("'opacity' must be between 0 and 1"));
@@ -447,14 +580,27 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
     responses((status = 200, description = "The watermarked PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn watermark(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn watermark(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let overlay = overlay_from(&mut form)?;
     let name = output_name(&form, &doc, "");
     let st = state.clone();
-    let job = async move { Ok(pdf_output(name, st.engines.pdf.watermark(&doc, &overlay, st.config.api_timeout).await?, "watermark")) };
+    let job = async move {
+        Ok(pdf_output(
+            name,
+            st.engines
+                .pdf
+                .watermark(&doc, &overlay, st.config.api_timeout)
+                .await?,
+            "watermark",
+        ))
+    };
     finish(state, hook, request_id(&headers), job).await
 }
 
@@ -465,14 +611,27 @@ pub async fn watermark(State(state): State<AppState>, headers: HeaderMap, multip
     responses((status = 200, description = "The stamped PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn stamp(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn stamp(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let overlay = overlay_from(&mut form)?;
     let name = output_name(&form, &doc, "");
     let st = state.clone();
-    let job = async move { Ok(pdf_output(name, st.engines.pdf.stamp(&doc, &overlay, st.config.api_timeout).await?, "stamp")) };
+    let job = async move {
+        Ok(pdf_output(
+            name,
+            st.engines
+                .pdf
+                .stamp(&doc, &overlay, st.config.api_timeout)
+                .await?,
+            "stamp",
+        ))
+    };
     finish(state, hook, request_id(&headers), job).await
 }
 
@@ -483,15 +642,35 @@ pub async fn stamp(State(state): State<AppState>, headers: HeaderMap, multipart:
     responses((status = 200, description = "The Factur-X PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
-pub async fn facturx(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
+pub async fn facturx(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart, &state).await?;
+    let form = Form::read(multipart, &state).await?;
     let (pdf_pos, xml_pos) = {
-        let pdfs: Vec<usize> = form.files.iter().enumerate().filter(|(_, f)| f.extension() == "pdf").map(|(i, _)| i).collect();
-        let xmls: Vec<usize> = form.files.iter().enumerate().filter(|(_, f)| f.extension() == "xml").map(|(i, _)| i).collect();
+        let pdfs: Vec<usize> = form
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.extension() == "pdf")
+            .map(|(i, _)| i)
+            .collect();
+        let xmls: Vec<usize> = form
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.extension() == "xml")
+            .map(|(i, _)| i)
+            .collect();
         match (pdfs.as_slice(), xmls.as_slice()) {
             ([p], [x]) => (*p, *x),
-            _ => return Err(ApiError::bad_request("send exactly one PDF and one XML file")),
+            _ => {
+                return Err(ApiError::bad_request(
+                    "send exactly one PDF and one XML file",
+                ));
+            }
         }
     };
     let xml = form.files[xml_pos].bytes.to_vec();
@@ -501,7 +680,14 @@ pub async fn facturx(State(state): State<AppState>, headers: HeaderMap, multipar
     let name = output_name(&form, &doc, "");
     let st = state.clone();
     let job = async move {
-        Ok(pdf_output(name, st.engines.pdf.facturx(&doc, &xml, profile, st.config.api_timeout).await?, "factur-x"))
+        Ok(pdf_output(
+            name,
+            st.engines
+                .pdf
+                .facturx(&doc, &xml, profile, st.config.api_timeout)
+                .await?,
+            "factur-x",
+        ))
     };
     finish(state, hook, request_id(&headers), job).await
 }

@@ -435,7 +435,7 @@ async fn convert_and_pdf_routes_do_not_template_their_input() {
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

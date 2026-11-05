@@ -9,11 +9,12 @@
 
 use std::collections::BTreeMap;
 
+use rusticdoc_core::Step;
 use rusticdoc_core::job::PdfaLevel;
 use rusticdoc_core::pdfops::{
-    Attachment, Bookmark, FacturxProfile, Metadata, Overlay, OverlayKind, Position, Rotation, SplitMode,
+    Attachment, Bookmark, FacturxProfile, Metadata, Overlay, OverlayKind, Position, Rotation,
+    SplitMode,
 };
-use rusticdoc_core::Step;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::form::Form;
@@ -40,7 +41,11 @@ pub fn post_steps(form: &mut Form, allow_merge: bool) -> ApiResult<Vec<Step>> {
     for overlay in overlays(form, "stamp")? {
         steps.push(Step::Stamp { overlay });
     }
-    if let Some(angle) = form.field("rotateAngle").map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(angle) = form
+        .field("rotateAngle")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         steps.push(Step::Rotate {
             rotation: Rotation::parse(angle)?,
             pages: form.field("rotatePages").unwrap_or("").trim().to_string(),
@@ -64,12 +69,23 @@ pub fn post_steps(form: &mut Form, allow_merge: bool) -> ApiResult<Vec<Step>> {
     if form.bool("pdfua") {
         steps.push(Step::Pdfua);
     }
-    if let Some(raw) = form.field("bookmarks").map(str::trim).filter(|s| !s.is_empty()) {
-        let bookmarks: Vec<Bookmark> = serde_json::from_str(raw)
-            .map_err(|e| ApiError::bad_request(format!("Invalid form data: form field 'bookmarks' is invalid ({e})")))?;
+    if let Some(raw) = form
+        .field("bookmarks")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let bookmarks: Vec<Bookmark> = serde_json::from_str(raw).map_err(|e| {
+            ApiError::bad_request(format!(
+                "Invalid form data: form field 'bookmarks' is invalid ({e})"
+            ))
+        })?;
         steps.push(Step::Bookmarks { bookmarks });
     }
-    if let Some(raw) = form.field("metadata").map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(raw) = form
+        .field("metadata")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         let metadata: Metadata = match serde_json::from_str::<serde_json::Value>(raw) {
             Ok(serde_json::Value::Object(map)) => map.into_iter().collect(),
             _ => {
@@ -119,7 +135,11 @@ pub fn post_steps(form: &mut Form, allow_merge: bool) -> ApiResult<Vec<Step>> {
     let owner_password = form.field("ownerPassword").unwrap_or("").to_string();
     if !user_password.is_empty() || !owner_password.is_empty() {
         steps.push(Step::Encrypt {
-            owner_password: if owner_password.is_empty() { user_password.clone() } else { owner_password },
+            owner_password: if owner_password.is_empty() {
+                user_password.clone()
+            } else {
+                owner_password
+            },
             user_password,
         });
     }
@@ -186,7 +206,9 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
         let opts: BTreeMap<String, String> = match at(&options).trim() {
             "" => BTreeMap::new(),
             raw => serde_json::from_str(raw).map_err(|_| {
-                ApiError::bad_request(format!("Invalid form data: form field '{prefix}Options' is invalid"))
+                ApiError::bad_request(format!(
+                    "Invalid form data: form field '{prefix}Options' is invalid"
+                ))
             })?,
         };
         let kind = match source.trim() {
@@ -199,8 +221,15 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
                 }
                 OverlayKind::Text {
                     text,
-                    font_size: opts.get("fontsize").and_then(|v| v.parse().ok()).unwrap_or(24.0),
-                    colour: opts.get("fillc").or(opts.get("fillcolor")).cloned().unwrap_or_else(|| "#808080".into()),
+                    font_size: opts
+                        .get("fontsize")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(24.0),
+                    colour: opts
+                        .get("fillc")
+                        .or(opts.get("fillcolor"))
+                        .cloned()
+                        .unwrap_or_else(|| "#808080".into()),
                 }
             }
             "image" | "pdf" => {
@@ -211,17 +240,25 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
                 })?;
                 if source.trim() == "pdf" {
                     rusticdoc_core::pdfops::require_pdf(&file)?;
-                    OverlayKind::Pdf { bytes: file.bytes.to_vec(), name: file.name }
+                    OverlayKind::Pdf {
+                        bytes: file.bytes.to_vec(),
+                        name: file.name,
+                    }
                 } else {
                     let png = file.bytes.starts_with(b"\x89PNG\r\n\x1a\n");
                     let jpeg = file.bytes.starts_with(b"\xff\xd8\xff");
-                    if !(png || jpeg) || !matches!(file.extension().as_str(), "png" | "jpg" | "jpeg") {
+                    if !(png || jpeg)
+                        || !matches!(file.extension().as_str(), "png" | "jpg" | "jpeg")
+                    {
                         return Err(ApiError::bad_request(format!(
                             "Invalid form data: '{}' is not a PNG or JPEG image",
                             file.name
                         )));
                     }
-                    OverlayKind::Image { bytes: file.bytes.to_vec(), name: file.name }
+                    OverlayKind::Image {
+                        bytes: file.bytes.to_vec(),
+                        name: file.name,
+                    }
                 }
             }
             other => {
@@ -267,11 +304,122 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
 /// The steps a `/v1/*` route adds when the caller sends the same fields.
 pub fn has_post_fields(form: &Form) -> bool {
     [
-        "merge", "splitMode", "watermarkSource", "stampSource", "rotateAngle", "flatten", "optimizeImages",
-        "pdfa", "pdfua", "bookmarks", "metadata", "userPassword", "ownerPassword", "facturxConformanceLevel",
+        "merge",
+        "splitMode",
+        "watermarkSource",
+        "stampSource",
+        "rotateAngle",
+        "flatten",
+        "optimizeImages",
+        "pdfa",
+        "pdfua",
+        "bookmarks",
+        "metadata",
+        "userPassword",
+        "ownerPassword",
+        "facturxConformanceLevel",
     ]
     .iter()
     .any(|f| form.field(f).is_some())
         || form.by_field.contains_key("embeds")
         || form.by_field.contains_key("facturxXml")
+}
+
+/// A boolean field in Gotenberg's strict form: `true` or `false`, or a 400.
+fn bool_field(form: &Form, name: &str) -> ApiResult<Option<bool>> {
+    match form.field(name).map(|v| v.trim().to_ascii_lowercase()) {
+        None => Ok(None),
+        Some(v) if v == "true" || v == "1" => Ok(Some(true)),
+        Some(v) if v == "false" || v == "0" || v.is_empty() => Ok(Some(false)),
+        Some(v) => Err(ApiError::bad_request(format!(
+            "Invalid form data: form field '{name}' is invalid (got '{v}', resulting to wrong value, expected a boolean)"
+        ))),
+    }
+}
+
+/// LibreOffice conversion options from Gotenberg's field names.
+pub fn convert_options(form: &Form) -> ApiResult<rusticdoc_core::convert::ConvertOptions> {
+    use rusticdoc_core::convert::ConvertOptions;
+    let mut o = ConvertOptions::default();
+    let flag = |name: &str, slot: &mut bool| -> ApiResult<()> {
+        if let Some(v) = bool_field(form, name)? {
+            *slot = v;
+        }
+        Ok(())
+    };
+    flag("landscape", &mut o.landscape)?;
+    flag("exportFormFields", &mut o.export_form_fields)?;
+    flag(
+        "allowDuplicateFieldNames",
+        &mut o.allow_duplicate_field_names,
+    )?;
+    flag("exportBookmarks", &mut o.export_bookmarks)?;
+    flag(
+        "exportBookmarksToPdfDestination",
+        &mut o.export_bookmarks_to_pdf_destination,
+    )?;
+    flag("exportPlaceholders", &mut o.export_placeholders)?;
+    flag("exportNotes", &mut o.export_notes)?;
+    flag("exportNotesPages", &mut o.export_notes_pages)?;
+    flag("exportOnlyNotesPages", &mut o.export_only_notes_pages)?;
+    flag("exportNotesInMargin", &mut o.export_notes_in_margin)?;
+    flag(
+        "convertOooTargetToPdfTarget",
+        &mut o.convert_ooo_target_to_pdf_target,
+    )?;
+    flag("exportLinksRelativeFsys", &mut o.export_links_relative_fsys)?;
+    flag("exportHiddenSlides", &mut o.export_hidden_slides)?;
+    flag("skipEmptyPages", &mut o.skip_empty_pages)?;
+    flag(
+        "addOriginalDocumentAsStream",
+        &mut o.add_original_document_as_stream,
+    )?;
+    flag("singlePageSheets", &mut o.single_page_sheets)?;
+    flag(
+        "losslessImageCompression",
+        &mut o.lossless_image_compression,
+    )?;
+    flag("reduceImageResolution", &mut o.reduce_image_resolution)?;
+    flag("pdfua", &mut o.pdfua)?;
+    if let Some(v) = form
+        .field("nativePageRanges")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        o.native_page_ranges = Some(v.to_string());
+    }
+    if let Some(v) = form.field("password").filter(|s| !s.is_empty()) {
+        o.password = Some(v.to_string());
+    }
+    if let Some(v) = form
+        .field("quality")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        o.quality = v.parse().map_err(|_| {
+            ApiError::bad_request(format!(
+                "Invalid form data: form field 'quality' is invalid (got '{v}', expected a number)"
+            ))
+        })?;
+    }
+    if let Some(v) = form
+        .field("maxImageResolution")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        o.max_image_resolution = v.parse().map_err(|_| {
+            ApiError::bad_request(format!(
+                "Invalid form data: form field 'maxImageResolution' is invalid (got '{v}', expected a number)"
+            ))
+        })?;
+    }
+    if let Some(level) = form.field("pdfa").map(str::trim).filter(|s| !s.is_empty()) {
+        o.pdfa = Some(PdfaLevel::parse(level).map_err(|_| {
+            ApiError::bad_request(format!(
+                "The PDF format '{level}' is not supported. Valid formats include PDF/A-1b, PDF/A-2b, PDF/A-3b, PDF/A-4, and PDF/UA."
+            ))
+        })?);
+    }
+    o.validate()?;
+    Ok(o)
 }
