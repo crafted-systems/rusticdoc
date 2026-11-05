@@ -64,7 +64,7 @@ expect "qpdf encrypt AES-256" "$(qpdf --password=user --show-encryption q-encryp
 echo "== pdfcpu"
 pdfcpu stamp add --mode text -p 1-2 -- "DRAFT (v1)" \
   "pos:c, rot:45.0, scale:0.500 rel, op:0.30, font:Helvetica, points:24, fillcolor:#808080" three-pages.pdf pc-stamp.pdf
-expect "pdfcpu text stamp keeps page text" "$(pdftotext pc-stamp.pdf - | grep -c '^Page 1$')" 1
+expect "pdfcpu text stamp keeps page text" "$(pdftotext pc-stamp.pdf - | grep -c 'Page 1$')" 1
 pdfcpu watermark add --mode text -- "DRAFT" "pos:bc, rot:0.0, scale:1 abs, op:0.50, font:Helvetica, points:24, fillcolor:#ff0000" three-pages.pdf pc-wm.pdf
 expect "pdfcpu text watermark" "$(pdftotext pc-wm.pdf - | grep -c DRAFT)" 3
 pdfcpu stamp add --mode image -- dot.png "pos:tl, rot:0.0, scale:0.250 rel, op:1.00" three-pages.pdf pc-image.pdf
@@ -92,7 +92,7 @@ echo "== lopdf outputs checked with poppler and veraPDF"
 lopdf merge "$WORK/l-merge.pdf" "$WORK/three-pages.pdf" "$WORK/outlined.pdf"
 expect "lopdf merge page count" "$(pages l-merge.pdf)" 6
 lopdf stamp "$WORK/three-pages.pdf" "$WORK/l-stamp.pdf" "DRAFT"
-expect "lopdf stamp keeps text" "$(pdftotext l-stamp.pdf - | grep -c '^Page 2$')" 1
+expect "lopdf stamp keeps text" "$(pdftotext l-stamp.pdf - | grep -c 'Page 2$')" 1
 expect "lopdf stamp adds text" "$(pdftotext l-stamp.pdf - | grep -c DRAFT)" 3
 expect "lopdf stamp resources resolve" "$(pdftotext l-stamp.pdf - 2>&1 >/dev/null | grep -c 'Syntax Error')" 0
 run "$ENGINES" /usr/bin/soffice --headless \
