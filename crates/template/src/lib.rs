@@ -37,6 +37,7 @@ pub enum Format {
 }
 
 impl Format {
+    /// The format for a file extension such as `docx`, in any case.
     pub fn from_extension(ext: &str) -> Option<Self> {
         Some(match ext.to_ascii_lowercase().as_str() {
             "docx" => Format::Docx,
@@ -49,6 +50,7 @@ impl Format {
         })
     }
 
+    /// The lower-case file extension.
     pub fn extension(self) -> &'static str {
         match self {
             Format::Docx => "docx",
@@ -81,6 +83,7 @@ pub struct Location {
     pub snippet: String,
 }
 
+/// A compile or render failure, with where it happened when known.
 #[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
 #[error("{message}{}", location.as_ref().map(|l| format!(" ({} {}: {})", l.part, l.place, l.snippet)).unwrap_or_default())]
 pub struct TemplateError {
@@ -89,6 +92,7 @@ pub struct TemplateError {
 }
 
 impl TemplateError {
+    /// An error without a location.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -96,14 +100,17 @@ impl TemplateError {
         }
     }
 
+    /// Attaches a location.
     pub fn at(mut self, location: Location) -> Self {
         self.location = Some(location);
         self
     }
 }
 
+/// Result alias for this crate.
 pub type Result<T> = std::result::Result<T, TemplateError>;
 
+/// How serious a validation finding is; warnings do not fail a render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -161,6 +168,7 @@ impl std::fmt::Debug for Compiled {
 const TEMPLATE_NAME: &str = "document";
 
 impl Compiled {
+    /// The format the template was compiled as.
     pub fn format(&self) -> Format {
         self.format
     }
@@ -170,6 +178,7 @@ impl Compiled {
         &self.hash
     }
 
+    /// The settings read from the document's `{% settings %}` tag.
     pub fn settings(&self) -> &Settings {
         &self.settings
     }
