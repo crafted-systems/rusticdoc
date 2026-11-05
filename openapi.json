@@ -4,7 +4,8 @@
     "title": "rusticdoc",
     "description": "Fills Office and PDF templates from JSON, converts documents with LibreOffice, and runs PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously.",
     "license": {
-      "name": "UNLICENSED"
+      "name": "Not yet chosen",
+      "identifier": "LicenseRef-rusticdoc"
     },
     "version": "0.1.0"
   },
@@ -18,6 +19,7 @@
         "operationId": "health",
         "responses": {
           "200": {
+            "description": "Service status",
             "content": {
               "application/json": {
                 "schema": {
@@ -38,6 +40,7 @@
         "operationId": "metrics",
         "responses": {
           "200": {
+            "description": "Prometheus text format",
             "content": {
               "text/plain": {}
             }
@@ -54,6 +57,7 @@
         "operationId": "ready",
         "responses": {
           "200": {
+            "description": "Service status",
             "content": {
               "application/json": {
                 "schema": {
@@ -86,13 +90,23 @@
           "200": {
             "description": "The converted file, or a ZIP of them",
             "content": {
-              "application/octet-stream": {}
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
             }
           },
           "204": {
             "description": "Accepted; the result goes to the webhook"
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -102,6 +116,7 @@
             }
           },
           "503": {
+            "description": "An engine is unavailable or the request timed out",
             "content": {
               "application/json": {
                 "schema": {
@@ -145,13 +160,23 @@
           "200": {
             "description": "The encrypted PDF",
             "content": {
-              "application/pdf": {}
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
             }
           },
           "204": {
             "description": "Accepted; the result goes to the webhook"
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -161,6 +186,7 @@
             }
           },
           "503": {
+            "description": "An engine is unavailable or the request timed out",
             "content": {
               "application/json": {
                 "schema": {
@@ -202,6 +228,7 @@
         },
         "responses": {
           "200": {
+            "description": "The form fields",
             "content": {
               "application/json": {
                 "schema": {
@@ -214,6 +241,7 @@
             }
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -223,6 +251,7 @@
             }
           },
           "501": {
+            "description": "Not supported in this version",
             "content": {
               "application/json": {
                 "schema": {
@@ -266,13 +295,23 @@
           "200": {
             "description": "The filled PDF",
             "content": {
-              "application/pdf": {}
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
             }
           },
           "204": {
             "description": "Accepted; the result goes to the webhook"
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -282,6 +321,7 @@
             }
           },
           "422": {
+            "description": "The template failed to render",
             "content": {
               "application/json": {
                 "schema": {
@@ -291,6 +331,7 @@
             }
           },
           "501": {
+            "description": "Not supported in this version",
             "content": {
               "application/json": {
                 "schema": {
@@ -334,13 +375,23 @@
           "200": {
             "description": "The merged PDF",
             "content": {
-              "application/pdf": {}
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
             }
           },
           "204": {
             "description": "Accepted; the result goes to the webhook"
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -350,6 +401,7 @@
             }
           },
           "503": {
+            "description": "An engine is unavailable or the request timed out",
             "content": {
               "application/json": {
                 "schema": {
@@ -393,13 +445,23 @@
           "200": {
             "description": "The combined PDF",
             "content": {
-              "application/pdf": {}
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
             }
           },
           "204": {
             "description": "Accepted; the result goes to the webhook"
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -409,6 +471,7 @@
             }
           },
           "501": {
+            "description": "Not supported in this version",
             "content": {
               "application/json": {
                 "schema": {
@@ -479,13 +542,23 @@
           "200": {
             "description": "The rendered file",
             "content": {
-              "application/octet-stream": {}
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
             }
           },
           "204": {
             "description": "Accepted; the result goes to the webhook"
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -495,6 +568,7 @@
             }
           },
           "401": {
+            "description": "Credentials required",
             "content": {
               "application/json": {
                 "schema": {
@@ -504,6 +578,7 @@
             }
           },
           "422": {
+            "description": "The template failed to render",
             "content": {
               "application/json": {
                 "schema": {
@@ -513,6 +588,7 @@
             }
           },
           "501": {
+            "description": "Not supported in this version",
             "content": {
               "application/json": {
                 "schema": {
@@ -522,6 +598,7 @@
             }
           },
           "503": {
+            "description": "An engine is unavailable or the request timed out",
             "content": {
               "application/json": {
                 "schema": {
@@ -580,13 +657,23 @@
           "200": {
             "description": "A ZIP of the rendered files",
             "content": {
-              "application/zip": {}
+              "application/zip": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
             }
           },
           "204": {
             "description": "Accepted; the result goes to the webhook"
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -596,6 +683,7 @@
             }
           },
           "422": {
+            "description": "The template failed to render",
             "content": {
               "application/json": {
                 "schema": {
@@ -637,6 +725,7 @@
         },
         "responses": {
           "200": {
+            "description": "The validation result",
             "content": {
               "application/json": {
                 "schema": {
@@ -646,6 +735,7 @@
             }
           },
           "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -677,6 +767,7 @@
         "operationId": "version",
         "responses": {
           "200": {
+            "description": "Version and engines",
             "content": {
               "application/json": {
                 "schema": {

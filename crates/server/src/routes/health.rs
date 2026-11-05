@@ -32,7 +32,7 @@ pub struct Version {
 }
 
 /// Liveness.
-#[utoipa::path(get, path = "/health", tag = "service", responses((status = 200, body = Health)))]
+#[utoipa::path(get, path = "/health", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
 pub async fn health(State(state): State<AppState>) -> Json<Health> {
     Json(Health {
         status: "up",
@@ -46,13 +46,13 @@ pub async fn health(State(state): State<AppState>) -> Json<Health> {
 
 /// Readiness: the same as liveness today, kept separate so a warm-up can be
 /// added without clients changing.
-#[utoipa::path(get, path = "/ready", tag = "service", responses((status = 200, body = Health)))]
+#[utoipa::path(get, path = "/ready", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
 pub async fn ready(state: State<AppState>) -> Json<Health> {
     health(state).await
 }
 
 /// Engine versions and paths.
-#[utoipa::path(get, path = "/version", tag = "service", responses((status = 200, body = Version)))]
+#[utoipa::path(get, path = "/version", tag = "service", responses((status = 200, description = "Version and engines", body = Version)))]
 pub async fn version(State(state): State<AppState>) -> Json<Version> {
     Json(Version {
         version: rusticdoc_core::VERSION,
@@ -61,7 +61,7 @@ pub async fn version(State(state): State<AppState>) -> Json<Version> {
 }
 
 /// Prometheus text format.
-#[utoipa::path(get, path = "/metrics", tag = "service", responses((status = 200, content_type = "text/plain")))]
+#[utoipa::path(get, path = "/metrics", tag = "service", responses((status = 200, description = "Prometheus text format", content_type = "text/plain")))]
 pub async fn metrics(State(state): State<AppState>) -> Response {
     (
         StatusCode::OK,
