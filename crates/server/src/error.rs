@@ -71,3 +71,9 @@ impl IntoResponse for ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+/// A file in a response, for the API description: generated clients return
+/// it as bytes.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(value_type = String, format = Binary)]
+pub struct BinaryFile(pub String);
