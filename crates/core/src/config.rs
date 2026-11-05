@@ -7,6 +7,8 @@ use std::time::Duration;
 pub struct Config {
     /// Address the HTTP server listens on.
     pub bind: String,
+    /// Path prefix every route sits under, such as `/docs/`. `/` by default.
+    pub root_path: String,
     /// Time limit for one request, including conversion.
     pub api_timeout: Duration,
     /// Largest request body accepted, in bytes.
@@ -44,6 +46,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             bind: "0.0.0.0:3000".into(),
+            root_path: "/".into(),
             api_timeout: Duration::from_secs(30),
             body_limit: 64 * 1024 * 1024,
             workers: 2,
@@ -85,8 +88,12 @@ impl Config {
                 .filter(|v| !v.is_empty())
         };
 
+        c.apply_gotenberg_names();
         if let Some(v) = get("BIND") {
             c.bind = v;
+        }
+        if let Some(v) = get("ROOT_PATH") {
+            c.root_path = normalise_root(&v);
         }
         if let Some(v) = get("API_TIMEOUT").and_then(|v| parse_duration(&v)) {
             c.api_timeout = v;
@@ -153,6 +160,69 @@ impl Config {
         }
         c
     }
+
+    /// Gotenberg's variable names are accepted too, so a deployment moves
+    /// over by changing the image. `RUSTICDOC_*` wins when both are set.
+    fn apply_gotenberg_names(&mut self) {
+        let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let port = get("API_PORT");
+        let ip = get("API_BIND_IP");
+        if port.is_some() || ip.is_some() {
+            self.bind = format!(
+                "{}:{}",
+                ip.unwrap_or_else(|| "0.0.0.0".into()),
+                port.unwrap_or_else(|| "3000".into())
+            );
+        }
+        if let Some(v) = get("API_ROOT_PATH") {
+            self.root_path = normalise_root(&v);
+        }
+        if let Some(v) = get("API_TIMEOUT").and_then(|v| parse_duration(&v)) {
+            self.api_timeout = v;
+        }
+        if let Some(v) = get("API_BODY_LIMIT").and_then(|v| parse_bytes(&v)) {
+            self.body_limit = v;
+        }
+        if matches!(get("API_ENABLE_BASIC_AUTH").as_deref(), Some("true" | "1"))
+            && let (Some(u), Some(p)) = (
+                get("GOTENBERG_API_BASIC_AUTH_USERNAME"),
+                get("GOTENBERG_API_BASIC_AUTH_PASSWORD"),
+            )
+        {
+            self.basic_auth = Some((u, p));
+        }
+        if let Some(v) = get("LIBREOFFICE_BIN_PATH") {
+            self.libreoffice_bin = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("QPDF_BIN_PATH") {
+            self.qpdf_bin = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("PDFCPU_BIN_PATH") {
+            self.pdfcpu_bin = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("LOG_LEVEL") {
+            self.log_level = v;
+        }
+        if let Some(v) = get("LOG_FORMAT") {
+            self.log_format = match v.as_str() {
+                "text" | "pretty" => "pretty".into(),
+                _ => "json".into(),
+            };
+        }
+        if matches!(get("WEBHOOK_ALLOW_PRIVATE").as_deref(), Some("true" | "1")) {
+            self.webhook_allow_private = true;
+        }
+    }
+}
+
+/// `/foo` and `/foo/` both become `/foo/`; empty becomes `/`.
+pub fn normalise_root(s: &str) -> String {
+    let trimmed = s.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        "/".into()
+    } else {
+        format!("/{trimmed}/")
+    }
 }
 
 fn first_existing(candidates: &[&str]) -> Option<PathBuf> {
@@ -209,6 +279,14 @@ mod tests {
         assert_eq!(parse_duration("2m"), Some(Duration::from_secs(120)));
         assert_eq!(parse_duration("1.5"), Some(Duration::from_secs_f64(1.5)));
         assert_eq!(parse_duration("soon"), None);
+    }
+
+    #[test]
+    fn root_paths() {
+        assert_eq!(normalise_root(""), "/");
+        assert_eq!(normalise_root("/"), "/");
+        assert_eq!(normalise_root("foo"), "/foo/");
+        assert_eq!(normalise_root("/foo/bar/"), "/foo/bar/");
     }
 
     #[test]

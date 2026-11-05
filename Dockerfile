@@ -24,10 +24,12 @@ FROM $RUST_IMAGE AS build
 WORKDIR /src
 # Dependencies first, so source edits do not refetch them.
 COPY Cargo.toml Cargo.lock ./
+COPY crates/template/Cargo.toml crates/template/Cargo.toml
 COPY crates/core/Cargo.toml crates/core/Cargo.toml
 COPY crates/server/Cargo.toml crates/server/Cargo.toml
 COPY crates/cli/Cargo.toml crates/cli/Cargo.toml
-RUN mkdir -p crates/core/src crates/server/src crates/cli/src \
+RUN mkdir -p crates/template/src crates/core/src crates/server/src crates/cli/src \
+    && echo 'pub fn placeholder() {}' > crates/template/src/lib.rs \
     && echo 'pub fn placeholder() {}' > crates/core/src/lib.rs \
     && echo 'pub fn placeholder() {}' > crates/server/src/lib.rs \
     && echo 'fn main() {}' > crates/cli/src/main.rs \

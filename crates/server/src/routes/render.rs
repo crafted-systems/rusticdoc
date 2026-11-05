@@ -118,6 +118,205 @@ pub async fn run(
     }
 }
 
+/// Renders the template once per element of an array in the data and
+/// returns the files in a ZIP, as Carbone's batch rendering does.
+///
+/// `splitBy` names the array with a dotted path such as `items` or
+/// `order.lines`. Each render sees the whole data with that array replaced
+/// by the one element, plus `item` (the element) and `batch` (`index`,
+/// `count`). `batchName` is a template for each file's name, default
+/// `{{ batch.index }}`.
+#[utoipa::path(
+    post, path = "/v1/render/batch", tag = "render",
+    request_body(content_type = "multipart/form-data", content = RenderForm),
+    params(
+        ("X-Rusticdoc-Webhook-Url" = Option<String>, Header, description = "Deliver the ZIP here instead of in the response"),
+    ),
+    responses(
+        (status = 200, description = "A ZIP of the rendered files", content_type = "application/zip"),
+        (status = 204, description = "Accepted; the result goes to the webhook"),
+        (status = 400, body = ErrorBody), (status = 422, body = ErrorBody),
+    ),
+    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+)]
+pub async fn batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
+    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
+    let mut form = Form::read(multipart).await?;
+    let template = match form
+        .files
+        .iter()
+        .position(|f| f.name != "data.json" && f.name != "ctx.json")
+    {
+        Some(pos) => form.files.remove(pos),
+        None => {
+            return Err(ApiError::bad_request(
+                "no template in the form; send it as a file part",
+            ));
+        }
+    };
+    let data = form.json("data")?;
+    let ctx = form.json("ctx")?;
+    let steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
+    let split_by = form
+        .field("splitBy")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::bad_request("'splitBy' names the array to split on"))?
+        .to_string();
+    let name_template = form
+        .field("batchName")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("{{ batch.index }}")
+        .to_string();
+    let zip_name = form
+        .field("outputFilename")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            std::path::Path::new(&template.name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("batch")
+                .to_string()
+        });
+
+    let elements = match lookup(&data, &split_by) {
+        Some(serde_json::Value::Array(items)) => items.clone(),
+        Some(_) => {
+            return Err(ApiError::bad_request(format!(
+                "'{split_by}' is not an array in the data"
+            )));
+        }
+        None => {
+            return Err(ApiError::bad_request(format!(
+                "'{split_by}' is not in the data"
+            )));
+        }
+    };
+    if elements.is_empty() {
+        return Err(ApiError::bad_request(format!("'{split_by}' is empty")));
+    }
+    if elements.len() > 1000 {
+        return Err(ApiError::bad_request(format!(
+            "'{split_by}' has {} elements; the limit per batch is 1000",
+            elements.len()
+        )));
+    }
+
+    let env = rusticdoc_core::template::environment();
+    let count = elements.len();
+    let mut requests = Vec::with_capacity(count);
+    for (index, element) in elements.into_iter().enumerate() {
+        let mut one = data.clone();
+        replace(
+            &mut one,
+            &split_by,
+            serde_json::Value::Array(vec![element.clone()]),
+        );
+        if let serde_json::Value::Object(map) = &mut one {
+            map.insert("item".into(), element);
+            map.insert(
+                "batch".into(),
+                serde_json::json!({ "index": index + 1, "count": count }),
+            );
+        }
+        let name = env
+            .render_str(
+                &name_template,
+                minijinja::Value::from(minijinja::value::Serde(&one)),
+            )
+            .map_err(|e| {
+                ApiError::new(
+                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                    "template_error",
+                    format!("batchName: {e}"),
+                )
+            })?;
+        let mut req = RenderRequest::new(template.clone());
+        req.data = one;
+        req.ctx = ctx.clone();
+        req.steps = steps.clone();
+        req.output_name = Some(sanitize_name(&name, index + 1));
+        requests.push(req);
+    }
+
+    let rid = request_id(&headers);
+    let st = state.clone();
+    let job = async move {
+        let mut outputs = Vec::with_capacity(requests.len());
+        for req in requests {
+            outputs.push(execute(&st, req).await?);
+        }
+        crate::routes::form::zip(&zip_name, &outputs)
+    };
+    match hook {
+        None => Ok(download(job.await?)),
+        Some(hook) => {
+            let st = state.clone();
+            let rid2 = rid.clone();
+            tokio::spawn(async move {
+                let result = job.await;
+                webhook::deliver(st, hook, rid2, result).await;
+            });
+            Ok(webhook::accepted(&rid))
+        }
+    }
+}
+
+fn lookup<'a>(data: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    path.split('.').try_fold(data, |v, key| match v {
+        serde_json::Value::Object(m) => m.get(key),
+        serde_json::Value::Array(a) => key.parse::<usize>().ok().and_then(|i| a.get(i)),
+        _ => None,
+    })
+}
+
+fn replace(data: &mut serde_json::Value, path: &str, value: serde_json::Value) {
+    let mut keys = path.split('.').peekable();
+    let mut cur = data;
+    while let Some(key) = keys.next() {
+        let last = keys.peek().is_none();
+        let next = match cur {
+            serde_json::Value::Object(m) => m.get_mut(key),
+            serde_json::Value::Array(a) => {
+                key.parse::<usize>().ok().and_then(move |i| a.get_mut(i))
+            }
+            _ => None,
+        };
+        match next {
+            Some(slot) if last => {
+                *slot = value;
+                return;
+            }
+            Some(slot) => cur = slot,
+            None => return,
+        }
+    }
+}
+
+/// A file name from a template: no directories, no control characters,
+/// never empty.
+fn sanitize_name(name: &str, index: usize) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .filter(|c| {
+            !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches('.').trim().to_string();
+    if cleaned.is_empty() {
+        index.to_string()
+    } else {
+        cleaned
+    }
+}
+
 async fn execute(state: &AppState, req: RenderRequest) -> ApiResult<rusticdoc_core::Output> {
     let gauge = state
         .metrics

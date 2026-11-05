@@ -439,6 +439,72 @@ async fn convert_and_pdf_routes_do_not_template_their_input() {
 }
 
 #[tokio::test]
+async fn batch_renders_one_file_per_element_into_a_zip() {
+    let router = app(AppState::new(config()));
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/render/batch",
+            &[
+                ("template", Some("slip.txt"), "{{ item.name }} owes {{ item.due }} ({{ batch.index }}/{{ batch.count }}); first in list: {{ order.lines[0].name }}"),
+                ("data", None, r#"{"order":{"lines":[{"name":"Ada","due":5},{"name":"Bob","due":7},{"name":"Cy","due":9}]}}"#),
+                ("splitBy", None, "order.lines"),
+                ("batchName", None, "slip-{{ item.name | lower }}"),
+                ("outputFilename", None, "slips"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"slips.zip\""
+    );
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    assert_eq!(archive.len(), 3);
+    let names: Vec<String> = (0..3)
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["slip-ada.txt", "slip-bob.txt", "slip-cy.txt"]);
+    let mut second = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("slip-bob.txt").unwrap(), &mut second)
+        .unwrap();
+    assert_eq!(second, "Bob owes 7 (2/3); first in list: Bob");
+
+    let res = router
+        .oneshot(post_form(
+            "/v1/render/batch",
+            &[
+                ("template", Some("a.txt"), "x"),
+                ("data", None, r#"{"n": 1}"#),
+                ("splitBy", None, "n"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn root_path_prefixes_every_route() {
+    let mut c = config();
+    c.root_path = "/docs/".into();
+    let router = app(AppState::new(c));
+    let res = router
+        .clone()
+        .oneshot(Request::get("/docs/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = router
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn state_is_shareable() {
     let state = Arc::new(AppState::new(config()));
     assert!(state.engines.libreoffice.is_none());

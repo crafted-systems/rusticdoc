@@ -47,7 +47,7 @@ pub fn app(state: AppState) -> Router {
             timeout,
         ));
 
-    Router::new()
+    let router = Router::new()
         .merge(routes::public())
         .merge(api)
         .layer(axum::middleware::from_fn_with_state(
@@ -67,7 +67,15 @@ pub fn app(state: AppState) -> Router {
         .layer(SetRequestIdLayer::new(REQUEST_ID, MakeRequestUuid))
         .layer(cors(&state.config))
         .layer(CatchPanicLayer::new())
-        .with_state(state)
+        .with_state(state.clone());
+
+    // Gotenberg's API_ROOT_PATH: everything, health included, under a prefix.
+    let root = state.config.root_path.trim_end_matches('/');
+    if root.is_empty() {
+        router
+    } else {
+        Router::new().nest(root, router)
+    }
 }
 
 /// Cross-origin access is off unless `RUSTICDOC_CORS_ORIGINS` lists origins,
