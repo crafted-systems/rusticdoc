@@ -395,10 +395,22 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
         }
     } else if let Some(mark) = form.files.first().cloned() {
         form.files.remove(0);
+        let png = mark.bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+        let jpeg = mark.bytes.starts_with(b"\xff\xd8\xff");
         match mark.extension().as_str() {
-            "pdf" => OverlayKind::Pdf { bytes: mark.bytes.to_vec(), name: mark.name },
-            "png" | "jpg" | "jpeg" => OverlayKind::Image { bytes: mark.bytes.to_vec(), name: mark.name },
-            other => return Err(ApiError::bad_request(format!("a mark must be text, PNG, JPEG or PDF, not .{other}"))),
+            "pdf" => {
+                require_pdf(&mark)?;
+                OverlayKind::Pdf { bytes: mark.bytes.to_vec(), name: mark.name }
+            }
+            "png" | "jpg" | "jpeg" if png || jpeg => {
+                OverlayKind::Image { bytes: mark.bytes.to_vec(), name: mark.name }
+            }
+            other => {
+                return Err(ApiError::bad_request(format!(
+                    "a mark must be text, a PNG or JPEG image, or a PDF; '{}' (.{other}) is none of these",
+                    mark.name
+                )))
+            }
         }
     } else {
         return Err(ApiError::bad_request("send 'text', or an image or PDF as a second file"));

@@ -18,6 +18,10 @@ use rusticdoc_core::Step;
 use crate::error::{ApiError, ApiResult};
 use crate::routes::form::Form;
 
+/// Most watermarks or stamps one request may apply, each a pass over the
+/// document.
+const MAX_OVERLAYS: usize = 5;
+
 /// Steps for the fields present in the form, in Gotenberg's order. `merge`
 /// is included only when `allow_merge` (the convert route); the merge
 /// route merges first on its own.
@@ -167,6 +171,11 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
         }
         return Ok(Vec::new());
     }
+    if sources.len() > MAX_OVERLAYS {
+        return Err(ApiError::bad_request(format!(
+            "Invalid form data: at most {MAX_OVERLAYS} {prefix}s per request"
+        )));
+    }
     let expressions = form.all(&format!("{prefix}Expression"));
     let pages = form.all(&format!("{prefix}Pages"));
     let options = form.all(&format!("{prefix}Options"));
@@ -201,8 +210,17 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
                     ))
                 })?;
                 if source.trim() == "pdf" {
+                    rusticdoc_core::pdfops::require_pdf(&file)?;
                     OverlayKind::Pdf { bytes: file.bytes.to_vec(), name: file.name }
                 } else {
+                    let png = file.bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+                    let jpeg = file.bytes.starts_with(b"\xff\xd8\xff");
+                    if !(png || jpeg) || !matches!(file.extension().as_str(), "png" | "jpg" | "jpeg") {
+                        return Err(ApiError::bad_request(format!(
+                            "Invalid form data: '{}' is not a PNG or JPEG image",
+                            file.name
+                        )));
+                    }
                     OverlayKind::Image { bytes: file.bytes.to_vec(), name: file.name }
                 }
             }
