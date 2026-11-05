@@ -7,12 +7,22 @@
 //! structure their tags sit in: a table row, a run of paragraphs, a slide,
 //! a sheet row or a sheet.
 //!
-//! This file holds the public interface; the implementation lands in the
-//! submodules.
+//! See `README.md` for the tag syntax and the loop placement rules.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
+use minijinja::value::Value;
 use serde::{Deserialize, Serialize};
+
+pub mod filters;
+mod formats;
+mod package;
+mod program;
+mod sheet;
+mod xml;
+
+use program::{Mode, PartTree, Source, Tag, TagCtx};
 
 /// Formats the engine understands. Each is a ZIP of XML parts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -27,6 +37,7 @@ pub enum Format {
 }
 
 impl Format {
+    /// The format for a file extension such as `docx`, in any case.
     pub fn from_extension(ext: &str) -> Option<Self> {
         Some(match ext.to_ascii_lowercase().as_str() {
             "docx" => Format::Docx,
@@ -39,6 +50,7 @@ impl Format {
         })
     }
 
+    /// The lower-case file extension.
     pub fn extension(self) -> &'static str {
         match self {
             Format::Docx => "docx",
@@ -49,10 +61,19 @@ impl Format {
             Format::Odp => "odp",
         }
     }
+
+    /// The markup a newline inside a rendered value becomes.
+    fn line_break(self) -> &'static str {
+        match self {
+            Format::Docx => "</w:t><w:br/><w:t xml:space=\"preserve\">",
+            Format::Odt => "<text:line-break/>",
+            _ => "",
+        }
+    }
 }
 
 /// Where in the document something sits, for error messages.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Location {
     /// The ZIP part, such as `word/document.xml` or `xl/worksheets/sheet1.xml`.
     pub part: String,
@@ -62,6 +83,7 @@ pub struct Location {
     pub snippet: String,
 }
 
+/// A compile or render failure, with where it happened when known.
 #[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
 #[error("{message}{}", location.as_ref().map(|l| format!(" ({} {}: {})", l.part, l.place, l.snippet)).unwrap_or_default())]
 pub struct TemplateError {
@@ -70,6 +92,7 @@ pub struct TemplateError {
 }
 
 impl TemplateError {
+    /// An error without a location.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -77,14 +100,17 @@ impl TemplateError {
         }
     }
 
+    /// Attaches a location.
     pub fn at(mut self, location: Location) -> Self {
         self.location = Some(location);
         self
     }
 }
 
+/// Result alias for this crate.
 pub type Result<T> = std::result::Result<T, TemplateError>;
 
+/// How serious a validation finding is; warnings do not fail a render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -100,8 +126,8 @@ pub struct Diagnostic {
     pub location: Option<Location>,
 }
 
-/// Template-level settings, read from the document's front matter (a
-/// `{% settings ... %}` tag or custom document properties).
+/// Template-level settings, read from the document's `{% settings ... %}`
+/// tag (`lang`, `timezone`, `currency` and `t.<key>="…"` translations).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     pub lang: Option<String>,
@@ -112,16 +138,37 @@ pub struct Settings {
 }
 
 /// A template parsed once, renderable many times.
-#[derive(Debug)]
 pub struct Compiled {
     format: Format,
     hash: String,
     settings: Settings,
     tags: Vec<String>,
-    source: Vec<u8>,
+    entries: Vec<package::Entry>,
+    parts: Vec<PartTree>,
+    table: Vec<Tag>,
+    source: Source,
+    env: minijinja::Environment<'static>,
 }
 
+impl std::fmt::Debug for Compiled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Compiled")
+            .field("format", &self.format)
+            .field("hash", &self.hash)
+            .field("settings", &self.settings)
+            .field("tags", &self.tags)
+            .field(
+                "parts",
+                &self.parts.iter().map(|p| &p.name).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+const TEMPLATE_NAME: &str = "document";
+
 impl Compiled {
+    /// The format the template was compiled as.
     pub fn format(&self) -> Format {
         self.format
     }
@@ -131,8 +178,19 @@ impl Compiled {
         &self.hash
     }
 
+    /// The settings read from the document's `{% settings %}` tag.
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    /// Replaces the settings, for callers that supply translations or a
+    /// timezone from outside the document. Filters pick the change up on
+    /// the next render.
+    pub fn set_settings(&mut self, settings: Settings) {
+        self.settings = settings;
+        let mut env = filters::environment_for(&self.settings, self.format.line_break());
+        let _ = env.add_template_owned(TEMPLATE_NAME.to_string(), self.source.text.clone());
+        self.env = env;
     }
 
     /// Every tag found, in document order, for validation and listing.
@@ -143,75 +201,342 @@ impl Compiled {
     /// Fills the template. `data` is the root the expressions see; the
     /// caller puts request context under `ctx` before calling.
     pub fn render(&self, data: &serde_json::Value) -> Result<Vec<u8>> {
-        let _ = (data, &self.source);
-        Err(TemplateError::new(format!(
-            "templating inside .{} files is not implemented yet",
-            self.format.extension()
-        )))
+        let rendered = self.render_text(&self.env, &self.source, data)?;
+        self.assemble(&rendered)
     }
+
+    fn render_text(
+        &self,
+        env: &minijinja::Environment<'static>,
+        source: &Source,
+        data: &serde_json::Value,
+    ) -> Result<String> {
+        let tmpl = env
+            .get_template(TEMPLATE_NAME)
+            .map_err(|e| self.map_error(&e, source))?;
+        tmpl.render(Value::from(minijinja::value::Serde(data)))
+            .map_err(|e| self.map_error(&e, source))
+    }
+
+    fn map_error(&self, e: &minijinja::Error, source: &Source) -> TemplateError {
+        let mut err = TemplateError::new(describe(e));
+        if let Some(loc) = e
+            .line()
+            .and_then(|l| source.tag_at_line(l))
+            .map(|id| self.table[id].loc.clone())
+        {
+            err = err.at(loc);
+        }
+        err
+    }
+
+    /// Puts the rendered parts back into the container.
+    fn assemble(&self, rendered: &str) -> Result<Vec<u8>> {
+        let outputs = program::split_output(rendered);
+        if let Some((name, _)) = outputs
+            .iter()
+            .find(|(name, _)| !self.parts.iter().any(|p| &p.name == name))
+        {
+            return Err(TemplateError::new(format!(
+                "rendered output names a part that was not compiled: {name:?}"
+            )));
+        }
+        let mut entries = self.entries.clone();
+        match self.format {
+            Format::Pptx => package::apply_slides(&mut entries, &outputs)?,
+            Format::Xlsx => {
+                let mut formulas = false;
+                for (name, content) in &outputs {
+                    let blocks = self
+                        .parts
+                        .iter()
+                        .find(|p| &p.name == name)
+                        .map(|p| p.row_blocks.as_slice())
+                        .unwrap_or(&[]);
+                    formulas |= content.contains("<f>") || content.contains("<f ");
+                    let fixed = sheet::rebase(content, blocks)
+                        .map_err(|e| TemplateError::new(format!("{name}: {e}")))?;
+                    package::set(&mut entries, name, fixed.into_bytes());
+                }
+                if formulas {
+                    if let Some(wb) = package::text_of(&entries, "xl/workbook.xml") {
+                        package::set(
+                            &mut entries,
+                            "xl/workbook.xml",
+                            sheet::force_recalc(&wb).into_bytes(),
+                        );
+                    }
+                }
+            }
+            _ => {
+                for (name, content) in &outputs {
+                    package::set(&mut entries, name, content.clone().into_bytes());
+                }
+            }
+        }
+        package::write(&entries)
+    }
+}
+
+fn describe(e: &minijinja::Error) -> String {
+    match e.detail() {
+        Some(d) => format!("{}: {d}", e.kind()),
+        None => e.kind().to_string(),
+    }
+}
+
+fn to_diag(e: TemplateError) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Error,
+        message: e.message,
+        location: e.location,
+    }
+}
+
+/// Everything compile learns, including what went wrong.
+struct Build {
+    compiled: Compiled,
+    diags: Vec<Diagnostic>,
+    /// False when the template could not be parsed by minijinja.
+    renderable: bool,
+}
+
+fn build(format: Format, bytes: &[u8]) -> Result<Build> {
+    use sha2::Digest;
+    let hash = hex::encode(sha2::Sha256::digest(bytes));
+    let entries = package::read(bytes)?;
+    let dialect = formats::dialect(format);
+    let mut diags = Vec::new();
+    let mut tags: Vec<Tag> = Vec::new();
+    let mut ctxs: Vec<TagCtx> = Vec::new();
+    let mut settings = Settings::default();
+    let mut parts: Vec<PartTree> = Vec::new();
+
+    let shared = match format {
+        Format::Xlsx => package::text_of(&entries, "xl/sharedStrings.xml")
+            .map(|s| sheet::shared_strings(&s))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+
+    for info in package::text_parts(format, &entries) {
+        let Some(src) = package::text_of(&entries, &info.name) else {
+            continue;
+        };
+        let has_shared_tag = format == Format::Xlsx
+            && src.contains("t=\"s\"")
+            && shared.iter().any(|s| !program::find_tags(s).is_empty());
+        if !src.contains('{') && !has_shared_tag {
+            continue;
+        }
+        let nodes = xml::parse(&src).map_err(|e| {
+            TemplateError::new(format!("{}: malformed XML: {e}", info.name)).at(Location {
+                part: info.name.clone(),
+                place: String::new(),
+                snippet: String::new(),
+            })
+        })?;
+        let mut tree = PartTree {
+            name: info.name.clone(),
+            nodes,
+            before: Vec::new(),
+            after: Vec::new(),
+            row_blocks: Vec::new(),
+        };
+        if format == Format::Xlsx {
+            sheet::inline_shared_strings(&mut tree.nodes, &shared);
+        }
+        program::extract_part(
+            parts.len(),
+            &mut tree,
+            &dialect,
+            &info.prefix,
+            &mut tags,
+            &mut ctxs,
+            &mut settings,
+            &mut diags,
+        );
+        parts.push(tree);
+    }
+    let blocks = program::match_blocks(&tags, &mut diags);
+    program::place_blocks(format, &mut parts, &tags, &ctxs, &blocks, &mut diags);
+    if format == Format::Xlsx {
+        for part in &mut parts {
+            program::type_cells(part, &tags);
+        }
+    }
+    // Slides without tags still take part in slide loops; other tagless
+    // parts are copied through untouched.
+    let parts: Vec<PartTree> = parts
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| format == Format::Pptx || ctxs.iter().any(|c| c.part == *i))
+        .map(|(_, p)| p)
+        .collect();
+
+    let source = program::emit(&parts, &tags, Mode::Render);
+    let mut env = filters::environment_for(&settings, format.line_break());
+    let mut renderable = true;
+    if let Err(e) = env.add_template_owned(TEMPLATE_NAME.to_string(), source.text.clone()) {
+        renderable = false;
+        let mut err = TemplateError::new(format!("cannot parse tag: {}", describe(&e)));
+        if let Some(loc) = e
+            .line()
+            .and_then(|l| source.tag_at_line(l))
+            .map(|id| tags[id].loc.clone())
+        {
+            err = err.at(loc);
+        }
+        diags.push(to_diag(err));
+    }
+
+    let compiled = Compiled {
+        format,
+        hash,
+        settings,
+        tags: tags.iter().map(|t| t.text.clone()).collect(),
+        entries,
+        parts,
+        table: tags,
+        source,
+        env,
+    };
+    Ok(Build {
+        compiled,
+        diags,
+        renderable,
+    })
 }
 
 /// Parses a template. Fails on a malformed container or an unparseable tag.
 pub fn compile(format: Format, bytes: &[u8]) -> Result<Compiled> {
-    use sha2::Digest;
-    Ok(Compiled {
-        format,
-        hash: hex::encode(sha2::Sha256::digest(bytes)),
-        settings: Settings::default(),
-        tags: Vec::new(),
-        source: bytes.to_vec(),
-    })
+    let b = build(format, bytes)?;
+    if let Some(d) = b.diags.iter().find(|d| d.severity == Severity::Error) {
+        return Err(TemplateError {
+            message: d.message.clone(),
+            location: d.location.clone(),
+        });
+    }
+    Ok(b.compiled)
 }
 
 /// Compiles and test-renders against sample data, reporting every problem
 /// found rather than stopping at the first.
 pub fn validate(format: Format, bytes: &[u8], data: &serde_json::Value) -> Vec<Diagnostic> {
-    match compile(format, bytes) {
-        Err(e) => vec![Diagnostic {
-            severity: Severity::Error,
-            message: e.message,
-            location: e.location,
-        }],
-        Ok(compiled) => match compiled.render(data) {
-            Ok(_) => Vec::new(),
-            Err(e) => vec![Diagnostic {
+    let b = match build(format, bytes) {
+        Ok(b) => b,
+        Err(e) => return vec![to_diag(e)],
+    };
+    let compiled = &b.compiled;
+    let mut diags = b.diags;
+
+    // Each tag on its own, so one bad tag does not hide the next.
+    let probe_env = environment();
+    let mut reported: Vec<Location> = Vec::new();
+    for tag in &compiled.table {
+        let Some(src) = program::standalone_source(tag) else {
+            continue;
+        };
+        if let Err(e) = probe_env.template_from_str(&src) {
+            reported.push(tag.loc.clone());
+            diags.push(Diagnostic {
                 severity: Severity::Error,
-                message: e.message,
-                location: e.location,
-            }],
-        },
+                message: format!("cannot parse tag: {}", describe(&e)),
+                location: Some(tag.loc.clone()),
+            });
+        }
     }
+    // The whole-template parse error repeats one of these.
+    diags.retain(|d| {
+        !(d.message.starts_with("cannot parse tag")
+            && d.location.as_ref().is_some_and(|l| reported.contains(l))
+            && !reported.is_empty()
+            && !d.message.contains(": syntax error"))
+    });
+    dedup(&mut diags);
+    if !b.renderable || diags.iter().any(|d| d.severity == Severity::Error) {
+        return diags;
+    }
+
+    // A strict render finds the first runtime problem precisely.
+    if let Err(e) = compiled.render_text(&compiled.env, &compiled.source, data) {
+        diags.push(to_diag(e));
+    }
+
+    // A probing render finds every undefined value and loops over scalars.
+    let records: Arc<Mutex<Vec<(usize, Severity, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let source = program::emit(&compiled.parts, &compiled.table, Mode::Probe);
+    let mut env = filters::environment_for(&compiled.settings, format.line_break());
+    env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
+    let rec = records.clone();
+    env.add_filter("__probe", move |v: Value, id: usize| {
+        if v.is_undefined() {
+            if let Ok(mut r) = rec.lock() {
+                r.push((id, Severity::Error, "value is undefined".to_string()));
+            }
+        }
+        v
+    });
+    let rec = records.clone();
+    env.add_filter("__probe_iter", move |v: Value, id: usize| {
+        if v.is_undefined() {
+            if let Ok(mut r) = rec.lock() {
+                r.push((id, Severity::Error, "loop over an undefined value".into()));
+            }
+            return Value::from(Vec::<Value>::new());
+        }
+        if v.try_iter().is_err() || v.as_str().is_some() {
+            if let Ok(mut r) = rec.lock() {
+                r.push((
+                    id,
+                    Severity::Warning,
+                    format!("loop over a {} rather than an array", v.kind()),
+                ));
+            }
+            return Value::from(Vec::<Value>::new());
+        }
+        v
+    });
+    if env
+        .add_template_owned(TEMPLATE_NAME.to_string(), source.text.clone())
+        .is_ok()
+    {
+        if let Err(e) = compiled.render_text(&env, &source, data) {
+            if !e.message.starts_with("undefined value") {
+                diags.push(to_diag(e));
+            }
+        }
+    }
+    if let Ok(records) = records.lock() {
+        for (id, severity, message) in records.iter() {
+            let tag = &compiled.table[*id];
+            diags.push(Diagnostic {
+                severity: *severity,
+                message: format!("{message}: {}", tag.text),
+                location: Some(tag.loc.clone()),
+            });
+        }
+    }
+    dedup(&mut diags);
+    diags
+}
+
+fn dedup(diags: &mut Vec<Diagnostic>) {
+    let mut seen: Vec<(Severity, Option<Location>)> = Vec::new();
+    diags.retain(|d| {
+        // One finding per tag and severity.
+        let key = (d.severity, d.location.clone());
+        if d.location.is_some() && seen.contains(&key) {
+            false
+        } else {
+            seen.push(key);
+            true
+        }
+    });
 }
 
 /// The expression environment shared by every format: strict about
 /// undefined names, with a step budget and the document filters.
 pub fn environment() -> minijinja::Environment<'static> {
-    let mut env = minijinja::Environment::new();
-    env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
-    env.set_fuel(Some(5_000_000));
-    env.add_filter("currency", filters::currency);
-    env
-}
-
-pub mod filters {
-    /// `{{ 1234.5 | currency("EUR") }}` gives `EUR 1,234.50`.
-    pub fn currency(value: f64, code: Option<String>) -> String {
-        let negative = value < 0.0;
-        let cents = (value.abs() * 100.0).round() as u64;
-        let whole = cents / 100;
-        let frac = cents % 100;
-        let digits = whole.to_string();
-        let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
-        for (i, ch) in digits.chars().enumerate() {
-            if i > 0 && (digits.len() - i).is_multiple_of(3) {
-                grouped.push(',');
-            }
-            grouped.push(ch);
-        }
-        let sign = if negative { "-" } else { "" };
-        match code {
-            Some(code) if !code.is_empty() => format!("{sign}{code} {grouped}.{frac:02}"),
-            _ => format!("{sign}{grouped}.{frac:02}"),
-        }
-    }
+    filters::environment_for(&Settings::default(), "")
 }

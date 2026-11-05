@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.text">
+  <office:automatic-styles>
+    <style:style style:name="Bold" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style>
+  </office:automatic-styles>
+  <office:body>
+    <office:text>
+      <text:p>{% settings currency="EUR" %}Invoice for <text:span text:style-name="Bold">{{ customer.name }}</text:span></text:p>
+      <text:p>Issued {{ issued | date("%d %B %Y") }}</text:p>
+      <table:table table:name="Items">
+        <table:table-column table:number-columns-repeated="3"/>
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>Item</text:p></table:table-cell>
+          <table:table-cell office:value-type="string"><text:p>Qty</text:p></table:table-cell>
+          <table:table-cell office:value-type="string"><text:p>Price</text:p></table:table-cell>
+        </table:table-row>
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>{% for i in items %}{{ i.name }}</text:p></table:table-cell>
+          <table:table-cell office:value-type="string"><text:p>{{ i.qty }}</text:p></table:table-cell>
+          <table:table-cell office:value-type="string"><text:p>{{ i.price | currency }}{% endfor %}</text:p></table:table-cell>
+        </table:table-row>
+      </table:table>
+      <text:p>{% if customer.vip %}Thank you for your loyalty.{% else %}Thank you.{% endif %}</text:p>
+      <text:p>Total {{ items | sum(attribute="price") | currency }}</text:p>
+    </office:text>
+  </office:body>
+</office:document>
