@@ -10,20 +10,31 @@ use rusticdoc_core::convert::{ConvertOptions, LibreOffice};
 use rusticdoc_core::{Document, Error, Format};
 
 /// A fake bridge in `mode`: `ok` answers every request; `fail` answers
-/// `ok:false`; `hang` never answers; `slow` answers after 300 ms;
-/// `die-after:N` exits after N answers.
+/// `ok:false`; `hang` never answers and keeps a `sleep` child in its own
+/// session, reported as the soffice pid; `slow` answers after 300 ms;
+/// `die-after:N` exits after N answers. It appends its own pid and its
+/// child's to `pids-<mode>` next to the script, and echoes each request,
+/// plus its `TMPDIR` and profile, as the "converted" file.
 fn fake_bridge(dir: &tempfile::TempDir, mode: &str) -> PathBuf {
     let script = format!(
         r#"
-import json, os, sys, time
+import json, os, subprocess, sys, time
 MODE = {mode:?}
 args = sys.argv[1:]
 assert "--socket-path" in args and "--profile" in args and "--soffice" in args, args
-assert os.path.isdir(args[args.index("--profile") + 1]), "profile directory missing"
-print(json.dumps({{"ready": True, "soffice_pid": os.getpid()}}), flush=True)
+profile = args[args.index("--profile") + 1]
+assert os.path.isdir(profile), "profile directory missing"
+child = os.getpid()
+if MODE == "hang":
+    child = subprocess.Popen(["sleep", "3600"], start_new_session=True).pid
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pids-" + MODE), "a") as f:
+    f.write("%d %d\n" % (os.getpid(), child))
+print(json.dumps({{"ready": True, "soffice_pid": child}}), flush=True)
 served = 0
 for line in sys.stdin:
     req = json.loads(line)
+    req["tmpdir"] = os.environ.get("TMPDIR")
+    req["profile"] = profile
     if MODE == "hang":
         time.sleep(3600)
     if MODE == "slow":
@@ -85,6 +96,11 @@ async fn converts_through_the_bridge() {
     assert_eq!(req["landscape"], false);
     assert!(req["password"].is_null());
     assert!(req["input"].as_str().unwrap().ends_with("input.docx"));
+    // LibreOffice's temporary files go under the worker's private directory.
+    let worker_dir = PathBuf::from(req["profile"].as_str().unwrap());
+    let tmpdir = PathBuf::from(req["tmpdir"].as_str().unwrap());
+    assert!(tmpdir.starts_with(worker_dir.parent().unwrap()), "{req}");
+    assert!(tmpdir.is_dir());
     assert_eq!(req["filter_options"]["ExportFormFields"], true);
     assert!(req["filter_options"].get("SelectPdfVersion").is_none());
 
@@ -188,6 +204,59 @@ async fn timeout_kills_and_replaces_the_worker() {
     assert_eq!(health["restarts"], 1);
     assert_eq!(health["started"], 2);
     assert_eq!(health["busy"], 0);
+}
+
+/// True while a process with `pid` exists (zombies included).
+fn process_exists(pid: i32) -> bool {
+    // SAFETY: kill(2) with signal 0 only checks for the process.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+async fn wait_gone(pid: i32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while process_exists(pid) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    !process_exists(pid)
+}
+
+#[tokio::test]
+async fn a_timed_out_worker_leaves_no_process_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let lo = pool(&dir, "hang", 1);
+    let err = lo
+        .convert(&docx(), Format::Pdf, None, Duration::from_millis(300))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Timeout(_)), "{err}");
+    settle(&lo, 1).await;
+    let pids = std::fs::read_to_string(dir.path().join("pids-hang")).unwrap();
+    let rows: Vec<Vec<i32>> = pids
+        .lines()
+        .map(|l| l.split(' ').map(|n| n.parse().unwrap()).collect())
+        .collect();
+    assert_eq!(rows.len(), 2, "the worker and its replacement: {pids}");
+    // The timed-out bridge and its "soffice" (a sleep in its own session,
+    // which a group kill would miss) are both gone.
+    assert!(
+        wait_gone(rows[0][0]).await,
+        "bridge {} survived",
+        rows[0][0]
+    );
+    assert!(
+        wait_gone(rows[0][1]).await,
+        "soffice {} survived",
+        rows[0][1]
+    );
+    // The replacement is alive until the pool is dropped, then its
+    // "soffice" is killed too.
+    assert!(process_exists(rows[1][1]));
+    drop(lo);
+    assert!(
+        wait_gone(rows[1][1]).await,
+        "soffice {} outlived the pool",
+        rows[1][1]
+    );
 }
 
 #[tokio::test]
