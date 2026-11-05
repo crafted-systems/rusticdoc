@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::convert::LibreOffice;
 use crate::error::{Error, Result};
 use crate::job::{Document, Format, Output, RenderRequest, Step};
-use crate::pdf::Qpdf;
+use crate::pdfops::{self, MultiEngine};
 use crate::template;
 
 /// The engines the service found at start. Absent engines make their steps
@@ -15,7 +15,9 @@ use crate::template;
 #[derive(Debug, Default)]
 pub struct Engines {
     pub libreoffice: Option<LibreOffice>,
-    pub qpdf: Option<Qpdf>,
+    /// PDF operations, tried in order: lopdf, then qpdf and pdfcpu when
+    /// configured.
+    pub pdf: MultiEngine,
 }
 
 impl Engines {
@@ -25,7 +27,7 @@ impl Engines {
                 .libreoffice_bin
                 .clone()
                 .map(|bin| LibreOffice::new(bin, config.workers)),
-            qpdf: config.qpdf_bin.clone().map(Qpdf::new),
+            pdf: MultiEngine::standard(config.qpdf_bin.clone(), config.pdfcpu_bin.clone()),
         }
     }
 
@@ -33,7 +35,7 @@ impl Engines {
     pub fn describe(&self) -> serde_json::Value {
         serde_json::json!({
             "libreoffice": self.libreoffice.as_ref().map(|l| l.bin().display().to_string()),
-            "qpdf": self.qpdf.as_ref().map(|q| q.bin().display().to_string()),
+            "pdf": self.pdf.names(),
             "templates": { "text": template::TEXT_FORMATS, "office": "phase 1" },
         })
     }
@@ -43,12 +45,6 @@ impl Engines {
             Error::EngineUnavailable(
                 "LibreOffice is not configured; set RUSTICDOC_LIBREOFFICE_BIN".into(),
             )
-        })
-    }
-
-    fn qpdf(&self) -> Result<&Qpdf> {
-        self.qpdf.as_ref().ok_or_else(|| {
-            Error::EngineUnavailable("qpdf is not configured; set RUSTICDOC_QPDF_BIN".into())
         })
     }
 }
@@ -126,9 +122,13 @@ impl Pipeline {
                         .await?
                 }
                 Step::Metadata { fields } => {
+                    let metadata: pdfops::Metadata = fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect();
                     self.engines
-                        .qpdf()?
-                        .write_metadata(&current, fields, self.timeout)
+                        .pdf
+                        .write_metadata(&current, &metadata, self.timeout)
                         .await?
                 }
                 Step::Encrypt {
@@ -136,7 +136,7 @@ impl Pipeline {
                     owner_password,
                 } => {
                     self.engines
-                        .qpdf()?
+                        .pdf
                         .encrypt(&current, user_password, owner_password, self.timeout)
                         .await?
                 }
@@ -144,7 +144,7 @@ impl Pipeline {
                     let mut docs = Vec::with_capacity(1 + req.extra.len());
                     docs.push(current.clone());
                     docs.extend(req.extra.iter().cloned());
-                    self.engines.qpdf()?.merge(&docs, self.timeout).await?
+                    self.engines.pdf.merge(&docs, self.timeout).await?
                 }
             };
             timings.push((step.name().into(), t.elapsed().as_millis()));
