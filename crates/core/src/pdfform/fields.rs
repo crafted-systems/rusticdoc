@@ -1,11 +1,11 @@
 //! Walking the AcroForm field tree into terminal fields with their widgets.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lopdf::{Dictionary, Document, Object, ObjectId};
 
 use super::{Rect, acroform, deref, get, get_i64, get_name, object_text};
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// The six kinds of field the API reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,8 +122,13 @@ struct Walker<'a> {
     doc: &'a Document,
     /// Page of every annotation reachable from a page's `/Annots`.
     annot_pages: HashMap<ObjectId, ObjectId>,
+    /// Nodes already walked, so a cycle in `/Kids` ends where it started.
+    visited: HashSet<ObjectId>,
     out: Vec<Field>,
 }
+
+/// How many field-tree nodes a form may have before it is refused.
+const MAX_FIELD_NODES: usize = 10_000;
 
 /// Every terminal field of the document's AcroForm, in tree order.
 pub(super) fn collect(doc: &Document) -> Result<Vec<Field>> {
@@ -146,6 +151,7 @@ pub(super) fn collect(doc: &Document) -> Result<Vec<Field>> {
     let mut walker = Walker {
         doc,
         annot_pages,
+        visited: HashSet::new(),
         out: Vec::new(),
     };
     let roots = get(doc, form, b"Fields")
@@ -154,19 +160,30 @@ pub(super) fn collect(doc: &Document) -> Result<Vec<Field>> {
         .unwrap_or_default();
     for root in roots {
         if let Object::Reference(id) = root {
-            walker.walk(id, "", &inherited, 0);
+            walker.walk(id, "", &inherited, 0)?;
         }
     }
     Ok(walker.out)
 }
 
 impl Walker<'_> {
-    fn walk(&mut self, id: ObjectId, parent: &str, inherited: &Inherited, depth: u32) {
-        if depth > 32 {
-            return;
+    fn walk(
+        &mut self,
+        id: ObjectId,
+        parent: &str,
+        inherited: &Inherited,
+        depth: u32,
+    ) -> Result<()> {
+        if depth > 32 || !self.visited.insert(id) {
+            return Ok(());
+        }
+        if self.visited.len() > MAX_FIELD_NODES {
+            return Err(Error::InvalidRequest(format!(
+                "the form has more than {MAX_FIELD_NODES} field nodes"
+            )));
         }
         let Ok(dict) = self.doc.get_dictionary(id) else {
-            return;
+            return Ok(());
         };
         let mut inherited = inherited.clone();
         inherited.absorb(self.doc, dict);
@@ -187,12 +204,12 @@ impl Walker<'_> {
         };
         if kids.iter().any(is_field) {
             for kid in kids {
-                self.walk(kid, &name, &inherited, depth + 1);
+                self.walk(kid, &name, &inherited, depth + 1)?;
             }
-            return;
+            return Ok(());
         }
         let Some(ft) = inherited.ft.as_deref() else {
-            return;
+            return Ok(());
         };
         let flags = inherited.ff.unwrap_or(0);
         let kind = match ft {
@@ -202,7 +219,7 @@ impl Walker<'_> {
             "Btn" if flags & (1 << (FF_PUSHBUTTON - 1)) != 0 => Kind::Button,
             "Btn" if flags & (1 << (FF_RADIO - 1)) != 0 => Kind::Radio,
             "Btn" => Kind::Checkbox,
-            _ => return,
+            _ => return Ok(()),
         };
         let widget_ids = if kids.is_empty() { vec![id] } else { kids };
         let widgets = widget_ids.into_iter().map(|wid| self.widget(wid)).collect();
@@ -223,6 +240,7 @@ impl Walker<'_> {
             quadding: inherited.q.unwrap_or(0),
             widgets,
         });
+        Ok(())
     }
 
     fn widget(&self, id: ObjectId) -> Widget {

@@ -169,9 +169,20 @@ fn get_name(doc: &Document, dict: &Dictionary, key: &[u8]) -> Option<String> {
         .map(|name| String::from_utf8_lossy(name).into_owned())
 }
 
+/// How deep `object_text` follows nested arrays before giving up, so a
+/// self-referencing object cannot recurse without end.
+const MAX_TEXT_DEPTH: u32 = 16;
+
 /// The textual value of an object: strings decoded, names as they are,
 /// numbers printed, arrays joined with `, `.
 fn object_text(doc: &Document, object: &Object) -> Option<String> {
+    object_text_at(doc, object, 0)
+}
+
+fn object_text_at(doc: &Document, object: &Object, depth: u32) -> Option<String> {
+    if depth >= MAX_TEXT_DEPTH {
+        return None;
+    }
     match deref(doc, object) {
         Object::String(bytes, _) => Some(text::decode_text_string(bytes)),
         Object::Name(name) => Some(String::from_utf8_lossy(name).into_owned()),
@@ -181,7 +192,7 @@ fn object_text(doc: &Document, object: &Object) -> Option<String> {
         Object::Array(items) => Some(
             items
                 .iter()
-                .filter_map(|item| object_text(doc, item))
+                .filter_map(|item| object_text_at(doc, item, depth + 1))
                 .collect::<Vec<_>>()
                 .join(", "),
         ),

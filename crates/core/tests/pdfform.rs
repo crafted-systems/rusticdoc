@@ -108,7 +108,7 @@ fn build_form(fixture: &Fixture) -> Vec<u8> {
     let method = doc.new_object_id();
     let mut kids = Vec::new();
     for (i, state) in ["card", "cash"].iter().enumerate() {
-        let on = state_stream(&mut doc, 20, 20, "0 g 10 10 m 10 10 5 0 360 arc f");
+        let on = state_stream(&mut doc, 20, 20, "0 g 6 6 8 8 re f");
         let off = state_stream(&mut doc, 20, 20, "0 G 0.5 0.5 19 19 re S");
         let x = 100 + 40 * i as i64;
         kids.push(doc.add_object(dictionary! {
@@ -546,7 +546,11 @@ fn flatten_fixes_values_into_page_content() {
         xobjects[2]
     );
     assert!(xobjects[3].contains("re S"), "card off: {}", xobjects[3]);
-    assert!(xobjects[4].contains("arc f"), "cash on: {}", xobjects[4]);
+    assert!(
+        xobjects[4].contains("6 6 8 8 re f"),
+        "cash on: {}",
+        xobjects[4]
+    );
     assert!(
         String::from_utf8(doc.get_page_content(pages[&2]))
             .unwrap()
@@ -731,4 +735,99 @@ fn writes_fixtures_when_asked() {
     std::fs::write(dir.join("flattened.pdf"), &flattened).unwrap();
     let overlaid = overlay(&build_pages(2, "base"), &build_pages(3, "over")).unwrap();
     std::fs::write(dir.join("overlaid.pdf"), &overlaid).unwrap();
+}
+
+/// A form whose objects point at themselves: a field tree with a `/Kids`
+/// loop, a `/V` array containing itself and an `/Opt` array that does too.
+fn build_cyclic_form() -> Vec<u8> {
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let page = page(&mut doc, pages_id, "", Vec::new());
+    doc.objects.insert(
+        pages_id,
+        dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page)],
+            "Count" => 1,
+        }
+        .into(),
+    );
+    let looping_value = doc.new_object_id();
+    doc.objects.insert(
+        looping_value,
+        Object::Array(vec![
+            Object::string_literal("x"),
+            Object::Reference(looping_value),
+        ]),
+    );
+    let parent = doc.new_object_id();
+    let child = doc.new_object_id();
+    doc.objects.insert(
+        parent,
+        dictionary! {
+            "FT" => "Ch",
+            "T" => Object::string_literal("loop"),
+            "Kids" => vec![Object::Reference(child)],
+            "V" => looping_value,
+            "Opt" => looping_value,
+        }
+        .into(),
+    );
+    doc.objects.insert(
+        child,
+        dictionary! {
+            "T" => Object::string_literal("back"),
+            "Parent" => parent,
+            "Kids" => vec![Object::Reference(parent), Object::Reference(child)],
+        }
+        .into(),
+    );
+    let value = doc.add_object(dictionary! {
+        "FT" => "Ch",
+        "T" => Object::string_literal("val"),
+        "V" => looping_value,
+        "Opt" => looping_value,
+        "DA" => Object::string_literal("Tf Tf"),
+    });
+    let acroform = doc.add_object(dictionary! {
+        "Fields" => vec![
+            Object::Reference(parent),
+            Object::Reference(parent),
+            Object::Reference(value),
+        ],
+        "DA" => Object::string_literal("Tf Tf"),
+    });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+        "AcroForm" => acroform,
+    });
+    doc.trailer.set("Root", catalog);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn cyclic_objects_do_not_overflow() {
+    let pdf = build_cyclic_form();
+    // The `/Kids` loop lists nothing: `back` is not terminal, and its
+    // kids were already walked. The looping `/V` and `/Opt` are cut short.
+    let listed = fields(&pdf).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].name, "val");
+    assert_eq!(listed[0].kind, "choice");
+    assert!(listed[0].value.as_deref().unwrap().starts_with("x, x"));
+    assert!(listed[0].options.iter().all(|o| o == "x") && listed[0].options.len() <= 2);
+    let filled = fill(
+        &pdf,
+        &json!({"val": "x"}),
+        &env(),
+        &FillOptions {
+            flatten: true,
+            strip_tag_annotations: true,
+        },
+    )
+    .unwrap();
+    assert!(fields(&filled).unwrap().is_empty());
 }
