@@ -94,6 +94,38 @@ pub async fn render(
         .filter(|s| !s.is_empty());
     req.extra = std::mem::take(&mut form.files);
 
+    // A PDF template is a form: fill it here, then run the steps on the
+    // result like any other document.
+    if req.template.extension() == "pdf" && !req.data.as_object().is_none_or(|m| m.is_empty()) {
+        rusticdoc_core::pdfops::require_pdf(&req.template)?;
+        let mut data = req.data.clone();
+        if let serde_json::Value::Object(map) = &mut data {
+            map.entry("ctx").or_insert(req.ctx.clone());
+        }
+        let options = rusticdoc_core::pdfform::FillOptions {
+            flatten: form.bool("flatten"),
+            strip_tag_annotations: form
+                .field("stripAnnotations")
+                .map(|v| v != "false")
+                .unwrap_or(true),
+        };
+        let template = req.template.clone();
+        let filled = tokio::task::spawn_blocking(move || {
+            let env = rusticdoc_core::template::environment();
+            rusticdoc_core::pdfform::fill(&template.bytes, &data, &env, &options)
+        })
+        .await
+        .map_err(|e| {
+            ApiError::new(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "io_error",
+                e.to_string(),
+            )
+        })??;
+        req.template = rusticdoc_core::Document::new(req.template.name.clone(), filled);
+        req.templating = false;
+    }
+
     run(state, hook, request_id(&headers), req).await
 }
 

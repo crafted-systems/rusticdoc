@@ -546,7 +546,7 @@ async fn download_from_fetches_files_with_extra_headers() {
     tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
 
     let mut c = config();
-    c.webhook_allow_private = true;
+    c.download_from_allow_private = true;
     let router = app(AppState::new(c));
     let res = router
         .clone()
@@ -591,4 +591,62 @@ async fn download_from_fetches_files_with_extra_headers() {
 async fn state_is_shareable() {
     let state = Arc::new(AppState::new(config()));
     assert!(state.engines.libreoffice.is_none());
+}
+
+#[tokio::test]
+async fn pdf_templates_are_filled_forms() {
+    use lopdf::{Document as Pdf, Object, Stream, dictionary};
+    // A one-page PDF with one text field named `customer.name`.
+    let mut pdf = Pdf::with_version("1.7");
+    let pages_id = pdf.new_object_id();
+    let font_id = pdf.add_object(
+        dictionary! {"Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica"},
+    );
+    let content_id = pdf.add_object(Stream::new(
+        dictionary! {},
+        b"BT /F1 12 Tf 72 700 Td (Hello) Tj ET".to_vec(),
+    ));
+    let page_id = pdf.new_object_id();
+    let field_id = pdf.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx", "T" => Object::string_literal("customer.name"),
+        "Rect" => vec![72.into(), 600.into(), 300.into(), 620.into()], "P" => page_id,
+        "DA" => Object::string_literal("/Helv 10 Tf 0 g"), "F" => 4
+    });
+    pdf.objects.insert(page_id, Object::Dictionary(dictionary! {
+        "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+        "Resources" => dictionary! {"Font" => dictionary! {"F1" => font_id}},
+        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Annots" => vec![field_id.into()]
+    }));
+    pdf.objects.insert(
+        pages_id,
+        Object::Dictionary(
+            dictionary! {"Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1},
+        ),
+    );
+    let catalog_id = pdf.add_object(dictionary! {
+        "Type" => "Catalog", "Pages" => pages_id,
+        "AcroForm" => dictionary! {"Fields" => vec![field_id.into()], "DR" => dictionary! {"Font" => dictionary! {"Helv" => font_id}}}
+    });
+    pdf.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).unwrap();
+    let body = String::from_utf8_lossy(&bytes).to_string();
+
+    let router = app(AppState::new(config()));
+    let res = router
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("form.pdf"), &body),
+                ("data", None, r#"{"customer":{"name":"Ada Lovelace"}}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let out = res.into_body().collect().await.unwrap().to_bytes();
+    let filled = Pdf::load_mem(&out).unwrap();
+    let field = filled.get_object(field_id).unwrap().as_dict().unwrap();
+    let value = field.get(b"V").unwrap().as_str().unwrap();
+    assert!(String::from_utf8_lossy(value).contains("Ada Lovelace"));
 }

@@ -1670,6 +1670,7 @@ dependencies = [
  "hmac",
  "http",
  "http-body-util",
+ "lopdf",
  "mime",
  "minijinja",
  "prometheus-client",

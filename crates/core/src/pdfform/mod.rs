@@ -172,32 +172,63 @@ fn get_name(doc: &Document, dict: &Dictionary, key: &[u8]) -> Option<String> {
 /// How deep `object_text` follows nested arrays before giving up, so a
 /// self-referencing object cannot recurse without end.
 const MAX_TEXT_DEPTH: u32 = 16;
+/// Most objects one text extraction may visit, so a wide tree of references
+/// cannot multiply work past the depth limit.
+const MAX_TEXT_NODES: usize = 1_000;
+/// Longest text one extraction returns.
+const MAX_TEXT_LEN: usize = 4_096;
 
-/// The textual value of an object: strings decoded, names as they are,
-/// numbers printed, arrays joined with `, `.
+/// The text of a string, name, number or array of those, bounded in depth,
+/// in nodes visited and in output length.
 fn object_text(doc: &Document, object: &Object) -> Option<String> {
-    object_text_at(doc, object, 0)
+    let mut budget = MAX_TEXT_NODES;
+    object_text_at(doc, object, 0, &mut budget)
 }
 
-fn object_text_at(doc: &Document, object: &Object, depth: u32) -> Option<String> {
-    if depth >= MAX_TEXT_DEPTH {
+fn object_text_at(
+    doc: &Document,
+    object: &Object,
+    depth: u32,
+    budget: &mut usize,
+) -> Option<String> {
+    if depth >= MAX_TEXT_DEPTH || *budget == 0 {
         return None;
     }
+    *budget -= 1;
     match deref(doc, object) {
-        Object::String(bytes, _) => Some(text::decode_text_string(bytes)),
-        Object::Name(name) => Some(String::from_utf8_lossy(name).into_owned()),
+        Object::String(bytes, _) => Some(truncate(text::decode_text_string(bytes))),
+        Object::Name(name) => Some(truncate(String::from_utf8_lossy(name).into_owned())),
         Object::Integer(n) => Some(n.to_string()),
         Object::Real(n) => Some(n.to_string()),
         Object::Boolean(b) => Some(b.to_string()),
-        Object::Array(items) => Some(
-            items
-                .iter()
-                .filter_map(|item| object_text_at(doc, item, depth + 1))
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
+        Object::Array(items) => {
+            let mut out = String::new();
+            for item in items {
+                if *budget == 0 || out.len() >= MAX_TEXT_LEN {
+                    break;
+                }
+                if let Some(text) = object_text_at(doc, item, depth + 1, budget) {
+                    if !out.is_empty() {
+                        out.push_str(", ");
+                    }
+                    out.push_str(&text);
+                }
+            }
+            Some(truncate(out))
+        }
         _ => None,
     }
+}
+
+fn truncate(mut s: String) -> String {
+    if s.len() > MAX_TEXT_LEN {
+        let mut cut = MAX_TEXT_LEN;
+        while !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        s.truncate(cut);
+    }
+    s
 }
 
 /// The AcroForm dictionary, wherever the catalog keeps it.
