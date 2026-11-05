@@ -58,7 +58,7 @@ pub struct OverlayForm {
 #[utoipa::path(
     post, path = "/v1/pdf/forms/fields", tag = "pdf-forms",
     request_body(content_type = "multipart/form-data", content = OverlayForm),
-    responses((status = 200, body = Vec<FieldSchema>), (status = 400, body = ErrorBody), (status = 501, body = ErrorBody)),
+    responses((status = 200, description = "The form fields", body = Vec<FieldSchema>), (status = 400, description = "The request is wrong", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn fields(
@@ -86,9 +86,9 @@ pub async fn fields(
     post, path = "/v1/pdf/forms/fill", tag = "pdf-forms",
     request_body(content_type = "multipart/form-data", content = FillForm),
     responses(
-        (status = 200, description = "The filled PDF", content_type = "application/pdf"),
+        (status = 200, description = "The filled PDF", content_type = "application/pdf", body = Vec<u8>),
         (status = 204, description = "Accepted; the result goes to the webhook"),
-        (status = 400, body = ErrorBody), (status = 422, body = ErrorBody), (status = 501, body = ErrorBody),
+        (status = 400, description = "The request is wrong", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
@@ -149,9 +149,9 @@ pub async fn fill(
     post, path = "/v1/pdf/overlay", tag = "pdf-forms",
     request_body(content_type = "multipart/form-data", content = OverlayForm),
     responses(
-        (status = 200, description = "The combined PDF", content_type = "application/pdf"),
+        (status = 200, description = "The combined PDF", content_type = "application/pdf", body = Vec<u8>),
         (status = 204, description = "Accepted; the result goes to the webhook"),
-        (status = 400, body = ErrorBody), (status = 501, body = ErrorBody),
+        (status = 400, description = "The request is wrong", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]

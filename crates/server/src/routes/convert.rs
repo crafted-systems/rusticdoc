@@ -33,9 +33,9 @@ pub struct ConvertForm {
     post, path = "/v1/convert", tag = "convert",
     request_body(content_type = "multipart/form-data", content = ConvertForm),
     responses(
-        (status = 200, description = "The converted file, or a ZIP of them", content_type = "application/octet-stream"),
+        (status = 200, description = "The converted file, or a ZIP of them", content_type = "application/octet-stream", body = Vec<u8>),
         (status = 204, description = "Accepted; the result goes to the webhook"),
-        (status = 400, body = ErrorBody), (status = 503, body = ErrorBody),
+        (status = 400, description = "The request is wrong", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]

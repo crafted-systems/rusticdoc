@@ -58,10 +58,10 @@ pub struct RenderForm {
         ("X-Rusticdoc-Webhook-Error-Url" = Option<String>, Header, description = "Deliver failures here as JSON"),
     ),
     responses(
-        (status = 200, description = "The rendered file", content_type = "application/octet-stream"),
+        (status = 200, description = "The rendered file", content_type = "application/octet-stream", body = Vec<u8>),
         (status = 204, description = "Accepted; the result goes to the webhook"),
-        (status = 400, body = ErrorBody), (status = 401, body = ErrorBody), (status = 422, body = ErrorBody),
-        (status = 501, body = ErrorBody), (status = 503, body = ErrorBody),
+        (status = 400, description = "The request is wrong", body = ErrorBody), (status = 401, description = "Credentials required", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
+        (status = 501, description = "Not supported in this version", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
@@ -133,9 +133,9 @@ pub async fn run(
         ("X-Rusticdoc-Webhook-Url" = Option<String>, Header, description = "Deliver the ZIP here instead of in the response"),
     ),
     responses(
-        (status = 200, description = "A ZIP of the rendered files", content_type = "application/zip"),
+        (status = 200, description = "A ZIP of the rendered files", content_type = "application/zip", body = Vec<u8>),
         (status = 204, description = "Accepted; the result goes to the webhook"),
-        (status = 400, body = ErrorBody), (status = 422, body = ErrorBody),
+        (status = 400, description = "The request is wrong", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
@@ -370,7 +370,7 @@ pub struct Validation {
 #[utoipa::path(
     post, path = "/v1/templates/validate", tag = "render",
     request_body(content_type = "multipart/form-data", content = RenderForm),
-    responses((status = 200, body = Validation), (status = 400, body = ErrorBody)),
+    responses((status = 200, description = "The validation result", body = Validation), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn validate(

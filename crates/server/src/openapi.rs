@@ -12,7 +12,7 @@ use crate::routes::{convert, forms, health, pdf, render};
     info(
         title = "rusticdoc",
         description = "Fills Office and PDF templates from JSON, converts documents with LibreOffice, and runs PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously.",
-        license(name = "UNLICENSED"),
+        license(name = "Not yet chosen", identifier = "LicenseRef-rusticdoc"),
     ),
     paths(
         render::render,
