@@ -42,6 +42,9 @@ pub struct Config {
     pub download_from_disabled: bool,
     /// Most URLs one request may fetch through `downloadFrom`.
     pub download_from_max_entries: usize,
+    /// Allow `downloadFrom` to fetch from private or loopback addresses.
+    /// Separate from the webhook flag. Off by default.
+    pub download_from_allow_private: bool,
     /// `json` or `pretty`.
     pub log_format: String,
     /// A `tracing` filter such as `info` or `rusticdoc=debug`.
@@ -81,6 +84,7 @@ impl Default for Config {
             batch_limit: 100,
             download_from_disabled: false,
             download_from_max_entries: 10,
+            download_from_allow_private: false,
             log_format: "json".into(),
             log_level: "info".into(),
         }
@@ -159,6 +163,9 @@ impl Config {
         }
         if let Some(v) = get("DOWNLOAD_FROM_MAX_ENTRIES").and_then(|v| v.parse().ok()) {
             c.download_from_max_entries = v;
+        }
+        if let Some(v) = get("DOWNLOAD_FROM_ALLOW_PRIVATE") {
+            c.download_from_allow_private = matches!(v.as_str(), "1" | "true" | "yes");
         }
         if let Some(v) = get("BATCH_LIMIT").and_then(|v| v.parse().ok()) {
             c.batch_limit = v;

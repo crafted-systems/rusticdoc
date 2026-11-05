@@ -97,35 +97,37 @@ impl Form {
                 config.download_from_max_entries
             )));
         }
+        // One budget for every download in the request, spent as bytes
+        // arrive, so a response cannot be read past it.
+        let mut budget = config.body_limit;
         for entry in entries {
-            let target = webhook::resolve(&entry.url, config.webhook_allow_private).await?;
+            let target = webhook::resolve(&entry.url, config.download_from_allow_private).await?;
+            let shown = webhook::redact(&entry.url);
             let client = webhook::client_for(&target, config.api_timeout).map_err(|e| {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "io_error", e.to_string())
             })?;
             let mut req = client.get(&target.url);
             for (k, v) in &entry.extra_http_headers {
-                let lower = k.to_ascii_lowercase();
-                if lower == "host" || lower == "content-length" {
+                if webhook::is_reserved_header(k) {
                     return Err(ApiError::bad_request(format!(
                         "'downloadFrom' header '{k}' cannot be set"
                     )));
                 }
                 req = req.header(k, v);
             }
-            let res = req.send().await.map_err(|e| {
-                ApiError::bad_request(format!("download '{}': {e}", webhook::redact(&entry.url)))
-            })?;
+            let mut res = req
+                .send()
+                .await
+                .map_err(|e| ApiError::bad_request(format!("download '{shown}': {e}")))?;
             if !res.status().is_success() {
                 return Err(ApiError::bad_request(format!(
-                    "download '{}': status {}",
-                    webhook::redact(&entry.url),
+                    "download '{shown}': status {}",
                     res.status().as_u16()
                 )));
             }
-            if res.content_length().unwrap_or(0) as usize > config.body_limit {
+            if res.content_length().unwrap_or(0) as usize > budget {
                 return Err(ApiError::bad_request(format!(
-                    "download '{}' is larger than the body limit",
-                    webhook::redact(&entry.url)
+                    "download '{shown}' is larger than the body limit"
                 )));
             }
             let name = res
@@ -143,14 +145,19 @@ impl Form {
                         .filter(|s| !s.is_empty())
                 })
                 .unwrap_or_else(|| "download".to_string());
-            let bytes = res.bytes().await.map_err(|e| {
-                ApiError::bad_request(format!("download '{}': {e}", webhook::redact(&entry.url)))
-            })?;
-            if bytes.len() > config.body_limit {
-                return Err(ApiError::bad_request(format!(
-                    "download '{}' is larger than the body limit",
-                    webhook::redact(&entry.url)
-                )));
+            let mut bytes = Vec::new();
+            while let Some(chunk) = res
+                .chunk()
+                .await
+                .map_err(|e| ApiError::bad_request(format!("download '{shown}': {e}")))?
+            {
+                if chunk.len() > budget {
+                    return Err(ApiError::bad_request(format!(
+                        "download '{shown}' is larger than the body limit"
+                    )));
+                }
+                budget -= chunk.len();
+                bytes.extend_from_slice(&chunk);
             }
             let field = if entry.embedded || entry.field == "embedded" {
                 "embeds".to_string()

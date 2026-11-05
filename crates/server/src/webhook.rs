@@ -44,6 +44,13 @@ const RESERVED_HEADERS: &[&str] = &[
     "x-request-id",
 ];
 
+/// True for headers the service owns, which a client may not set on
+/// deliveries or downloads.
+pub fn is_reserved_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("x-rusticdoc-") || RESERVED_HEADERS.contains(&lower.as_str())
+}
+
 /// A vetted destination: the URL rebuilt from its normalised host, and the
 /// addresses that host resolved to when the request came in.
 #[derive(Debug, Clone)]
