@@ -154,8 +154,8 @@ pub struct MarkArgs {
     #[arg(long)]
     text: Option<String>,
     /// PNG, JPEG or PDF file for an image or PDF mark.
-    #[arg(long)]
-    file: Option<PathBuf>,
+    #[arg(long = "mark")]
+    mark_file: Option<PathBuf>,
     /// top-left, top-center, top-right, center, bottom-left, bottom-center, bottom-right.
     #[arg(long, default_value = "center")]
     position: String,
@@ -176,7 +176,7 @@ pub struct MarkArgs {
 
 impl MarkArgs {
     fn overlay(&self) -> anyhow::Result<Overlay> {
-        let kind = match (&self.text, &self.file) {
+        let kind = match (&self.text, &self.mark_file) {
             (Some(text), _) => OverlayKind::Text {
                 text: text.clone(),
                 font_size: self.font_size,
@@ -196,7 +196,7 @@ impl MarkArgs {
                     other => bail!("a mark file must be PNG, JPEG or PDF, not .{other}"),
                 }
             }
-            (None, None) => bail!("give --text, or --file with an image or PDF"),
+            (None, None) => bail!("give --text, or --mark with an image or PDF"),
         };
         let position = match self.position.as_str() {
             "top-left" => Position::TopLeft,
