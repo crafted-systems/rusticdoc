@@ -17,6 +17,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/render", post(render::render))
+        .route("/v1/render/batch", post(render::batch))
         .route("/v1/templates/validate", post(render::validate))
         .route("/v1/convert", post(convert::convert))
         .route("/forms/libreoffice/convert", post(convert::convert))

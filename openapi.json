@@ -355,6 +355,80 @@
         ]
       }
     },
+    "/v1/render/batch": {
+      "post": {
+        "tags": [
+          "render"
+        ],
+        "summary": "Renders the template once per element of an array in the data and\nreturns the files in a ZIP, as Carbone's batch rendering does.",
+        "description": "`splitBy` names the array with a dotted path such as `items` or\n`order.lines`. Each render sees the whole data with that array replaced\nby the one element, plus `item` (the element) and `batch` (`index`,\n`count`). `batchName` is a template for each file's name, default\n`{{ batch.index }}`.",
+        "operationId": "batch",
+        "parameters": [
+          {
+            "name": "X-Rusticdoc-Webhook-Url",
+            "in": "header",
+            "description": "Deliver the ZIP here instead of in the response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A ZIP of the rendered files",
+            "content": {
+              "application/zip": {}
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
     "/v1/templates/validate": {
       "post": {
         "tags": [

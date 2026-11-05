@@ -16,6 +16,7 @@ use crate::routes::{convert, health, pdf, render};
     ),
     paths(
         render::render,
+        render::batch,
         render::validate,
         convert::convert,
         pdf::merge,
