@@ -224,6 +224,14 @@ impl Compiled {
     /// Puts the rendered parts back into the container.
     fn assemble(&self, rendered: &str) -> Result<Vec<u8>> {
         let outputs = program::split_output(rendered);
+        if let Some((name, _)) = outputs
+            .iter()
+            .find(|(name, _)| !self.parts.iter().any(|p| &p.name == name))
+        {
+            return Err(TemplateError::new(format!(
+                "rendered output names a part that was not compiled: {name:?}"
+            )));
+        }
         let mut entries = self.entries.clone();
         match self.format {
             Format::Pptx => package::apply_slides(&mut entries, &outputs)?,

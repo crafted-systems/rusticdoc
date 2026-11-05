@@ -100,12 +100,14 @@ fn parse_offset(tz: &str) -> Result<FixedOffset, Error> {
     let (sign, rest) = match tz.chars().next() {
         Some('+') => (1, &tz[1..]),
         Some('-') => (-1, &tz[1..]),
-        _ => return Err(Error::new(
-            ErrorKind::InvalidOperation,
-            format!(
+        _ => {
+            return Err(Error::new(
+                ErrorKind::InvalidOperation,
+                format!(
                 "timezone {tz:?} is not a fixed offset like +02:00 (named zones are not supported)"
             ),
-        )),
+            ))
+        }
     };
     let (h, m) = rest.split_once(':').unwrap_or((rest, "0"));
     let secs = h.parse::<i32>().unwrap_or(0) * 3600 + m.parse::<i32>().unwrap_or(0) * 60;
@@ -113,13 +115,25 @@ fn parse_offset(tz: &str) -> Result<FixedOffset, Error> {
         .ok_or_else(|| Error::new(ErrorKind::InvalidOperation, format!("bad timezone {tz:?}")))
 }
 
-fn write_xml_escaped(out: &mut minijinja::Output, s: &str, breaks: &str) -> std::fmt::Result {
+/// Characters XML 1.0 forbids; they are dropped from every value, which also
+/// keeps the part separator (NUL) out of rendered text.
+pub fn xml_illegal(c: char) -> bool {
+    matches!(c, '\0'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')
+}
+
+fn write_xml_escaped(
+    out: &mut minijinja::Output,
+    s: &str,
+    breaks: &str,
+    escape: bool,
+) -> std::fmt::Result {
     for c in s.chars() {
         match c {
-            '&' => out.write_str("&amp;")?,
-            '<' => out.write_str("&lt;")?,
-            '>' => out.write_str("&gt;")?,
-            '\n' if !breaks.is_empty() => out.write_str(breaks)?,
+            c if xml_illegal(c) => {}
+            '&' if escape => out.write_str("&amp;")?,
+            '<' if escape => out.write_str("&lt;")?,
+            '>' if escape => out.write_str("&gt;")?,
+            '\n' if escape && !breaks.is_empty() => out.write_str(breaks)?,
             c => out.write_char(c)?,
         }
     }
@@ -134,15 +148,13 @@ pub fn environment_for(settings: &Settings, breaks: &'static str) -> Environment
     env.set_fuel(Some(5_000_000));
     env.set_auto_escape_callback(|_| AutoEscape::Custom(Cow::Borrowed("xml")));
     env.set_formatter(move |out, state, value| {
-        if matches!(state.auto_escape(), AutoEscape::Custom(c) if c == "xml")
-            && !value.is_safe()
-            && !value.is_undefined()
-            && !value.is_none()
-        {
-            write_xml_escaped(out, &value.to_string(), breaks).map_err(Error::from)
-        } else {
-            minijinja::escape_formatter(out, state, value)
+        if !matches!(state.auto_escape(), AutoEscape::Custom(c) if c == "xml") {
+            return minijinja::escape_formatter(out, state, value);
         }
+        if value.is_undefined() || value.is_none() {
+            return Ok(());
+        }
+        write_xml_escaped(out, &value.to_string(), breaks, !value.is_safe()).map_err(Error::from)
     });
     let default_currency = settings.currency.clone();
     env.add_filter("currency", move |value: f64, code: Option<String>| {
