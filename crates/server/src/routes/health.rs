@@ -36,6 +36,10 @@ pub struct Version {
 /// Liveness.
 #[utoipa::path(get, path = "/health", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
 pub async fn health(State(state): State<AppState>) -> Json<Health> {
+    let pool = match &state.engines.libreoffice {
+        Some(lo) => lo.health().await,
+        None => serde_json::Value::Null,
+    };
     Json(Health {
         status: "up",
         uptime_seconds: state.started.elapsed().as_secs(),
@@ -50,6 +54,7 @@ pub async fn health(State(state): State<AppState>) -> Json<Health> {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0),
+                "pool": pool,
             }
         }),
     })

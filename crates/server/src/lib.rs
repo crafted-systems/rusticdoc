@@ -163,6 +163,18 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
     let bind = state.config.bind.clone();
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(%bind, version = rusticdoc_core::VERSION, engines = %state.engines.describe(), "rusticdoc listening");
+    // Start the LibreOffice workers now rather than on the first request,
+    // so the first conversions are as fast as the rest.
+    if let Some(lo) = state.engines.libreoffice.clone() {
+        tokio::spawn(async move {
+            match lo.warm_up().await {
+                Ok(()) => tracing::info!("LibreOffice workers warm"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "LibreOffice warm-up failed; workers start on demand")
+                }
+            }
+        });
+    }
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
