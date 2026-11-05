@@ -650,3 +650,243 @@ async fn pdf_templates_are_filled_forms() {
     let value = field.get(b"V").unwrap().as_str().unwrap();
     assert!(String::from_utf8_lossy(value).contains("Ada Lovelace"));
 }
+
+/// Multipart with binary parts, for PDF fixtures.
+fn post_binary(path: &str, parts: &[(&str, Option<&str>, Vec<u8>)]) -> Request<Body> {
+    let mut body: Vec<u8> = Vec::new();
+    for (name, filename, content) in parts {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        match filename {
+            Some(f) => body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{f}\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes(),
+            ),
+            None => body.extend_from_slice(format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes()),
+        }
+        body.extend_from_slice(content);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+    Request::post(path)
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
+async fn bytes_of(res: axum::response::Response) -> Vec<u8> {
+    res.into_body().collect().await.unwrap().to_bytes().to_vec()
+}
+
+#[tokio::test]
+async fn pdf_operations_run_on_the_pure_rust_engine() {
+    use rusticdoc_core::pdfops::fixtures;
+    let router = app(AppState::new(config()));
+    let three = fixtures::pages(3);
+
+    // split by pages into a ZIP of two parts
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/forms/pdfengines/split",
+            &[
+                ("files", Some("in.pdf"), three.clone()),
+                ("splitMode", None, b"pages".to_vec()),
+                ("splitSpan", None, b"1-2,3".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/zip"
+    );
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes_of(res).await)).unwrap();
+    assert_eq!(archive.len(), 2);
+    assert_eq!(archive.by_index(0).unwrap().name().unwrap(), "in_1.pdf");
+
+    // rotate, then read the rotation back
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/rotate",
+            &[
+                ("files", Some("in.pdf"), three.clone()),
+                ("rotation", None, b"90".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let rotated = lopdf::Document::load_mem(&bytes_of(res).await).unwrap();
+    let first = rotated.get_pages()[&1];
+    assert_eq!(
+        rotated
+            .get_object(first)
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Rotate")
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+        90
+    );
+
+    // metadata write then read
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/metadata/write",
+            &[
+                ("files", Some("in.pdf"), three.clone()),
+                (
+                    "metadata",
+                    None,
+                    br#"{"Title":"Invoice 7","Author":"Ada"}"#.to_vec(),
+                ),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let with_meta = bytes_of(res).await;
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/forms/pdfengines/metadata/read",
+            &[("files", Some("in.pdf"), with_meta)],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let meta: serde_json::Value = serde_json::from_slice(&bytes_of(res).await).unwrap();
+    assert_eq!(meta["in.pdf"]["Title"], "Invoice 7");
+    assert_eq!(meta["in.pdf"]["Author"], "Ada");
+
+    // bookmarks write then read
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/bookmarks/write",
+            &[
+                ("files", Some("in.pdf"), three.clone()),
+                (
+                    "bookmarks",
+                    None,
+                    br#"[{"title":"Start","page":1,"children":[{"title":"End","page":3}]}]"#
+                        .to_vec(),
+                ),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let marked = bytes_of(res).await;
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/bookmarks/read",
+            &[("files", Some("in.pdf"), marked)],
+        ))
+        .await
+        .unwrap();
+    let marks: serde_json::Value = serde_json::from_slice(&bytes_of(res).await).unwrap();
+    assert_eq!(marks["in.pdf"][0]["title"], "Start");
+    assert_eq!(marks["in.pdf"][0]["children"][0]["page"], 3);
+
+    // text stamp
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/stamp",
+            &[
+                ("files", Some("in.pdf"), three.clone()),
+                ("text", None, b"DRAFT".to_vec()),
+                ("opacity", None, b"0.5".to_vec()),
+                ("rotation", None, b"45".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(bytes_of(res).await.len() > three.len());
+
+    // embed, then the attachment is in the name tree
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/forms/pdfengines/embed",
+            &[
+                ("files", Some("in.pdf"), three.clone()),
+                ("files", Some("note.txt"), b"hello".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let embedded = bytes_of(res).await;
+    assert!(String::from_utf8_lossy(&embedded).contains("EmbeddedFile"));
+
+    // Gotenberg's merge route with post-processing: merge + rotate + metadata in one call
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/forms/pdfengines/merge",
+            &[
+                ("files", Some("a.pdf"), three.clone()),
+                ("files", Some("b.pdf"), fixtures::pages(2)),
+                ("rotateAngle", None, b"180".to_vec()),
+                ("metadata", None, br#"{"Title":"Merged"}"#.to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let merged = lopdf::Document::load_mem(&bytes_of(res).await).unwrap();
+    assert_eq!(merged.get_pages().len(), 5);
+
+    // bad requests stay 400 in Gotenberg's style
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/forms/pdfengines/rotate",
+            &[
+                ("files", Some("in.pdf"), three.clone()),
+                ("rotation", None, b"45".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let res = router
+        .oneshot(post_binary(
+            "/forms/pdfengines/split",
+            &[
+                ("files", Some("in.pdf"), three),
+                ("splitMode", None, b"sideways".to_vec()),
+                ("splitSpan", None, b"1".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn gotenberg_boolean_fields_are_strict() {
+    let router = app(AppState::new(config()));
+    let res = router
+        .oneshot(post_form(
+            "/forms/libreoffice/convert",
+            &[
+                ("files", Some("a.docx"), "PK"),
+                ("landscape", None, "maybe"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
