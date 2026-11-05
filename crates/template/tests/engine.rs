@@ -657,6 +657,87 @@ fn ods_row_loop_and_odp_slide_loop() {
     );
 }
 
+// --- Files LibreOffice wrote (see tests/fixtures/gen.sh) --------------------
+
+const REAL_DOCX: &[u8] = include_bytes!("fixtures/invoice.docx");
+const REAL_XLSX: &[u8] = include_bytes!("fixtures/invoice.xlsx");
+
+fn invoice_data() -> Value {
+    json!({
+        "customer": {"name": "Ada Lovelace", "vip": true},
+        "issued": "2024-03-05",
+        "items": [
+            {"name": "Lamp", "qty": 2, "price": 19.5},
+            {"name": "Plug", "qty": 1, "price": 0.5},
+            {"name": "Desk", "qty": 1, "price": 1200.0}
+        ]
+    })
+}
+
+#[test]
+fn libreoffice_docx_renders() {
+    let compiled = compile(Format::Docx, REAL_DOCX).unwrap();
+    assert_eq!(compiled.settings().currency.as_deref(), Some("EUR"));
+    let out = compiled.render(&invoice_data()).unwrap();
+    let text = docx_text(&out);
+    assert_eq!(text[0], "Invoice for Ada Lovelace");
+    assert_eq!(text[1], "Issued 05 March 2024");
+    assert_eq!(&text[2..5], ["Item", "Qty", "Price"]);
+    assert_eq!(
+        &text[5..14],
+        [
+            "Lamp",
+            "2",
+            "EUR 19.50",
+            "Plug",
+            "1",
+            "EUR 0.50",
+            "Desk",
+            "1",
+            "EUR 1,200.00"
+        ]
+    );
+    assert_eq!(text[14], "Thank you for your loyalty.");
+    assert_eq!(text[15], "Total EUR 1,220.00");
+    let before = entries(REAL_DOCX);
+    let after = entries(&out);
+    for ((name, a), (_, b)) in before.iter().zip(&after) {
+        if name != "word/document.xml" {
+            assert_eq!(a, b, "{name} changed");
+        }
+    }
+}
+
+#[test]
+fn libreoffice_xlsx_renders_with_rebased_formulas() {
+    let compiled = compile(Format::Xlsx, REAL_XLSX).unwrap();
+    let out = compiled.render(&invoice_data()).unwrap();
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    let c = cells_resolved(&out);
+    let get = |r: &str| {
+        c.iter()
+            .find(|(k, _)| k == r)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("<none>")
+    };
+    assert_eq!(get("B1"), "Ada Lovelace");
+    assert_eq!(get("A3"), "Lamp");
+    assert_eq!(get("B3"), "2");
+    assert_eq!(get("C3"), "19.5");
+    assert_eq!(get("D3"), "=B3*C3");
+    assert_eq!(get("A4"), "Plug");
+    assert_eq!(get("D4"), "=B4*C4");
+    assert_eq!(get("A5"), "Desk");
+    assert_eq!(get("D5"), "=B5*C5");
+    assert_eq!(get("A6"), "Total");
+    assert_eq!(get("D6"), "=SUM(D5)");
+    assert!(
+        !sheet.contains("t=\"e\""),
+        "error cells lose their stale type: {sheet}"
+    );
+    assert!(part(&out, "xl/workbook.xml").contains("fullCalcOnLoad=\"1\""));
+}
+
 // --- LibreOffice ----------------------------------------------------------
 
 const OFFICE_IMAGE: &str = "ghcr.io/crafted-systems/gotenberg-slim-office:latest";
@@ -697,44 +778,79 @@ fn soffice(dir: &str, to: &str, file: &str) -> bool {
     matches!(run("docker", &convert), Some((true, _)))
 }
 
-/// Renders a DOCX, converts it to PDF with LibreOffice in the office
-/// container and checks the text. Skips when the images are not present.
+fn pdf_text(dir: &str, file: &str) -> String {
+    let mount = format!("{dir}:/w");
+    let pdf = format!("/w/{file}");
+    let args = [
+        "run",
+        "--rm",
+        "--platform",
+        "linux/arm64",
+        "-v",
+        &mount,
+        TOOLS_IMAGE,
+        "pdftotext",
+        "-layout",
+        &pdf,
+        "-",
+    ];
+    let (ok, text) = run("docker", &args).unwrap();
+    assert!(ok, "pdftotext failed: {text}");
+    text
+}
+
+/// Renders a DOCX and an XLSX, converts them to PDF with LibreOffice in the
+/// office container and checks the text, which for the sheet proves the
+/// re-based formulas recalculate. Skips when the images are not present.
 #[test]
-fn rendered_docx_converts_to_pdf_with_the_expected_text() {
+fn rendered_files_convert_to_pdf_with_the_expected_text() {
     if !docker_has(OFFICE_IMAGE) || !docker_has(TOOLS_IMAGE) {
         eprintln!("skipping: docker images not available");
         return;
     }
-    let doc = row_loop_doc();
-    let out = render(Format::Docx, &doc, items());
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("out.docx"), &out).unwrap();
     let dir_s = dir.path().to_str().unwrap();
-    assert!(
-        soffice(dir_s, "pdf", "out.docx"),
-        "LibreOffice conversion failed"
-    );
-    let mount = format!("{dir_s}:/w");
-    let (ok, text) = run(
-        "docker",
-        &[
-            "run",
-            "--rm",
-            "--platform",
-            "linux/arm64",
-            "-v",
-            &mount,
-            TOOLS_IMAGE,
-            "pdftotext",
-            "-layout",
-            "/w/out.pdf",
-            "-",
-        ],
-    )
-    .unwrap();
-    assert!(ok, "pdftotext failed: {text}");
+
+    let out = render(Format::Docx, &row_loop_doc(), items());
+    std::fs::write(dir.path().join("out.docx"), &out).unwrap();
+    assert!(soffice(dir_s, "pdf", "out.docx"), "DOCX conversion failed");
+    let text = pdf_text(dir_s, "out.pdf");
     for expected in ["Items:", "Lamp", "Plug", "Desk", "Total", "End"] {
         assert!(text.contains(expected), "missing {expected} in {text}");
     }
     assert_eq!(text.matches("Desk").count(), 1);
+
+    let out = compile(Format::Docx, REAL_DOCX)
+        .unwrap()
+        .render(&invoice_data())
+        .unwrap();
+    std::fs::write(dir.path().join("invoice.docx"), &out).unwrap();
+    assert!(
+        soffice(dir_s, "pdf", "invoice.docx"),
+        "real DOCX conversion failed"
+    );
+    let text = pdf_text(dir_s, "invoice.pdf");
+    for expected in [
+        "Invoice for Ada Lovelace",
+        "Issued 05 March 2024",
+        "EUR 1,200.00",
+        "loyalty",
+        "Total EUR 1,220.00",
+    ] {
+        assert!(text.contains(expected), "missing {expected} in {text}");
+    }
+
+    let out = compile(Format::Xlsx, REAL_XLSX)
+        .unwrap()
+        .render(&invoice_data())
+        .unwrap();
+    std::fs::write(dir.path().join("invoice.xlsx"), &out).unwrap();
+    assert!(
+        soffice(dir_s, "pdf", "invoice.xlsx"),
+        "XLSX conversion failed"
+    );
+    let text = pdf_text(dir_s, "invoice.pdf");
+    for expected in ["Ada Lovelace", "Lamp", "39", "0.5", "1200", "Total"] {
+        assert!(text.contains(expected), "missing {expected} in {text}");
+    }
 }

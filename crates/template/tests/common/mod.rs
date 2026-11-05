@@ -295,6 +295,30 @@ pub fn cells(sheet_xml: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Like [`cells`] for a whole package, with shared strings resolved.
+pub fn cells_resolved(bytes: &[u8]) -> Vec<(String, String)> {
+    let sst = part(bytes, "xl/sharedStrings.xml");
+    let si = Regex::new("(?s)<si>(.*?)</si>").unwrap();
+    let t = Regex::new("(?s)<t[^>]*>(.*?)</t>").unwrap();
+    let shared: Vec<String> = si
+        .captures_iter(&sst)
+        .map(|c| {
+            t.captures_iter(&c[1])
+                .map(|m| unescape(&m[1]))
+                .collect::<String>()
+        })
+        .collect();
+    let sheet = part(bytes, "xl/worksheets/sheet1.xml");
+    let sre = Regex::new("<c r=\"([A-Z]+[0-9]+)\"[^>]*t=\"s\"[^>]*><v>([0-9]+)</v>").unwrap();
+    let mut out = cells(&sheet);
+    for c in sre.captures_iter(&sheet) {
+        if let Some(cell) = out.iter_mut().find(|(r, _)| r == &c[1]) {
+            cell.1 = shared[c[2].parse::<usize>().unwrap()].clone();
+        }
+    }
+    out
+}
+
 // --- PPTX -----------------------------------------------------------------
 
 const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
