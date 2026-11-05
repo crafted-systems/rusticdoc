@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 bytes = "1.12.1"
 hex = "0.4.3"
-minijinja = { version = "3.0.5", features = ["serde", "json"] }
+minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

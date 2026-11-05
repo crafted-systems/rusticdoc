@@ -44,7 +44,7 @@ Every response carries `x-request-id`; the same id is in the logs and in webhook
 
 ### Webhooks
 
-Add `X-Rusticdoc-Webhook-Url` to any request. The service answers `204` at once and posts the result to that URL, retrying three times with backoff. Failures go to `X-Rusticdoc-Webhook-Error-Url` as JSON. With `RUSTICDOC_WEBHOOK_SECRET` set, deliveries carry `X-Rusticdoc-Signature: sha256=<HMAC of the body>`. Gotenberg's `Gotenberg-Webhook-*` headers are accepted too. Private addresses are refused unless `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true`.
+Add `X-Rusticdoc-Webhook-Url` to any request. The service answers `204` at once and posts the result to that URL, retrying three times with backoff. Failures go to `X-Rusticdoc-Webhook-Error-Url` as JSON. With `RUSTICDOC_WEBHOOK_SECRET` set, deliveries carry `X-Rusticdoc-Timestamp` and `X-Rusticdoc-Signature: v1=<hex HMAC-SHA256 of "<timestamp>.<body>">`; verify the signature and reject stale timestamps. Gotenberg's `Gotenberg-Webhook-*` headers are accepted too. Private addresses are refused unless `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true`.
 
 ## CLI
 
@@ -72,6 +72,7 @@ Environment variables, all optional:
 | `RUSTICDOC_BASIC_AUTH_USERNAME`, `_PASSWORD` | none | Basic auth |
 | `RUSTICDOC_WEBHOOK_SECRET` | none | HMAC key for deliveries |
 | `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhooks to private addresses |
+| `RUSTICDOC_CORS_ORIGINS` | none | Origins allowed cross-origin access, comma-separated, or `*` |
 | `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN` | auto-detected | Engine paths; `none` disables one |
 | `RUSTICDOC_FONTS_DIR` | `/fonts` | Mounted fonts, picked up by LibreOffice |
 | `RUSTICDOC_LOG_FORMAT`, `RUSTICDOC_LOG_LEVEL` | `json`, `info` | Logging |

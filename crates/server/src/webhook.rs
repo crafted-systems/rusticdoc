@@ -2,15 +2,21 @@
 //!
 //! A request that carries `X-Rusticdoc-Webhook-Url` (or Gotenberg's
 //! `Gotenberg-Webhook-Url`) returns 204 at once; the result is then posted to
-//! that URL, with an HMAC-SHA256 signature when `RUSTICDOC_WEBHOOK_SECRET` is
-//! set. Failures go to the error URL as JSON. Deliveries retry with backoff.
+//! that URL, signed when `RUSTICDOC_WEBHOOK_SECRET` is set. Failures go to
+//! the error URL as JSON. Deliveries retry with backoff.
 //!
 //! Targets are resolved when the request arrives, every resolved address is
-//! checked against private ranges, and the delivery is pinned to those
-//! addresses with redirects disabled, so neither DNS rebinding nor a redirect
-//! can turn a webhook into a request to something beside the service.
+//! checked against non-global ranges, the URL is rebuilt from the normalised
+//! host, and the delivery is pinned to those addresses with redirects
+//! disabled, so neither DNS rebinding nor a redirect can turn a webhook into
+//! a request to something beside the service.
+//!
+//! The signature covers the timestamp and the body:
+//! `X-Rusticdoc-Signature: v1=<hex HMAC-SHA256 of "<timestamp>.<body>">`,
+//! with the timestamp in `X-Rusticdoc-Timestamp`. Receivers verify the
+//! signature and reject timestamps outside their freshness window.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
@@ -26,8 +32,20 @@ pub const SIGNATURE: &str = "x-rusticdoc-signature";
 pub const EVENT: &str = "x-rusticdoc-event";
 pub const TIMESTAMP: &str = "x-rusticdoc-timestamp";
 
-/// A vetted destination: the URL, and the addresses it resolved to when the
-/// request came in.
+/// Headers a client may not set through the extra-headers field, because
+/// the service owns them.
+const RESERVED_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "content-type",
+    "content-disposition",
+    "transfer-encoding",
+    "connection",
+    "x-request-id",
+];
+
+/// A vetted destination: the URL rebuilt from its normalised host, and the
+/// addresses that host resolved to when the request came in.
 #[derive(Debug, Clone)]
 pub struct Target {
     pub url: String,
@@ -100,6 +118,12 @@ impl Webhook {
                 };
                 let name = HeaderName::from_bytes(k.as_bytes())
                     .map_err(|_| ApiError::bad_request(format!("bad webhook header name '{k}'")))?;
+                let lower = name.as_str();
+                if lower.starts_with("x-rusticdoc-") || RESERVED_HEADERS.contains(&lower) {
+                    return Err(ApiError::bad_request(format!(
+                        "webhook header '{k}' is set by the service and cannot be overridden"
+                    )));
+                }
                 let value = HeaderValue::from_str(&value).map_err(|_| {
                     ApiError::bad_request(format!("bad webhook header value for '{k}'"))
                 })?;
@@ -115,19 +139,27 @@ impl Webhook {
     }
 }
 
-/// Checks the URL's shape, resolves its host, and refuses any private,
-/// loopback, link-local or similar address unless allowed.
+/// Checks the URL's shape, resolves its host, and refuses any address that
+/// is not global unicast unless allowed. The returned URL carries the
+/// normalised host, which is also the key the delivery client pins.
 pub async fn resolve(url: &str, allow_private: bool) -> Result<Target, ApiError> {
-    let parsed = reqwest::Url::parse(url)
+    let mut parsed = reqwest::Url::parse(url)
         .map_err(|e| ApiError::bad_request(format!("webhook URL '{url}': {e}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(ApiError::bad_request(format!(
             "webhook URL '{url}' must be http or https"
         )));
     }
-    let host = parsed
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(ApiError::bad_request(format!(
+            "webhook URL '{url}' must not carry credentials; use extra headers"
+        )));
+    }
+    let raw_host = parsed
         .host_str()
         .ok_or_else(|| ApiError::bad_request(format!("webhook URL '{url}' has no host")))?
+        .to_string();
+    let bare = raw_host
         .trim_matches(|c| c == '[' || c == ']')
         .trim_end_matches('.')
         .to_ascii_lowercase();
@@ -135,28 +167,43 @@ pub async fn resolve(url: &str, allow_private: bool) -> Result<Target, ApiError>
         .port_or_known_default()
         .ok_or_else(|| ApiError::bad_request(format!("webhook URL '{url}' has no port")))?;
 
-    if !allow_private && is_private_name(&host) {
+    if !allow_private && is_private_name(&bare) {
         return Err(private(url));
     }
-    let addrs: Vec<SocketAddr> = match host.parse::<IpAddr>() {
+    let addrs: Vec<SocketAddr> = match bare.parse::<IpAddr>() {
         Ok(ip) => vec![SocketAddr::new(ip, port)],
-        Err(_) => tokio::net::lookup_host((host.as_str(), port))
+        Err(_) => tokio::net::lookup_host((bare.as_str(), port))
             .await
             .map_err(|e| {
-                ApiError::bad_request(format!("webhook host '{host}' does not resolve: {e}"))
+                ApiError::bad_request(format!("webhook host '{bare}' does not resolve: {e}"))
             })?
             .collect(),
     };
     if addrs.is_empty() {
         return Err(ApiError::bad_request(format!(
-            "webhook host '{host}' resolves to no address"
+            "webhook host '{bare}' resolves to no address"
         )));
     }
-    if !allow_private && addrs.iter().any(|a| is_private_ip(a.ip())) {
+    if !allow_private && addrs.iter().any(|a| !is_global_ip(a.ip())) {
         return Err(private(url));
     }
+
+    // The URL the client sends and the key it pins must be one string.
+    let host_for_url = if bare.contains(':') {
+        format!("[{bare}]")
+    } else {
+        bare.clone()
+    };
+    parsed
+        .set_host(Some(&host_for_url))
+        .map_err(|_| ApiError::bad_request(format!("webhook host '{bare}' is not valid")))?;
+    let host = parsed
+        .host_str()
+        .unwrap_or(&bare)
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_string();
     Ok(Target {
-        url: url.to_string(),
+        url: parsed.to_string(),
         host,
         addrs,
     })
@@ -164,7 +211,8 @@ pub async fn resolve(url: &str, allow_private: bool) -> Result<Target, ApiError>
 
 fn private(url: &str) -> ApiError {
     ApiError::bad_request(format!(
-        "webhook URL '{url}' points at a private address; set RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true to allow it"
+        "webhook URL '{}' points at a private address; set RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true to allow it",
+        redact(url)
     ))
 }
 
@@ -176,47 +224,84 @@ fn is_private_name(host: &str) -> bool {
         || host.ends_with(".home.arpa")
 }
 
-/// Loopback, private, link-local, carrier-grade NAT, unspecified, broadcast,
-/// unique-local and IPv4-mapped forms of any of those.
-pub fn is_private_ip(ip: IpAddr) -> bool {
+/// Global unicast only: everything loopback, private, link-local, carrier
+/// NAT, multicast, reserved, documentation or benchmark is out, including
+/// IPv4 addresses embedded in IPv6 forms.
+pub fn is_global_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => {
-            let o = ip.octets();
-            ip.is_loopback()
-                || ip.is_private()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast()
-                || o[0] == 0
-                || (o[0] == 100 && (o[1] & 0xc0) == 64)
-                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
-        }
+        IpAddr::V4(ip) => is_global_v4(ip),
         IpAddr::V6(ip) => {
             if let Some(v4) = ip.to_ipv4_mapped() {
-                return is_private_ip(IpAddr::V4(v4));
+                return is_global_v4(v4);
             }
             let s = ip.segments();
-            ip.is_loopback()
+            // IPv4-compatible (::a.b.c.d), NAT64 (64:ff9b::/96) and 6to4 (2002::/16)
+            // all carry an IPv4 address that decides it.
+            let v4_at = |hi: u16, lo: u16| {
+                Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8)
+            };
+            let compatible = s[..6] == [0, 0, 0, 0, 0, 0] && (s[6] != 0 || s[7] != 0);
+            let nat64 = s[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
+            let embedded = if compatible || nat64 {
+                Some(v4_at(s[6], s[7]))
+            } else if s[0] == 0x2002 {
+                Some(v4_at(s[1], s[2]))
+            } else {
+                None
+            };
+            if let Some(v4) = embedded {
+                return is_global_v4(v4);
+            }
+            !(ip.is_loopback()
                 || ip.is_unspecified()
-                || (s[0] & 0xfe00) == 0xfc00
-                || (s[0] & 0xffc0) == 0xfe80
-                || (s[0] == 0x2002
-                    && is_private_ip(IpAddr::V4(std::net::Ipv4Addr::new(
-                        (s[1] >> 8) as u8,
-                        s[1] as u8,
-                        (s[2] >> 8) as u8,
-                        s[2] as u8,
-                    ))))
+                || (s[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
+                || (s[0] & 0xffc0) == 0xfe80 // link local fe80::/10
+                || (s[0] & 0xffc0) == 0xfec0 // site local fec0::/10
+                || (s[0] & 0xff00) == 0xff00 // multicast ff00::/8
+                || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
+                || (s[0] == 0x2001 && s[1] == 0x0002 && s[2] == 0)) // benchmark
         }
     }
 }
 
-/// `sha256=<hex hmac>` over the body.
-pub fn sign(secret: &str, body: &[u8]) -> String {
+fn is_global_v4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.is_multicast()
+        || ip.is_documentation()
+        || o[0] == 0
+        || o[0] >= 240 // reserved 240/4
+        || (o[0] == 100 && (o[1] & 0xc0) == 64) // carrier NAT 100.64/10
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24
+        || (o[0] == 198 && (o[1] & 0xfe) == 18)) // benchmark 198.18/15
+}
+
+/// The URL without query or credentials, for logs.
+pub fn redact(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut u) => {
+            u.set_query(None);
+            u.set_fragment(None);
+            let _ = u.set_username("");
+            let _ = u.set_password(None);
+            u.to_string()
+        }
+        Err(_) => "<invalid url>".to_string(),
+    }
+}
+
+/// `v1=<hex hmac>` over `"<timestamp>.<body>"`.
+pub fn sign(secret: &str, timestamp: u64, body: &[u8]) -> String {
     let mut mac =
         Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac accepts any key length");
+    mac.update(timestamp.to_string().as_bytes());
+    mac.update(b".");
     mac.update(body);
-    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    format!("v1={}", hex::encode(mac.finalize().into_bytes()))
 }
 
 /// A client pinned to the target's vetted addresses, following no redirects.
@@ -264,10 +349,11 @@ pub async fn deliver(
         ),
     };
     let url = target.url.clone();
+    let shown = redact(&url);
     let client = match client_for(&target, state.config.api_timeout) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(%url, error = %e, "webhook client could not be built");
+            tracing::error!(url = %shown, error = %e, "webhook client could not be built");
             count(&state, "gave_up");
             return;
         }
@@ -275,33 +361,34 @@ pub async fn deliver(
 
     let attempts = state.config.webhook_attempts.max(1);
     for attempt in 1..=attempts {
+        let timestamp = unix_now();
         let mut req = client
             .request(hook.method.clone(), &url)
             .header("content-type", &content_type)
             .header(EVENT, event)
             .header("x-request-id", &request_id)
-            .header(TIMESTAMP, unix_now().to_string())
+            .header(TIMESTAMP, timestamp.to_string())
             .header("x-rusticdoc-attempt", attempt.to_string());
         if let Some(d) = &disposition {
             req = req.header("content-disposition", d);
         }
         if let Some(secret) = &state.config.webhook_secret {
-            req = req.header(SIGNATURE, sign(secret, &body));
+            req = req.header(SIGNATURE, sign(secret, timestamp, &body));
         }
         for (k, v) in hook.extra_headers.iter() {
             req = req.header(k, v);
         }
         match req.body(body.clone()).send().await {
             Ok(res) if res.status().is_success() => {
-                tracing::info!(%url, event, attempt, status = res.status().as_u16(), "webhook delivered");
+                tracing::info!(url = %shown, event, attempt, status = res.status().as_u16(), "webhook delivered");
                 count(&state, "delivered");
                 return;
             }
             Ok(res) => {
-                tracing::warn!(%url, event, attempt, status = res.status().as_u16(), "webhook rejected");
+                tracing::warn!(url = %shown, event, attempt, status = res.status().as_u16(), "webhook rejected");
             }
             Err(e) => {
-                tracing::warn!(%url, event, attempt, error = %e, "webhook failed");
+                tracing::warn!(url = %shown, event, attempt, error = %e, "webhook failed");
             }
         }
         count(&state, "failed");
@@ -309,7 +396,7 @@ pub async fn deliver(
             tokio::time::sleep(Duration::from_secs(3u64.pow(attempt - 1))).await;
         }
     }
-    tracing::error!(%url, event, attempts, "webhook gave up");
+    tracing::error!(url = %shown, event, attempts, "webhook gave up");
     count(&state, "gave_up");
 }
 
@@ -349,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn private_ranges_include_cgnat_mapped_and_ula() {
+    fn non_global_ranges_are_refused() {
         for p in [
             "127.0.0.1",
             "10.1.2.3",
@@ -360,16 +447,25 @@ mod tests {
             "100.64.0.1",
             "100.127.255.254",
             "192.0.0.8",
+            "192.0.2.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "240.0.0.1",
             "::1",
             "::",
             "fc00::1",
             "fd12::1",
             "fe80::1",
+            "fec0::1",
+            "ff02::1",
+            "2001:db8::1",
             "::ffff:127.0.0.1",
             "::ffff:10.0.0.1",
+            "::10.0.0.1",
+            "64:ff9b::7f00:1",
             "2002:0a00:0001::",
         ] {
-            assert!(is_private_ip(ip(p)), "{p} should be private");
+            assert!(!is_global_ip(ip(p)), "{p} should not be global");
         }
         for p in [
             "8.8.8.8",
@@ -377,8 +473,9 @@ mod tests {
             "172.32.0.1",
             "2606:4700::1111",
             "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
         ] {
-            assert!(!is_private_ip(ip(p)), "{p} should be public");
+            assert!(is_global_ip(ip(p)), "{p} should be global");
         }
     }
 
@@ -395,6 +492,11 @@ mod tests {
         assert!(resolve("http://LOCALHOST./x", false).await.is_err());
         assert!(resolve("http://api.internal/x", false).await.is_err());
         assert!(resolve("ftp://hooks.example.com/x", false).await.is_err());
+        assert!(
+            resolve("http://user:pw@hooks.example.com/x", true)
+                .await
+                .is_err()
+        );
         let t = resolve("http://127.0.0.1:9000/x", true).await.unwrap();
         assert_eq!(
             t.addrs,
@@ -404,30 +506,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_name_that_resolves_to_loopback_is_refused() {
-        // `localhost` is caught by name; this resolves it as a name would be.
-        let addrs: Vec<SocketAddr> = tokio::net::lookup_host(("localhost", 80))
+    async fn the_url_is_rebuilt_from_the_normalised_host() {
+        let t = resolve("http://LocalHost.:9000/path?x=1", true)
             .await
-            .map(|a| a.collect())
-            .unwrap_or_default();
-        for a in addrs {
-            assert!(
-                is_private_ip(a.ip()),
-                "{a} resolved from localhost is private"
-            );
-        }
+            .unwrap();
+        assert_eq!(t.host, "localhost");
+        assert_eq!(t.url, "http://localhost:9000/path?x=1");
+        let t = resolve("http://[::1]:9000/p", true).await.unwrap();
+        assert_eq!(t.host, "::1");
+        assert_eq!(t.url, "http://[::1]:9000/p");
     }
 
     #[test]
-    fn signature_is_deterministic_and_prefixed() {
-        let s = sign("secret", b"body");
-        assert!(s.starts_with("sha256="));
-        assert_eq!(s, sign("secret", b"body"));
-        assert_ne!(s, sign("other", b"body"));
+    fn signature_covers_timestamp_and_body() {
+        let s = sign("secret", 1700000000, b"body");
+        assert!(s.starts_with("v1="));
+        assert_eq!(s, sign("secret", 1700000000, b"body"));
+        assert_ne!(s, sign("secret", 1700000001, b"body"));
+        assert_ne!(s, sign("other", 1700000000, b"body"));
+    }
+
+    #[test]
+    fn logs_do_not_carry_query_or_credentials() {
+        assert_eq!(
+            redact("https://u:p@hooks.example.com/done?token=abc#f"),
+            "https://hooks.example.com/done"
+        );
     }
 
     #[tokio::test]
-    async fn headers_parse() {
+    async fn headers_parse_and_reserved_ones_are_refused() {
         let mut h = HeaderMap::new();
         h.insert(
             "gotenberg-webhook-url",
@@ -447,5 +555,13 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        for bad in [
+            r#"{"Host":"evil"}"#,
+            r#"{"X-Rusticdoc-Signature":"v1=0"}"#,
+            r#"{"Content-Length":"1"}"#,
+        ] {
+            h.insert("gotenberg-webhook-extra-http-headers", bad.parse().unwrap());
+            assert!(Webhook::from_headers(&h, true).await.is_err(), "{bad}");
+        }
     }
 }

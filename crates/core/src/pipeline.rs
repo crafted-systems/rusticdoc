@@ -57,11 +57,22 @@ impl Engines {
 pub struct Pipeline {
     engines: Arc<Engines>,
     timeout: Duration,
+    /// Largest rendered template accepted, in bytes.
+    max_output: usize,
 }
 
 impl Pipeline {
     pub fn new(engines: Arc<Engines>, timeout: Duration) -> Self {
-        Self { engines, timeout }
+        Self {
+            engines,
+            timeout,
+            max_output: 256 * 1024 * 1024,
+        }
+    }
+
+    pub fn with_max_output(mut self, bytes: usize) -> Self {
+        self.max_output = bytes;
+        self
     }
 
     pub fn engines(&self) -> &Engines {
@@ -77,7 +88,23 @@ impl Pipeline {
         let has_data = !is_empty_object(&req.data);
         let ext = req.template.extension();
         let mut current = if req.templating && (has_data || template::is_text_template(&ext)) {
-            template::render(&req.template, &req.data, &req.ctx)?
+            // Rendering is CPU work: it runs off the async threads so the
+            // caller's timeout still fires, and its size is capped.
+            let (t, d, c) = (req.template.clone(), req.data.clone(), req.ctx.clone());
+            let rendered = tokio::task::spawn_blocking(move || template::render(&t, &d, &c))
+                .await
+                .map_err(|e| Error::Engine {
+                    engine: "template",
+                    message: e.to_string(),
+                })??;
+            if rendered.bytes.len() > self.max_output {
+                return Err(Error::InvalidRequest(format!(
+                    "rendered template is {} bytes, over the {} byte limit",
+                    rendered.bytes.len(),
+                    self.max_output
+                )));
+            }
+            rendered
         } else {
             req.template.clone()
         };
@@ -179,6 +206,31 @@ mod tests {
         assert_eq!(out.name, "greeting.txt");
         assert_eq!(&out.bytes[..], b"Hi Ada");
         assert_eq!(out.timings[0].0, "template");
+    }
+
+    #[tokio::test]
+    async fn runaway_templates_are_stopped() {
+        // A loop with 10^9 iterations exhausts the fuel budget.
+        let mut req = RenderRequest::new(Document::new(
+            "big.txt",
+            b"{% for i in range(1000000000) %}x{% endfor %}".to_vec(),
+        ));
+        req.data = json!({"a": 1});
+        let err = pipeline().run(req).await.unwrap_err();
+        assert!(matches!(err, Error::Template(_)), "{err}");
+
+        // Output over the cap is refused even when the fuel allows it.
+        let mut req = RenderRequest::new(Document::new(
+            "wide.txt",
+            b"{% for i in range(2000) %}0123456789{% endfor %}".to_vec(),
+        ));
+        req.data = json!({"a": 1});
+        let err = pipeline()
+            .with_max_output(10_000)
+            .run(req)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
     }
 
     #[tokio::test]

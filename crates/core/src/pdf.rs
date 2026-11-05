@@ -66,12 +66,13 @@ impl Qpdf {
         let input = dir.path().join("in.pdf");
         let out = dir.path().join("out.pdf");
         tokio::fs::write(&input, &doc.bytes).await?;
+        // Passwords go through qpdf's argument file, not the command line,
+        // so they never show in the process list.
+        let argfile = dir.path().join("args");
+        let contents = format!("--encrypt\n{user_password}\n{owner_password}\n256\n--\n");
+        write_private(&argfile, contents.as_bytes()).await?;
         let args = vec![
-            "--encrypt".to_string(),
-            user_password.to_string(),
-            owner_password.to_string(),
-            "256".to_string(),
-            "--".to_string(),
+            format!("@{}", argfile.display()),
             input.display().to_string(),
             out.display().to_string(),
         ];
@@ -94,6 +95,17 @@ impl Qpdf {
             "metadata writing arrives with the qpdf-metadata engine port in phase 0".into(),
         ))
     }
+}
+
+/// Writes a file readable by this user only.
+async fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).await?;
+    tokio::io::AsyncWriteExt::write_all(&mut file, bytes).await?;
+    Ok(())
 }
 
 fn require_pdf(doc: &Document) -> Result<()> {

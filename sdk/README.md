@@ -33,4 +33,4 @@ const pdf = await res.arrayBuffer();
 
 ## Webhooks
 
-Add `X-Rusticdoc-Webhook-Url` (and optionally `X-Rusticdoc-Webhook-Error-Url`) to any request to get `204` at once and the result delivered by HTTP. When `RUSTICDOC_WEBHOOK_SECRET` is set, each delivery carries `X-Rusticdoc-Signature: sha256=<hex HMAC of the body>`; verify it before trusting the payload. Deliveries retry three times with backoff. The SDKs will include a signature verifier.
+Add `X-Rusticdoc-Webhook-Url` (and optionally `X-Rusticdoc-Webhook-Error-Url`) to any request to get `204` at once and the result delivered by HTTP. When `RUSTICDOC_WEBHOOK_SECRET` is set, each delivery carries `X-Rusticdoc-Timestamp` and `X-Rusticdoc-Signature: v1=<hex HMAC-SHA256 of "<timestamp>.<body>">`. Verify the signature with a constant-time comparison and reject timestamps older than your freshness window, which stops replays. Deliveries retry three times with backoff. The SDKs will include a signature verifier.

@@ -73,6 +73,8 @@ pub fn render(
 pub fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
+    // A budget of evaluation steps, so a template cannot loop for ever.
+    env.set_fuel(Some(5_000_000));
     env.add_filter("currency", currency);
     env
 }

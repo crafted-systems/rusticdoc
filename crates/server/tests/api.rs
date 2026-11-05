@@ -325,7 +325,17 @@ async fn webhook_delivers_the_result_signed() {
     );
     assert_eq!(
         headers.get(webhook::SIGNATURE).unwrap().to_str().unwrap(),
-        webhook::sign("s3cret", &body)
+        webhook::sign(
+            "s3cret",
+            headers
+                .get(webhook::TIMESTAMP)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap(),
+            &body
+        )
     );
 }
 
