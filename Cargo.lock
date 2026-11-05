@@ -2298,6 +2298,7 @@ dependencies = [
  "prometheus-client",
  "reqwest",
  "rusticdoc-core",
+ "rusticdoc-template",
  "serde",
  "serde_json",
  "sha2",

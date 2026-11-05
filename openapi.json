@@ -1985,19 +1985,27 @@
           "ok",
           "template_hash",
           "format",
-          "engine"
+          "engine",
+          "diagnostics"
         ],
         "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every problem found: `severity`, `message`, and a `location` with\n`part`, `place` and `snippet` where known."
+          },
           "engine": {
             "type": "string",
-            "description": "The engine that would handle it."
+            "description": "The engine that would handle it: `office`, `text` or `none`."
           },
           "error": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Present when `ok` is false."
+            "description": "The first error, when `ok` is false."
           },
           "format": {
             "type": "string"
