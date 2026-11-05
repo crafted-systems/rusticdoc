@@ -1645,6 +1645,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "hex",
+ "libc",
  "lopdf",
  "minijinja",
  "rusticdoc-template",
