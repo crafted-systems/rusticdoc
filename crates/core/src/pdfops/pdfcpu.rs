@@ -210,7 +210,7 @@ impl PdfEngine for PdfcpuEngine {
         ENGINE
     }
 
-    /// `pdfcpu merge --bookmarks=false out.pdf a.pdf b.pdf`
+    /// `pdfcpu merge --bookmark-mode preserve out.pdf a.pdf b.pdf`
     async fn merge(&self, docs: &[Document], timeout: Duration) -> Result<Document> {
         if docs.is_empty() {
             return Err(Error::InvalidRequest("merge needs at least one PDF".into()));
@@ -219,7 +219,8 @@ impl PdfEngine for PdfcpuEngine {
         let out = dir.path().join("merged.pdf");
         let mut args: Vec<String> = vec![
             "merge".into(),
-            "--bookmarks=false".into(),
+            "--bookmark-mode".into(),
+            "preserve".into(),
             out.display().to_string(),
         ];
         for (i, doc) in docs.iter().enumerate() {
