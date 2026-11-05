@@ -6,14 +6,62 @@
 //! order fixed in code rather than configuration.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::job::Document;
+
+mod draw;
+pub mod fixtures;
+pub mod lopdf;
+pub mod pages;
+pub mod pdfcpu;
+pub mod qpdf;
+#[cfg(test)]
+mod tests;
+pub mod xmp;
+
+pub use lopdf::LopdfEngine;
+pub use pdfcpu::PdfcpuEngine;
+pub use qpdf::QpdfEngine;
+
+/// When blocking work must stop. `tokio::time::timeout` cannot interrupt
+/// CPU work, so every loop over pages, outline items, name-tree nodes or
+/// split parts checks the deadline and gives up with [`Error::Timeout`].
+#[derive(Debug, Clone, Copy)]
+pub struct Deadline {
+    at: Instant,
+    timeout: Duration,
+}
+
+impl Deadline {
+    pub fn new(timeout: Duration) -> Self {
+        let at = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(|| Instant::now() + Duration::from_secs(86_400));
+        Self { at, timeout }
+    }
+
+    /// `Ok` while there is time left.
+    pub fn check(&self) -> Result<()> {
+        if Instant::now() >= self.at {
+            Err(Error::Timeout(self.timeout))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The number of pages, read with lopdf. The process engines use it to
+/// validate page selections before spawning anything.
+pub fn page_count(doc: &Document) -> Result<u32> {
+    Ok(lopdf::load(doc)?.get_pages().len() as u32)
+}
 
 /// Document metadata as the API exposes it: Info dictionary keys such as
 /// `Title`, `Author`, `Subject`, `Keywords`, `Creator`, `Producer`,
@@ -335,6 +383,19 @@ macro_rules! fallback {
 impl MultiEngine {
     pub fn new(engines: Vec<Arc<dyn PdfEngine>>) -> Self {
         Self { engines }
+    }
+
+    /// The standard order: lopdf first, then qpdf and pdfcpu when their
+    /// binaries are configured.
+    pub fn standard(qpdf_bin: Option<PathBuf>, pdfcpu_bin: Option<PathBuf>) -> Self {
+        let mut engines: Vec<Arc<dyn PdfEngine>> = vec![Arc::new(LopdfEngine::default())];
+        if let Some(bin) = qpdf_bin {
+            engines.push(Arc::new(QpdfEngine::new(bin)));
+        }
+        if let Some(bin) = pdfcpu_bin {
+            engines.push(Arc::new(PdfcpuEngine::new(bin)));
+        }
+        Self::new(engines)
     }
 
     pub fn names(&self) -> Vec<&'static str> {

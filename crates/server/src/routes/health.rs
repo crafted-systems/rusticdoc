@@ -45,7 +45,7 @@ pub async fn health(State(state): State<AppState>) -> Json<Health> {
         uptime_seconds: state.started.elapsed().as_secs(),
         engines: EngineStatus {
             libreoffice: state.engines.libreoffice.is_some(),
-            qpdf: state.engines.qpdf.is_some(),
+            qpdf: state.engines.pdf.names().contains(&"qpdf"),
         },
         details: serde_json::json!({
             "libreoffice": {
