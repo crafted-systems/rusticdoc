@@ -1,0 +1,205 @@
+//! One warm LibreOffice: a `python3 unobridge.py` child that owns a
+//! `soffice` and speaks JSON lines on its stdin and stdout.
+
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+
+use crate::error::{Error, Result};
+
+/// What a worker needs to start.
+#[derive(Debug, Clone)]
+pub(super) struct Launch {
+    pub python: PathBuf,
+    pub script: PathBuf,
+    pub soffice: PathBuf,
+    /// An initialised profile to copy, or `None` to start from an empty one.
+    pub seed_profile: Option<PathBuf>,
+}
+
+/// One conversion request, as the bridge reads it.
+#[derive(Debug, Serialize)]
+pub(super) struct Request<'a> {
+    pub id: u64,
+    pub input: &'a Path,
+    pub output: &'a Path,
+    /// An export filter name, or a bare target extension the bridge
+    /// resolves against the application that opened the document.
+    pub filter: &'a str,
+    pub filter_options: &'a Map<String, Value>,
+    pub password: Option<&'a str>,
+    pub landscape: bool,
+}
+
+/// The bridge's answer to a request.
+#[derive(Debug, Deserialize)]
+pub(super) struct Response {
+    pub id: u64,
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub pages: Option<u64>,
+    #[serde(default)]
+    pub ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Ready {
+    ready: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+pub(super) struct Worker {
+    pub id: u64,
+    child: Child,
+    stdin: ChildStdin,
+    stdout: Lines<BufReader<ChildStdout>>,
+    /// Profile and job files; removed with the worker.
+    dir: tempfile::TempDir,
+    /// Conversions served so far.
+    pub jobs: u64,
+    pub last_used: Instant,
+    next_request: u64,
+}
+
+impl Worker {
+    /// Starts the bridge and waits for its ready line.
+    pub async fn start(id: u64, launch: &Launch, start_timeout: Duration) -> Result<Self> {
+        let dir = tempfile::Builder::new()
+            .prefix("rusticdoc-worker-")
+            .tempdir()?;
+        let profile = dir.path().join("profile");
+        match &launch.seed_profile {
+            Some(seed) => {
+                let (from, to) = (seed.clone(), profile.clone());
+                tokio::task::spawn_blocking(move || super::copy_dir(&from, &to))
+                    .await
+                    .map_err(|e| engine(format!("profile copy: {e}")))??;
+            }
+            None => tokio::fs::create_dir(&profile).await?,
+        }
+        let pipe = format!(
+            "rusticdoc-{}-{id}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let mut cmd = Command::new(&launch.python);
+        cmd.arg(&launch.script)
+            .arg("--socket-path")
+            .arg(&pipe)
+            .arg("--profile")
+            .arg(&profile)
+            .arg("--soffice")
+            .arg(&launch.soffice)
+            .env("HOME", dir.path())
+            .current_dir(dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().map_err(|e| {
+            engine(format!(
+                "cannot start the bridge {}: {e}",
+                launch.python.display()
+            ))
+        })?;
+        let stdin = child.stdin.take().ok_or_else(|| engine("bridge stdin"))?;
+        let stdout = child.stdout.take().ok_or_else(|| engine("bridge stdout"))?;
+        let mut worker = Self {
+            id,
+            child,
+            stdin,
+            stdout: BufReader::new(stdout).lines(),
+            dir,
+            jobs: 0,
+            last_used: Instant::now(),
+            next_request: 1,
+        };
+        let line = match tokio::time::timeout(start_timeout, worker.stdout.next_line()).await {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) | Ok(Err(_)) => {
+                worker.kill().await;
+                return Err(engine("the bridge exited before it was ready"));
+            }
+            Err(_) => {
+                worker.kill().await;
+                return Err(engine(format!(
+                    "LibreOffice did not start within {start_timeout:?}"
+                )));
+            }
+        };
+        let ready: Ready = serde_json::from_str(&line)
+            .map_err(|e| engine(format!("unexpected bridge greeting '{line}': {e}")))?;
+        if !ready.ready {
+            worker.kill().await;
+            return Err(engine(format!(
+                "LibreOffice did not start: {}",
+                ready.error.unwrap_or_default()
+            )));
+        }
+        Ok(worker)
+    }
+
+    /// Where this worker's job files go.
+    pub fn dir(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// False once the bridge process has exited.
+    pub fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    pub fn next_request_id(&mut self) -> u64 {
+        let id = self.next_request;
+        self.next_request += 1;
+        id
+    }
+
+    /// Sends one request and reads its answer. An error means the bridge
+    /// is gone; a `Response` with `ok: false` means the document failed
+    /// and the worker is still usable.
+    pub async fn call(&mut self, req: &Request<'_>) -> Result<Response> {
+        let mut line = serde_json::to_vec(req).map_err(|e| engine(e.to_string()))?;
+        line.push(b'\n');
+        self.stdin
+            .write_all(&line)
+            .await
+            .map_err(|e| engine(format!("the bridge went away: {e}")))?;
+        let reply = self
+            .stdout
+            .next_line()
+            .await
+            .map_err(|e| engine(format!("the bridge went away: {e}")))?
+            .ok_or_else(|| engine("the bridge exited during the conversion"))?;
+        let resp: Response = serde_json::from_str(&reply)
+            .map_err(|e| engine(format!("unexpected bridge reply '{reply}': {e}")))?;
+        if resp.id != req.id {
+            return Err(engine(format!(
+                "bridge answered request {} instead of {}",
+                resp.id, req.id
+            )));
+        }
+        Ok(resp)
+    }
+
+    /// Kills the bridge; on Linux the kernel kills its `soffice` with it.
+    pub async fn kill(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
+    }
+}
+
+fn engine(message: impl Into<String>) -> Error {
+    Error::Engine {
+        engine: "libreoffice",
+        message: message.into(),
+    }
+}
