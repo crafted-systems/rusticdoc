@@ -1,12 +1,21 @@
 # syntax=docker/dockerfile:1
 #
-# Builds the rusticdoc service image: one static-ish Rust binary on Debian 13
-# with LibreOffice (from trixie-backports) and qpdf. No Node, Java, Python or
-# Chromium. Build from the project root:
+# Builds the rusticdoc service image: one Rust binary on Debian 13 with
+# LibreOffice (from trixie-backports) and its Python UNO bridge, qpdf and
+# pdfcpu. No Node, Java or Chromium. Build from the project root:
 #   docker build -t rusticdoc .
 
 ARG RUST_IMAGE=rust:1-slim-trixie
 ARG DEBIAN_IMAGE=debian:13-slim
+ARG GOLANG_IMAGE=golang:1-trixie
+
+# ----------------------------------------------
+# pdfcpu, a static Go binary, verified through the Go checksum database.
+# ----------------------------------------------
+FROM $GOLANG_IMAGE AS pdfcpu
+ARG PDFCPU_VERSION=v0.16.4
+RUN CGO_ENABLED=0 GOBIN=/out go install -ldflags "-s -w -X 'main.version=$PDFCPU_VERSION' -X 'github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model.VersionStr=$PDFCPU_VERSION'" \
+    github.com/pdfcpu/pdfcpu/cmd/pdfcpu@$PDFCPU_VERSION
 
 # ----------------------------------------------
 # Build
@@ -51,12 +60,12 @@ RUN echo "apt snapshot: $APT_SNAPSHOT" \
     && apt-get update -qq \
     && apt-get upgrade -yqq \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        ca-certificates tini qpdf fontconfig \
+        ca-certificates tini qpdf fontconfig python3 \
         fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fonts-liberation2 \
         fonts-dejavu fonts-noto-cjk fonts-noto-color-emoji fonts-noto-core \
         hyphen-en-us hyphen-en-gb hyphen-de hyphen-fr hyphen-es hyphen-it hyphen-nl hyphen-pt-pt hyphen-pt-br \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -t trixie-backports \
-        libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw libreoffice-math \
+        libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw libreoffice-math python3-uno \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     # Arbitrary user IDs, as on OpenShift: group 0 owns the home directory.
     && usermod -aG root rusticdoc \
@@ -64,11 +73,13 @@ RUN echo "apt snapshot: $APT_SNAPSHOT" \
     && chmod -R g=u /home/rusticdoc /fonts
 
 COPY deploy/fonts.conf /etc/fonts/conf.d/100-rusticdoc.conf
+COPY --from=pdfcpu /out/pdfcpu /usr/bin/pdfcpu
 COPY --from=build /rusticdoc /usr/bin/rusticdoc
 
 ENV RUSTICDOC_BIND=0.0.0.0:3000 \
     RUSTICDOC_LIBREOFFICE_BIN=/usr/lib/libreoffice/program/soffice.bin \
     RUSTICDOC_QPDF_BIN=/usr/bin/qpdf \
+    RUSTICDOC_PDFCPU_BIN=/usr/bin/pdfcpu \
     RUSTICDOC_FONTS_DIR=/fonts \
     RUSTICDOC_LOG_FORMAT=json
 

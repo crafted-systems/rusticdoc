@@ -17,6 +17,8 @@ pub struct Config {
     pub libreoffice_bin: Option<PathBuf>,
     /// Path to `qpdf`. `None` disables the qpdf engine.
     pub qpdf_bin: Option<PathBuf>,
+    /// Path to `pdfcpu`. `None` disables the pdfcpu engine.
+    pub pdfcpu_bin: Option<PathBuf>,
     /// Directory of extra fonts, mounted at runtime.
     pub fonts_dir: PathBuf,
     /// Accepted API keys for `Authorization: Bearer` or `X-Api-Key`. Empty
@@ -54,6 +56,11 @@ impl Default for Config {
                 "/usr/bin/qpdf",
                 "/opt/homebrew/bin/qpdf",
                 "/usr/local/bin/qpdf",
+            ]),
+            pdfcpu_bin: first_existing(&[
+                "/usr/bin/pdfcpu",
+                "/opt/homebrew/bin/pdfcpu",
+                "/usr/local/bin/pdfcpu",
             ]),
             fonts_dir: PathBuf::from("/fonts"),
             api_keys: Vec::new(),
@@ -99,6 +106,13 @@ impl Config {
         }
         if let Some(v) = get("QPDF_BIN") {
             c.qpdf_bin = if v == "none" {
+                None
+            } else {
+                Some(PathBuf::from(v))
+            };
+        }
+        if let Some(v) = get("PDFCPU_BIN") {
+            c.pdfcpu_bin = if v == "none" {
                 None
             } else {
                 Some(PathBuf::from(v))

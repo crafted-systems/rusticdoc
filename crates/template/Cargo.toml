@@ -1,0 +1,22 @@
+[package]
+name = "rusticdoc-template"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hex = "0.4.3"
+minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
+quick-xml = "0.41.0"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.0"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+zip = { version = "7.3.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
