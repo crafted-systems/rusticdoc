@@ -305,7 +305,7 @@ pub fn sign(secret: &str, timestamp: u64, body: &[u8]) -> String {
 }
 
 /// A client pinned to the target's vetted addresses, following no redirects.
-fn client_for(target: &Target, timeout: Duration) -> reqwest::Result<reqwest::Client> {
+pub fn client_for(target: &Target, timeout: Duration) -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(format!("rusticdoc/{}", rusticdoc_core::VERSION))
         .timeout(timeout)

@@ -36,6 +36,10 @@ pub fn router() -> Router<AppState> {
 pub fn public() -> Router<AppState> {
     Router::new()
         .route("/health", get(health::health))
+        .route(
+            "/favicon.ico",
+            get(|| async { axum::http::StatusCode::NO_CONTENT }),
+        )
         .route("/ready", get(health::ready))
         .route("/version", get(health::version))
         .route("/metrics", get(health::metrics))

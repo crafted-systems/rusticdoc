@@ -71,7 +71,7 @@ pub async fn render(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let template = match form
         .files
         .iter()
@@ -145,7 +145,7 @@ pub async fn batch(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let template = match form
         .files
         .iter()
@@ -374,10 +374,10 @@ pub struct Validation {
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn validate(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Json<Validation>> {
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let template = form.require_file("a template file")?;
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;

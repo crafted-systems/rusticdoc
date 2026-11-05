@@ -62,10 +62,10 @@ pub struct OverlayForm {
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn fields(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Json<Vec<pdfform::FieldInfo>>> {
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let file = form.require_file("one PDF")?;
     rusticdoc_core::pdfops::require_pdf(&file)?;
     let fields = tokio::task::spawn_blocking(move || pdfform::fields(&file.bytes))
@@ -98,7 +98,7 @@ pub async fn fill(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let file = form.require_file("one PDF")?;
     rusticdoc_core::pdfops::require_pdf(&file)?;
     let mut data = form.json("data")?;
@@ -161,7 +161,7 @@ pub async fn overlay(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     if form.files.len() != 2 {
         return Err(ApiError::bad_request(
             "overlay needs exactly two PDFs: the base, then the overlay",

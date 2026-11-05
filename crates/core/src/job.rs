@@ -124,6 +124,8 @@ pub enum PdfaLevel {
     A2b,
     #[serde(rename = "PDF/A-3b")]
     A3b,
+    #[serde(rename = "PDF/A-4")]
+    A4,
 }
 
 impl PdfaLevel {
@@ -132,6 +134,7 @@ impl PdfaLevel {
             "PDF/A-1B" | "1B" | "A-1B" => PdfaLevel::A1b,
             "PDF/A-2B" | "2B" | "A-2B" => PdfaLevel::A2b,
             "PDF/A-3B" | "3B" | "A-3B" => PdfaLevel::A3b,
+            "PDF/A-4" | "4" | "A-4" => PdfaLevel::A4,
             other => {
                 return Err(Error::InvalidRequest(format!(
                     "unknown PDF/A level '{other}'"
@@ -146,6 +149,7 @@ impl PdfaLevel {
             PdfaLevel::A1b => 1,
             PdfaLevel::A2b => 2,
             PdfaLevel::A3b => 3,
+            PdfaLevel::A4 => 4,
         }
     }
 }

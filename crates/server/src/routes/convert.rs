@@ -45,7 +45,7 @@ pub async fn convert(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     if form.files.is_empty() {
         return Err(ApiError::bad_request(
             "no file in the form; send one or more as 'files'",

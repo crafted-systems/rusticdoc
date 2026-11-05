@@ -940,9 +940,13 @@
         "required": [
           "status",
           "uptime_seconds",
-          "engines"
+          "engines",
+          "details"
         ],
         "properties": {
+          "details": {
+            "description": "Per-module status in Gotenberg's shape."
+          },
           "engines": {
             "$ref": "#/components/schemas/EngineStatus"
           },

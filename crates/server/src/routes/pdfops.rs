@@ -178,7 +178,7 @@ fn pdf_output(name: String, doc: Document, stage: &str) -> Output {
 )]
 pub async fn split(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let span = form.field("splitSpan").map(str::trim).unwrap_or("").to_string();
     let mode = match form.field("splitMode").map(str::trim).unwrap_or("pages") {
@@ -224,7 +224,7 @@ pub async fn split(State(state): State<AppState>, headers: HeaderMap, multipart:
 )]
 pub async fn flatten(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let name = output_name(&form, &doc, "");
     let st = state.clone();
@@ -241,7 +241,7 @@ pub async fn flatten(State(state): State<AppState>, headers: HeaderMap, multipar
 )]
 pub async fn rotate(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let rotation = Rotation::parse(form.field("rotation").unwrap_or("90"))?;
     let pages = form.field("pages").unwrap_or("").trim().to_string();
@@ -262,7 +262,7 @@ pub async fn rotate(State(state): State<AppState>, headers: HeaderMap, multipart
 )]
 pub async fn optimize(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let name = output_name(&form, &doc, "");
     let st = state.clone();
@@ -281,7 +281,7 @@ pub async fn metadata_read(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Json<BTreeMap<String, Metadata>>> {
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     if form.files.is_empty() {
         return Err(ApiError::bad_request("send at least one PDF"));
     }
@@ -303,7 +303,7 @@ pub async fn metadata_read(
 )]
 pub async fn metadata_write(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let metadata: Metadata = match form.json("metadata")? {
         serde_json::Value::Object(map) if !map.is_empty() => map.into_iter().collect(),
@@ -328,7 +328,7 @@ pub async fn bookmarks_read(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Json<BTreeMap<String, Vec<Bookmark>>>> {
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     if form.files.is_empty() {
         return Err(ApiError::bad_request("send at least one PDF"));
     }
@@ -350,7 +350,7 @@ pub async fn bookmarks_read(
 )]
 pub async fn bookmarks_write(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let bookmarks: Vec<Bookmark> = serde_json::from_value(form.json("bookmarks")?)
         .map_err(|e| ApiError::bad_request(format!("'bookmarks' must be an array of {{title, page, children}}: {e}")))?;
@@ -371,7 +371,7 @@ pub async fn bookmarks_write(State(state): State<AppState>, headers: HeaderMap, 
 )]
 pub async fn embed(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     if form.files.is_empty() {
         return Err(ApiError::bad_request("send the PDF first, then at least one file to attach"));
@@ -437,7 +437,7 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
 )]
 pub async fn watermark(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let overlay = overlay_from(&mut form)?;
     let name = output_name(&form, &doc, "");
@@ -455,7 +455,7 @@ pub async fn watermark(State(state): State<AppState>, headers: HeaderMap, multip
 )]
 pub async fn stamp(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let overlay = overlay_from(&mut form)?;
     let name = output_name(&form, &doc, "");
@@ -473,7 +473,7 @@ pub async fn stamp(State(state): State<AppState>, headers: HeaderMap, multipart:
 )]
 pub async fn facturx(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart).await?;
+    let mut form = Form::read(multipart, &state).await?;
     let (pdf_pos, xml_pos) = {
         let pdfs: Vec<usize> = form.files.iter().enumerate().filter(|(_, f)| f.extension() == "pdf").map(|(i, _)| i).collect();
         let xmls: Vec<usize> = form.files.iter().enumerate().filter(|(_, f)| f.extension() == "xml").map(|(i, _)| i).collect();
