@@ -299,8 +299,10 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<String, String> {
             if c.child("f").is_none() {
                 continue;
             }
+            // Without a cached value the cell type must not claim one.
             c.children
                 .retain(|n| !matches!(n, Node::Elem(e) if e.name == "v"));
+            c.remove_attr("t");
             let colnum = col_to_num(&col);
             let Some(f) = c.child_mut("f") else { continue };
             let mut text = f.text_content();
