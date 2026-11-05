@@ -9,7 +9,6 @@ pub mod config;
 pub mod convert;
 pub mod error;
 pub mod job;
-pub mod pdf;
 pub mod pdfform;
 pub mod pdfops;
 pub mod pipeline;
