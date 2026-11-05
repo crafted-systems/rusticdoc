@@ -4,10 +4,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
-use crate::convert::LibreOffice;
+use crate::convert::{ConvertOptions, LibreOffice};
 use crate::error::{Error, Result};
+use crate::job;
 use crate::job::{Document, Format, Output, RenderRequest, Step};
-use crate::pdfops::{self, MultiEngine};
+use crate::pdfops::MultiEngine;
 use crate::template;
 
 /// The engines the service found at start. Absent engines make their steps
@@ -77,13 +78,18 @@ impl Pipeline {
 
     /// Runs the request. The caller applies the overall time limit; each
     /// engine call gets the configured timeout on its own.
+    ///
+    /// Documents flow as a list: `split` fans one out into several, and
+    /// every later step runs on each; `merge` collapses them again. Several
+    /// documents at the end come back as a ZIP.
     pub async fn run(&self, req: RenderRequest) -> Result<Output> {
         let started = Instant::now();
         let mut timings: Vec<(String, u128)> = Vec::new();
+        req.convert_options.validate()?;
 
         let has_data = !is_empty_object(&req.data);
         let ext = req.template.extension();
-        let mut current = if req.templating && (has_data || template::is_text_template(&ext)) {
+        let first = if req.templating && (has_data || template::is_text_template(&ext)) {
             // Rendering is CPU work: it runs off the async threads so the
             // caller's timeout still fires, and its size is capped.
             let (t, d, c) = (req.template.clone(), req.data.clone(), req.ctx.clone());
@@ -106,66 +112,124 @@ impl Pipeline {
         };
         timings.push(("template".into(), started.elapsed().as_millis()));
 
+        let mut current: Vec<Document> = vec![first];
+        let mut extra: Vec<Document> = req.extra.clone();
+        let timeout = self.timeout;
         for step in &req.steps {
             let t = Instant::now();
             current = match step {
-                Step::Convert { to } => {
-                    self.engines
-                        .libreoffice()?
-                        .convert(&current, *to, None, self.timeout)
-                        .await?
-                }
-                Step::Pdfa { level } => {
-                    self.engines
-                        .libreoffice()?
-                        .convert(&current, Format::Pdf, Some(*level), self.timeout)
-                        .await?
-                }
-                Step::Metadata { fields } => {
-                    let metadata: pdfops::Metadata = fields
-                        .iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect();
-                    self.engines
-                        .pdf
-                        .write_metadata(&current, &metadata, self.timeout)
-                        .await?
-                }
-                Step::Encrypt {
-                    user_password,
-                    owner_password,
-                } => {
-                    self.engines
-                        .pdf
-                        .encrypt(&current, user_password, owner_password, self.timeout)
-                        .await?
-                }
                 Step::Merge => {
-                    let mut docs = Vec::with_capacity(1 + req.extra.len());
-                    docs.push(current.clone());
-                    docs.extend(req.extra.iter().cloned());
-                    self.engines.pdf.merge(&docs, self.timeout).await?
+                    let mut docs = std::mem::take(&mut current);
+                    docs.append(&mut extra);
+                    if docs.len() == 1 && docs[0].extension() == "pdf" {
+                        docs
+                    } else {
+                        vec![self.engines.pdf.merge(&docs, timeout).await?]
+                    }
+                }
+                Step::Split { mode } => {
+                    let mut out = Vec::new();
+                    for doc in &current {
+                        out.extend(self.engines.pdf.split(doc, mode, timeout).await?);
+                    }
+                    out
+                }
+                _ => {
+                    let mut out = Vec::with_capacity(current.len());
+                    for doc in &current {
+                        out.push(self.one(step, doc, &req.convert_options).await?);
+                    }
+                    out
                 }
             };
             timings.push((step.name().into(), t.elapsed().as_millis()));
         }
 
-        let name = match &req.output_name {
-            Some(stem) => format!("{stem}.{}", current.extension()),
-            None => current.name.clone(),
+        let stem = req.output_name.clone().unwrap_or_else(|| {
+            std::path::Path::new(&req.template.name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("document")
+                .to_string()
+        });
+        let result = match current.len() {
+            0 => {
+                return Err(Error::Engine {
+                    engine: "pipeline",
+                    message: "no document left".into(),
+                });
+            }
+            1 => {
+                let doc = current.remove(0);
+                Document::new(format!("{stem}.{}", doc.extension()), doc.bytes)
+            }
+            _ => {
+                let parts: Vec<Document> = current
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        Document::new(format!("{stem}_{}.{}", i + 1, d.extension()), d.bytes)
+                    })
+                    .collect();
+                job::zip_documents(&stem, &parts)?
+            }
         };
-        let content_type = current.content_type();
         tracing::info!(
-            output = %name,
+            output = %result.name,
             total_ms = started.elapsed().as_millis(),
             ?timings,
             "pipeline finished"
         );
         Ok(Output {
-            name,
-            content_type,
-            bytes: current.bytes,
+            name: result.name.clone(),
+            content_type: result.content_type(),
+            bytes: result.bytes,
             timings,
+        })
+    }
+
+    /// One document through one step; `Merge` and `Split` are handled by
+    /// the caller because they change the number of documents.
+    async fn one(&self, step: &Step, doc: &Document, options: &ConvertOptions) -> Result<Document> {
+        let t = self.timeout;
+        let pdf = &self.engines.pdf;
+        Ok(match step {
+            Step::Convert { to } => {
+                self.engines
+                    .libreoffice()?
+                    .convert_with(doc, *to, options, t)
+                    .await?
+            }
+            Step::Pdfa { level } => {
+                let mut o = options.clone();
+                o.pdfa = Some(*level);
+                self.engines
+                    .libreoffice()?
+                    .convert_with(doc, Format::Pdf, &o, t)
+                    .await?
+            }
+            Step::Pdfua => {
+                let mut o = options.clone();
+                o.pdfua = true;
+                self.engines
+                    .libreoffice()?
+                    .convert_with(doc, Format::Pdf, &o, t)
+                    .await?
+            }
+            Step::Watermark { overlay } => pdf.watermark(doc, overlay, t).await?,
+            Step::Stamp { overlay } => pdf.stamp(doc, overlay, t).await?,
+            Step::Rotate { rotation, pages } => pdf.rotate(doc, *rotation, pages, t).await?,
+            Step::Flatten => pdf.flatten(doc, t).await?,
+            Step::Optimize => pdf.optimize(doc, t).await?,
+            Step::Bookmarks { bookmarks } => pdf.write_bookmarks(doc, bookmarks, t).await?,
+            Step::Metadata { metadata } => pdf.write_metadata(doc, metadata, t).await?,
+            Step::Embed { files } => pdf.embed(doc, files, t).await?,
+            Step::Facturx { xml, profile } => pdf.facturx(doc, xml, *profile, t).await?,
+            Step::Encrypt {
+                user_password,
+                owner_password,
+            } => pdf.encrypt(doc, user_password, owner_password, t).await?,
+            Step::Merge | Step::Split { .. } => unreachable!("handled by run"),
         })
     }
 }

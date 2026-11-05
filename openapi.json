@@ -74,7 +74,7 @@
         "tags": [
           "convert"
         ],
-        "summary": "Converts uploads with LibreOffice. Several files come back as a ZIP, or\nas one PDF with `merge=true`.",
+        "summary": "Converts uploads with LibreOffice and runs any post-processing fields.\nSeveral files come back as a ZIP, or as one PDF with `merge=true`.",
         "operationId": "convert",
         "requestBody": {
           "content": {
@@ -112,6 +112,227 @@
           },
           "503": {
             "description": "An engine is unavailable or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/bookmarks/read": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Reads the outline of each PDF sent, keyed by file name.",
+        "operationId": "bookmarks_read",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per file name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/bookmarks/write": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Replaces the outline.",
+        "operationId": "bookmarks_write",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/BookmarksWriteForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The PDF with its outline replaced",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/convert": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Gotenberg's `/forms/pdfengines/convert`: PDFs to PDF/A or PDF/UA through\nLibreOffice, with the same post-processing fields.",
+        "operationId": "convert_pdf",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The converted PDF, or a ZIP of them",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An engine is unavailable or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/embed": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Attaches files to a PDF.",
+        "operationId": "embed",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The PDF with attachments",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -177,6 +398,110 @@
           },
           "503": {
             "description": "An engine is unavailable or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/factur-x": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Embeds Factur-X invoice XML and marks the PDF for it.",
+        "operationId": "facturx",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/FacturxForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The Factur-X PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/flatten": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Flattens forms and annotations into the page content.",
+        "operationId": "flatten",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The flattened PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -404,6 +729,162 @@
         ]
       }
     },
+    "/v1/pdf/metadata/read": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Reads the metadata of each PDF sent, keyed by file name.",
+        "operationId": "metadata_read",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per file name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/metadata/write": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Writes metadata keys; existing keys not named are kept.",
+        "operationId": "metadata_write",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataWriteForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The PDF with its metadata changed",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/optimize": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Recompresses streams and drops unused objects.",
+        "operationId": "optimize",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The smaller PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
     "/v1/pdf/overlay": {
       "post": {
         "tags": [
@@ -447,6 +928,214 @@
           },
           "501": {
             "description": "Not supported in this version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/rotate": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Rotates pages by 90, 180 or 270 degrees.",
+        "operationId": "rotate",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rotated PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/split": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Splits a PDF by page ranges or into fixed intervals; several outputs\ncome back as a ZIP.",
+        "operationId": "split",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A PDF, or a ZIP of PDFs",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/stamp": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Puts text, an image or a PDF over the content of each page.",
+        "operationId": "stamp",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stamped PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/watermark": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Puts text, an image or a PDF under the content of each page.",
+        "operationId": "watermark",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The watermarked PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -752,9 +1441,31 @@
         "format": "binary",
         "description": "A file in a response, for the API description: generated clients return\nit as bytes."
       },
+      "BookmarksWriteForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "bookmarks"
+        ],
+        "properties": {
+          "bookmarks": {
+            "description": "JSON array of `{title, page, children}`."
+          },
+          "files": {
+            "type": "string",
+            "format": "binary"
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ConvertForm": {
         "type": "object",
-        "description": "The multipart form `/v1/convert` and `/forms/libreoffice/convert` accept.",
+        "description": "The multipart form `/v1/convert` and `/forms/libreoffice/convert` accept.\nGotenberg's LibreOffice options (`landscape`, `nativePageRanges`,\n`exportFormFields`, `singlePageSheets`, `password`, ...) and its\npost-processing fields (`merge`, `splitMode`, `watermarkSource`,\n`stampSource`, `rotateAngle`, `flatten`, `metadata`, `bookmarks`,\n`embeds`, `facturxXml`, `userPassword`, ...) are accepted as well.",
         "required": [
           "files"
         ],
@@ -767,6 +1478,12 @@
             },
             "description": "One or more documents."
           },
+          "landscape": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "merge": {
             "type": [
               "boolean",
@@ -774,18 +1491,39 @@
             ],
             "description": "Merge several inputs into one PDF instead of returning a ZIP."
           },
+          "nativePageRanges": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "1-3,5"
+          },
           "outputFilename": {
             "type": [
               "string",
               "null"
             ]
           },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opens a protected input."
+          },
           "pdfa": {
             "type": [
               "string",
               "null"
             ],
-            "description": "PDF/A level; implies PDF output."
+            "description": "PDF/A level: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`, `PDF/A-4`."
+          },
+          "pdfua": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Export as PDF/UA."
           },
           "to": {
             "type": [
@@ -793,6 +1531,28 @@
               "null"
             ],
             "description": "Output format. Default `pdf`."
+          }
+        }
+      },
+      "EmbedForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF first, then the files to attach."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -857,6 +1617,34 @@
             "type": "string",
             "description": "What went wrong, for a person.",
             "example": "unknown step 'teleport'"
+          }
+        }
+      },
+      "FacturxForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "profile"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF/A-3 invoice, then the Factur-X XML."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": "string",
+            "description": "`MINIMUM`, `BASIC_WL`, `BASIC`, `EN16931` or `EXTENDED`.",
+            "example": "EN16931"
           }
         }
       },
@@ -984,6 +1772,28 @@
           }
         }
       },
+      "MetadataWriteForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "metadata"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary"
+          },
+          "metadata": {
+            "description": "JSON object of keys such as `Title`, `Author`, `Subject`, `Keywords`."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "OverlayForm": {
         "type": "object",
         "required": [
@@ -997,6 +1807,28 @@
               "format": "binary"
             },
             "description": "Two PDFs: the base, then the overlay laid over it page by page."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PdfForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF to work on. Several for merge."
           },
           "outputFilename": {
             "type": [
@@ -1076,6 +1908,74 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "RotateForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "rotation"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary"
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pages": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Page selection such as `1-3,5`; all when empty."
+          },
+          "rotation": {
+            "type": "string",
+            "description": "90, 180 or 270.",
+            "example": "90"
+          }
+        }
+      },
+      "SplitForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "splitMode",
+          "splitSpan"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary"
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "splitMode": {
+            "type": "string",
+            "description": "`pages` or `intervals`.",
+            "example": "pages"
+          },
+          "splitSpan": {
+            "type": "string",
+            "description": "For `pages`: ranges such as `1-3,5`. For `intervals`: pages per file.",
+            "example": "1-2"
+          },
+          "splitUnify": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "For `pages`: one file holding every range instead of one per range."
           }
         }
       },

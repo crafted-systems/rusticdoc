@@ -540,12 +540,23 @@ pub(super) fn split(doc: &Document, mode: &SplitMode, deadline: Deadline) -> Res
     for (label, ranges) in parts {
         deadline.check()?;
         // `index[old page]` is the page's number in the part, 0 when dropped.
+        // Mark the kept pages per range, then number them in one sweep:
+        // O(pages + ranges) rather than pages x ranges, with the deadline
+        // checked along the way.
+        let mut keep = vec![false; count as usize + 1];
+        for r in ranges {
+            let last = r.last.min(count);
+            for n in r.first.max(1)..=last {
+                keep[n as usize] = true;
+            }
+            deadline.check()?;
+        }
         let mut index = vec![0u32; count as usize + 1];
         let mut next = 0;
-        for n in 1..=count {
-            if ranges.iter().any(|r| r.first <= n && n <= r.last) {
+        for n in 1..=count as usize {
+            if keep[n] {
                 next += 1;
-                index[n as usize] = next;
+                index[n] = next;
             }
         }
         let delete: Vec<u32> = (1..=count).filter(|n| index[*n as usize] == 0).collect();

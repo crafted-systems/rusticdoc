@@ -5,7 +5,7 @@ use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder
 use utoipa::{Modify, OpenApi};
 
 use crate::error::ErrorBody;
-use crate::routes::{convert, forms, health, pdf, render};
+use crate::routes::{convert, forms, health, pdf, pdfops, render};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -19,8 +19,21 @@ use crate::routes::{convert, forms, health, pdf, render};
         render::batch,
         render::validate,
         convert::convert,
+        convert::convert_pdf,
         pdf::merge,
         pdf::encrypt,
+        pdfops::split,
+        pdfops::flatten,
+        pdfops::rotate,
+        pdfops::optimize,
+        pdfops::metadata_read,
+        pdfops::metadata_write,
+        pdfops::bookmarks_read,
+        pdfops::bookmarks_write,
+        pdfops::embed,
+        pdfops::watermark,
+        pdfops::stamp,
+        pdfops::facturx,
         forms::fields,
         forms::fill,
         forms::overlay,
@@ -36,6 +49,14 @@ use crate::routes::{convert, forms, health, pdf, render};
         convert::ConvertForm,
         pdf::MergeForm,
         pdf::EncryptForm,
+        pdfops::PdfForm,
+        pdfops::SplitForm,
+        pdfops::RotateForm,
+        pdfops::MetadataWriteForm,
+        pdfops::BookmarksWriteForm,
+        pdfops::EmbedForm,
+        pdfops::OverlayForm,
+        pdfops::FacturxForm,
         forms::FillForm,
         forms::OverlayForm,
         forms::FieldSchema,

@@ -6,6 +6,7 @@ use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, request_id};
+use crate::routes::gotenberg;
 use crate::routes::render;
 use crate::state::AppState;
 use crate::webhook::Webhook;
@@ -52,14 +53,21 @@ pub async fn merge(
 ) -> ApiResult<Response> {
     let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
-    if form.files.len() < 2 {
-        return Err(ApiError::bad_request("merge needs at least two PDF files"));
+    if form.files.is_empty() {
+        return Err(ApiError::bad_request("merge needs at least one PDF file"));
     }
+    for doc in &form.files {
+        rusticdoc_core::pdfops::require_pdf(doc)?;
+    }
+    let options = gotenberg::convert_options(&form)?;
+    let post = gotenberg::post_steps(&mut form, false)?;
     let mut files = std::mem::take(&mut form.files);
     let mut req = RenderRequest::new(files.remove(0));
     req.templating = false;
+    req.convert_options = options;
     req.extra = files;
     req.steps = vec![Step::Merge];
+    req.steps.extend(post);
     req.output_name = form
         .field("outputFilename")
         .map(|s| s.trim().to_string())

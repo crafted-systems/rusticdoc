@@ -4,7 +4,9 @@ use std::path::Path;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::convert::ConvertOptions;
 use crate::error::{Error, Result};
+use crate::pdfops;
 
 /// A file in flight: its name decides its format.
 #[derive(Debug, Clone)]
@@ -155,22 +157,61 @@ impl PdfaLevel {
 }
 
 /// One stage of a pipeline, in the order the client lists them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "step", rename_all = "lowercase")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Step {
-    /// Convert the document with LibreOffice.
-    Convert { to: Format },
+    /// Convert with LibreOffice, using the request's conversion options.
+    Convert {
+        to: Format,
+    },
     /// Export as PDF/A at the given level. Implies a conversion.
-    Pdfa { level: PdfaLevel },
+    Pdfa {
+        level: PdfaLevel,
+    },
+    /// Export as PDF/UA. Implies a conversion.
+    Pdfua,
+    /// Merge the extra documents of the request after the main one, or
+    /// every document in flight when a split came before.
+    Merge,
+    /// Split into several documents; every later step runs on each.
+    Split {
+        mode: pdfops::SplitMode,
+    },
+    /// Text, an image or a PDF under the page content.
+    Watermark {
+        overlay: pdfops::Overlay,
+    },
+    /// Text, an image or a PDF over the page content.
+    Stamp {
+        overlay: pdfops::Overlay,
+    },
+    Rotate {
+        rotation: pdfops::Rotation,
+        pages: String,
+    },
+    Flatten,
+    Optimize,
+    /// Replace the outline.
+    Bookmarks {
+        bookmarks: Vec<pdfops::Bookmark>,
+    },
     /// Write document metadata.
-    Metadata { fields: BTreeMap<String, String> },
+    Metadata {
+        metadata: pdfops::Metadata,
+    },
+    /// Attach files.
+    Embed {
+        files: Vec<pdfops::Attachment>,
+    },
+    /// Embed Factur-X invoice XML.
+    Facturx {
+        xml: Vec<u8>,
+        profile: pdfops::FacturxProfile,
+    },
     /// Encrypt with a user and owner password.
     Encrypt {
         user_password: String,
         owner_password: String,
     },
-    /// Merge the extra documents of the request after the main one.
-    Merge,
 }
 
 impl Step {
@@ -178,9 +219,19 @@ impl Step {
         match self {
             Step::Convert { .. } => "convert",
             Step::Pdfa { .. } => "pdfa",
-            Step::Metadata { .. } => "metadata",
-            Step::Encrypt { .. } => "encrypt",
+            Step::Pdfua => "pdfua",
             Step::Merge => "merge",
+            Step::Split { .. } => "split",
+            Step::Watermark { .. } => "watermark",
+            Step::Stamp { .. } => "stamp",
+            Step::Rotate { .. } => "rotate",
+            Step::Flatten => "flatten",
+            Step::Optimize => "optimize",
+            Step::Bookmarks { .. } => "bookmarks",
+            Step::Metadata { .. } => "metadata",
+            Step::Embed { .. } => "embed",
+            Step::Facturx { .. } => "factur-x",
+            Step::Encrypt { .. } => "encrypt",
         }
     }
 }
@@ -199,6 +250,8 @@ pub struct RenderRequest {
     pub ctx: serde_json::Value,
     /// Steps to run after templating, in order.
     pub steps: Vec<Step>,
+    /// LibreOffice options for every conversion step.
+    pub convert_options: ConvertOptions,
     /// File name for the result, without extension. Defaults to the
     /// template's stem.
     pub output_name: Option<String>,
@@ -215,6 +268,7 @@ impl RenderRequest {
             data: serde_json::Value::Object(Default::default()),
             ctx: serde_json::Value::Object(Default::default()),
             steps: Vec::new(),
+            convert_options: ConvertOptions::default(),
             output_name: None,
             templating: true,
         }
@@ -229,6 +283,32 @@ pub struct Output {
     pub bytes: Bytes,
     /// Milliseconds per stage, for logs and metrics.
     pub timings: Vec<(String, u128)>,
+}
+
+/// Several documents as one ZIP, deflated.
+pub fn zip_documents(name: &str, docs: &[Document]) -> Result<Document> {
+    use std::io::Write as _;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for doc in docs {
+            zw.start_file(doc.name.clone(), opts)?;
+            zw.write_all(&doc.bytes)?;
+        }
+        zw.finish()?;
+    }
+    Ok(Document::new(format!("{name}.zip"), buf.into_inner()))
+}
+
+impl From<zip::result::ZipError> for Error {
+    fn from(e: zip::result::ZipError) -> Self {
+        Error::Engine {
+            engine: "zip",
+            message: e.to_string(),
+        }
+    }
 }
 
 /// Parses the form's `steps` field: a comma-separated list, each item a step
@@ -249,37 +329,100 @@ pub fn parse_steps(list: &str, fields: &BTreeMap<String, String>) -> Result<Vec<
                     fields.get("pdfa").map(String::as_str).unwrap_or("PDF/A-2b"),
                 )?,
             },
+            "pdfua" => Step::Pdfua,
             "metadata" => {
                 let raw = fields.get("metadata").ok_or_else(|| {
                     Error::InvalidRequest("step 'metadata' needs a 'metadata' JSON object".into())
                 })?;
-                let map: BTreeMap<String, serde_json::Value> =
-                    serde_json::from_str(raw).map_err(|e| {
+                let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(raw)
+                    .map_err(|e| {
                         Error::InvalidRequest(format!("'metadata' is not a JSON object: {e}"))
                     })?;
                 Step::Metadata {
-                    fields: map
-                        .into_iter()
-                        .map(|(k, v)| {
-                            (
-                                k,
-                                match v {
-                                    serde_json::Value::String(s) => s,
-                                    other => other.to_string(),
-                                },
-                            )
-                        })
-                        .collect(),
+                    metadata: map.into_iter().collect(),
                 }
             }
-            "encrypt" => Step::Encrypt {
-                user_password: fields.get("userPassword").cloned().unwrap_or_default(),
-                owner_password: fields.get("ownerPassword").cloned().ok_or_else(|| {
-                    Error::InvalidRequest("step 'encrypt' needs 'ownerPassword'".into())
-                })?,
-            },
+            "encrypt" => {
+                let user = fields.get("userPassword").cloned().unwrap_or_default();
+                let owner = fields
+                    .get("ownerPassword")
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| user.clone());
+                if owner.is_empty() {
+                    return Err(Error::InvalidRequest(
+                        "step 'encrypt' needs 'userPassword' or 'ownerPassword'".into(),
+                    ));
+                }
+                Step::Encrypt {
+                    user_password: user,
+                    owner_password: owner,
+                }
+            }
             "merge" => Step::Merge,
-            other => return Err(Error::InvalidRequest(format!("unknown step '{other}'"))),
+            "flatten" => Step::Flatten,
+            "optimize" => Step::Optimize,
+            "rotate" => Step::Rotate {
+                rotation: pdfops::Rotation::parse(
+                    fields
+                        .get("rotateAngle")
+                        .map(String::as_str)
+                        .unwrap_or("90"),
+                )?,
+                pages: fields.get("rotatePages").cloned().unwrap_or_default(),
+            },
+            "split" => {
+                let span = fields.get("splitSpan").cloned().unwrap_or_default();
+                if span.is_empty() {
+                    return Err(Error::InvalidRequest(
+                        "step 'split' needs 'splitSpan'".into(),
+                    ));
+                }
+                let mode = match fields
+                    .get("splitMode")
+                    .map(String::as_str)
+                    .unwrap_or("pages")
+                {
+                    "pages" => pdfops::SplitMode::Pages {
+                        ranges: span,
+                        unify: matches!(
+                            fields
+                                .get("splitUnify")
+                                .map(|s| s.trim().to_ascii_lowercase())
+                                .as_deref(),
+                            Some("true" | "1" | "yes")
+                        ),
+                    },
+                    "intervals" => pdfops::SplitMode::Intervals {
+                        span: span.parse().map_err(|_| {
+                            Error::InvalidRequest(
+                                "'splitSpan' must be a page count for intervals".into(),
+                            )
+                        })?,
+                    },
+                    other => {
+                        return Err(Error::InvalidRequest(format!(
+                            "'splitMode' must be pages or intervals, not '{other}'"
+                        )));
+                    }
+                };
+                Step::Split { mode }
+            }
+            "bookmarks" => {
+                let raw = fields.get("bookmarks").ok_or_else(|| {
+                    Error::InvalidRequest("step 'bookmarks' needs a 'bookmarks' JSON array".into())
+                })?;
+                Step::Bookmarks {
+                    bookmarks: serde_json::from_str(raw).map_err(|e| {
+                        Error::InvalidRequest(format!("'bookmarks' is not valid: {e}"))
+                    })?,
+                }
+            }
+            other => {
+                return Err(Error::InvalidRequest(format!(
+                    "unknown step '{other}'; file-carrying steps (watermark, stamp, embed, factur-x) take their own fields"
+                )));
+            }
         };
         steps.push(step);
     }
@@ -309,9 +452,9 @@ mod tests {
             }
         );
         match &steps[2] {
-            Step::Metadata { fields } => {
-                assert_eq!(fields["Title"], "Invoice");
-                assert_eq!(fields["Pages"], "3");
+            Step::Metadata { metadata } => {
+                assert_eq!(metadata["Title"], "Invoice");
+                assert_eq!(metadata["Pages"], 3);
             }
             other => panic!("unexpected {other:?}"),
         }

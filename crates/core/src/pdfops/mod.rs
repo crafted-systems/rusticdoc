@@ -196,7 +196,7 @@ fn default_colour() -> String {
 }
 
 /// A file to embed as an attachment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Attachment {
     pub name: String,
     pub bytes: Vec<u8>,
