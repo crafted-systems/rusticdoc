@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand};
+
+mod pdf;
 use rusticdoc_core::job::parse_steps;
 use rusticdoc_core::{Config, Document, Engines, Format, Pipeline, RenderRequest, Step};
 use rusticdoc_server::openapi::ApiDoc;
@@ -46,6 +48,15 @@ enum Command {
     },
     /// Show the engines this machine has.
     Engines,
+    /// PDF operations: merge, split, rotate, flatten, optimize, encrypt,
+    /// metadata, bookmarks, embed, watermark, stamp, factur-x, forms.
+    Pdf(pdf::PdfArgs),
+    /// Check a template against sample data and list every problem.
+    Validate {
+        template: PathBuf,
+        #[arg(short, long)]
+        data: Option<PathBuf>,
+    },
 }
 
 #[derive(Args)]
@@ -138,6 +149,26 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(r) => bail!("health returned {}", r.status()),
                 Err(e) => bail!("health request failed: {e}"),
+            }
+        }
+        Command::Pdf(args) => {
+            init_cli_logs(&config);
+            pdf::run(&config, args).await?;
+        }
+        Command::Validate { template, data } => {
+            let doc = read_doc(&template)?;
+            let data = read_json(data.as_deref())?;
+            let problems = rusticdoc_core::template::validate(
+                &doc,
+                &data,
+                &serde_json::Value::Object(Default::default()),
+            );
+            println!("{}", serde_json::to_string_pretty(&problems)?);
+            if problems
+                .iter()
+                .any(|d| matches!(d.severity, rusticdoc_template::Severity::Error))
+            {
+                std::process::exit(1);
             }
         }
         Command::Engines => {

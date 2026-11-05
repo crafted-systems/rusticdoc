@@ -2252,6 +2252,7 @@ dependencies = [
  "reqwest",
  "rusticdoc-core",
  "rusticdoc-server",
+ "rusticdoc-template",
  "serde_json",
  "tokio",
  "tracing-subscriber",
