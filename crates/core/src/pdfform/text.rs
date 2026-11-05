@@ -260,7 +260,7 @@ pub(super) fn parse_da(da: &str) -> (String, f32, String) {
     let mut i = 0;
     while i < tokens.len() {
         if tokens[i] == "Tf" && i >= 2 {
-            rest.truncate(rest.len() - 2);
+            rest.truncate(rest.len().saturating_sub(2));
             font = Some(tokens[i - 2].trim_start_matches('/').to_string());
             size = tokens[i - 1].parse().unwrap_or(0.0);
         } else {
