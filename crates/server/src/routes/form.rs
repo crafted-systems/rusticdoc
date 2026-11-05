@@ -26,6 +26,8 @@ pub struct Form {
     pub by_field: BTreeMap<String, Vec<Document>>,
     /// Every text part, last value wins.
     pub fields: BTreeMap<String, String>,
+    /// Every value of every text part, in order, for fields that repeat.
+    pub multi: BTreeMap<String, Vec<String>>,
 }
 
 /// One entry of Gotenberg's `downloadFrom` field.
@@ -54,6 +56,10 @@ impl Form {
                 }
                 _ => {
                     let text = field.text().await?;
+                    form.multi
+                        .entry(name.clone())
+                        .or_default()
+                        .push(text.clone());
                     form.fields.insert(name, text);
                 }
             }
@@ -173,6 +179,11 @@ impl Form {
 
     pub fn field(&self, name: &str) -> Option<&str> {
         self.fields.get(name).map(String::as_str)
+    }
+
+    /// Every value a repeated text field was sent with.
+    pub fn all(&self, name: &str) -> Vec<String> {
+        self.multi.get(name).cloned().unwrap_or_default()
     }
 
     /// A field holding JSON, or an empty object when absent. A file part
