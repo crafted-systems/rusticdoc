@@ -32,7 +32,12 @@ const TREE_LIMIT: usize = 10_000;
 
 /// Blocking PDF jobs that may run at once, so a burst cannot take every
 /// blocking thread of the runtime.
-static PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static PERMITS: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)));
+
+/// Most pages a split may touch in all (parts times document pages), since
+/// every part starts from a copy of the whole document.
+const MAX_SPLIT_PAGES: usize = 200_000;
 
 /// The pure-Rust engine.
 #[derive(Debug, Clone, Copy)]
@@ -84,10 +89,19 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T> {
     let deadline = Deadline::new(timeout);
     let work = async {
-        let _permit = PERMITS.acquire().await.map_err(engine_error)?;
-        tokio::task::spawn_blocking(move || f(deadline))
+        // The permit travels into the blocking closure: a job that outlives
+        // its timeout keeps it until the work really ends.
+        let permit = PERMITS
+            .clone()
+            .acquire_owned()
             .await
-            .map_err(engine_error)?
+            .map_err(engine_error)?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            f(deadline)
+        })
+        .await
+        .map_err(engine_error)?
     };
     match tokio::time::timeout(timeout, work).await {
         Ok(result) => result,
@@ -150,7 +164,12 @@ impl PdfEngine for LopdfEngine {
     async fn read_metadata(&self, doc: &Document, timeout: Duration) -> Result<Metadata> {
         self.accept(doc)?;
         let doc = doc.clone();
-        blocking(timeout, move |_| read_metadata(&load(&doc)?)).await
+        blocking(timeout, move |deadline| {
+            let pdf = load(&doc)?;
+            deadline.check()?;
+            read_metadata(&pdf)
+        })
+        .await
     }
 
     async fn write_metadata(
@@ -161,9 +180,11 @@ impl PdfEngine for LopdfEngine {
     ) -> Result<Document> {
         self.accept(doc)?;
         let (doc, metadata) = (doc.clone(), metadata.clone());
-        blocking(timeout, move |_| {
+        blocking(timeout, move |deadline| {
             let mut pdf = load(&doc)?;
-            write_metadata(&mut pdf, &metadata)?;
+            deadline.check()?;
+            write_metadata(&mut pdf, &metadata, deadline)?;
+            deadline.check()?;
             save(pdf, doc.name.clone())
         })
         .await
@@ -472,60 +493,86 @@ fn shift_pages(bookmarks: &mut [Bookmark], offset: u32) {
 pub(super) fn split(doc: &Document, mode: &SplitMode, deadline: Deadline) -> Result<Vec<Document>> {
     let pdf = load(doc)?;
     let count = pdf.get_pages().len() as u32;
-    let selections: Vec<(String, Vec<u32>)> = match mode {
+    let too_many = |parts: usize| {
+        Error::InvalidRequest(format!(
+            "split would produce {parts} parts, over the limit of {MAX_SPLIT_PARTS}"
+        ))
+    };
+    // Parts are counted before any range is expanded, and stay ranges.
+    let parts: Vec<(String, Vec<pages::PageRange>)> = match mode {
         SplitMode::Pages { ranges, unify } => {
             let ranges = pages::parse(ranges, count)?;
             if *unify {
-                let mut all: Vec<u32> = ranges.iter().flat_map(|r| r.pages()).collect();
-                all.sort_unstable();
-                all.dedup();
-                vec![(pages::join(&ranges).replace(',', "_"), all)]
+                vec![(pages::join(&ranges).replace(',', "_"), ranges)]
             } else {
-                ranges
-                    .iter()
-                    .map(|r| (r.label(), r.pages().collect()))
-                    .collect()
+                if ranges.len() > MAX_SPLIT_PARTS {
+                    return Err(too_many(ranges.len()));
+                }
+                ranges.into_iter().map(|r| (r.label(), vec![r])).collect()
             }
         }
-        SplitMode::Intervals { span } => pages::intervals(*span, count)?
-            .iter()
-            .map(|r| (r.label(), r.pages().collect()))
-            .collect(),
+        SplitMode::Intervals { span } => {
+            if *span == 0 {
+                return Err(Error::InvalidRequest(
+                    "split span must be at least 1".into(),
+                ));
+            }
+            let n = count.div_ceil(*span) as usize;
+            if n > MAX_SPLIT_PARTS {
+                return Err(too_many(n));
+            }
+            pages::intervals(*span, count)?
+                .into_iter()
+                .map(|r| (r.label(), vec![r]))
+                .collect()
+        }
     };
-    if selections.len() > MAX_SPLIT_PARTS {
+    if parts.len().saturating_mul(count as usize) > MAX_SPLIT_PAGES {
         return Err(Error::InvalidRequest(format!(
-            "split would produce {} parts, over the limit of {MAX_SPLIT_PARTS}",
-            selections.len()
+            "split of {count} pages into {} parts is over the limit of {MAX_SPLIT_PAGES} part-pages",
+            parts.len()
         )));
     }
     let outline = read_outline(&pdf, deadline)?;
     let stem = doc.with_extension("");
     let stem = stem.trim_end_matches('.');
-    let mut outputs = Vec::with_capacity(selections.len());
-    for (label, keep) in selections {
+    let mut outputs = Vec::with_capacity(parts.len());
+    for (label, ranges) in parts {
         deadline.check()?;
+        // `index[old page]` is the page's number in the part, 0 when dropped.
+        let mut index = vec![0u32; count as usize + 1];
+        let mut next = 0;
+        for n in 1..=count {
+            if ranges.iter().any(|r| r.first <= n && n <= r.last) {
+                next += 1;
+                index[n as usize] = next;
+            }
+        }
+        let delete: Vec<u32> = (1..=count).filter(|n| index[*n as usize] == 0).collect();
         let mut part = pdf.clone();
-        let delete: Vec<u32> = (1..=count).filter(|n| !keep.contains(n)).collect();
         part.delete_pages(&delete);
-        let bookmarks = keep_bookmarks(&outline, &keep);
+        deadline.check()?;
+        let bookmarks = keep_bookmarks(&outline, &index);
         write_outline(&mut part, &bookmarks, deadline)?;
         part.prune_objects();
         part.renumber_objects();
+        deadline.check()?;
         outputs.push(save(part, format!("{stem}-{label}.pdf"))?);
     }
     Ok(outputs)
 }
 
-/// Bookmarks pointing at kept pages, renumbered to the new order.
-fn keep_bookmarks(bookmarks: &[Bookmark], keep: &[u32]) -> Vec<Bookmark> {
+/// Bookmarks whose page survives, renumbered through `index` (old page
+/// number to new, 0 for dropped pages).
+fn keep_bookmarks(bookmarks: &[Bookmark], index: &[u32]) -> Vec<Bookmark> {
     bookmarks
         .iter()
         .filter_map(|b| {
-            let page = keep.iter().position(|p| *p == b.page)? as u32 + 1;
+            let page = *index.get(b.page as usize).filter(|p| **p > 0)?;
             Some(Bookmark {
                 title: b.title.clone(),
                 page,
-                children: keep_bookmarks(&b.children, keep),
+                children: keep_bookmarks(&b.children, index),
             })
         })
         .collect()
@@ -610,7 +657,7 @@ fn read_metadata(pdf: &Pdf) -> Result<Metadata> {
     Ok(meta)
 }
 
-fn write_metadata(pdf: &mut Pdf, metadata: &Metadata) -> Result<()> {
+fn write_metadata(pdf: &mut Pdf, metadata: &Metadata, deadline: Deadline) -> Result<()> {
     let mut xml = xmp_packet(pdf);
     let info_id = match pdf.trailer.get(b"Info").ok().cloned() {
         Some(Object::Reference(id)) if pdf.get_dictionary(id).is_ok() => id,
@@ -619,6 +666,7 @@ fn write_metadata(pdf: &mut Pdf, metadata: &Metadata) -> Result<()> {
     };
     pdf.trailer.set("Info", info_id);
     for (key, value) in metadata {
+        deadline.check()?;
         if key == "xmp" {
             continue;
         }
