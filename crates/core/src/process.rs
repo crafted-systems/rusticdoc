@@ -28,7 +28,9 @@ pub async fn run(
     for (k, v) in env {
         cmd.env(k, v);
     }
-    tracing::debug!(engine, ?bin, ?args, "running");
+    // Arguments are not logged: they can carry file names and, for qpdf's
+    // argument files, point at passwords.
+    tracing::debug!(engine, ?bin, args = args.len(), "running");
 
     let child = cmd.spawn().map_err(|e| Error::Engine {
         engine,

@@ -20,6 +20,20 @@ use crate::process;
 /// second start.
 const EXIT_RESTART_REQUESTED: i32 = 81;
 
+/// Settings written into the seed profile: no macros, no link updates, no
+/// links from untrusted documents, so a crafted document cannot make
+/// LibreOffice fetch a URL or read a local file during conversion.
+const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Office.Writer/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>0</value></prop></item>
+<item oor:path="/org.openoffice.Office.Calc/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>0</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse"><value>false</value></prop></item>
+</oor:items>
+"#;
+
 #[derive(Debug, Clone)]
 pub struct LibreOffice {
     bin: PathBuf,
@@ -119,7 +133,9 @@ impl LibreOffice {
                 let dir =
                     std::env::temp_dir().join(format!("rusticdoc-profile-{}", std::process::id()));
                 let _ = tokio::fs::remove_dir_all(&dir).await;
-                tokio::fs::create_dir_all(&dir).await?;
+                tokio::fs::create_dir_all(dir.join("user")).await?;
+                tokio::fs::write(dir.join("user/registrymodifications.xcu"), PROFILE_SETTINGS)
+                    .await?;
                 let args = vec![
                     format!("-env:UserInstallation=file://{}", dir.display()),
                     "--headless".into(),

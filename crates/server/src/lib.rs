@@ -65,9 +65,33 @@ pub fn app(state: AppState) -> Router {
         ))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID))
         .layer(SetRequestIdLayer::new(REQUEST_ID, MakeRequestUuid))
-        .layer(CorsLayer::permissive().expose_headers([header::CONTENT_DISPOSITION, REQUEST_ID]))
+        .layer(cors(&state.config))
         .layer(CatchPanicLayer::new())
         .with_state(state)
+}
+
+/// Cross-origin access is off unless `RUSTICDOC_CORS_ORIGINS` lists origins,
+/// or `*` for any.
+fn cors(config: &rusticdoc_core::Config) -> CorsLayer {
+    use tower_http::cors::{AllowOrigin, Any};
+    if config.cors_origins.is_empty() {
+        return CorsLayer::new();
+    }
+    let origin = if config.cors_origins.iter().any(|o| o == "*") {
+        AllowOrigin::any()
+    } else {
+        AllowOrigin::list(
+            config
+                .cors_origins
+                .iter()
+                .filter_map(|o| o.parse::<HeaderValue>().ok()),
+        )
+    };
+    CorsLayer::new()
+        .allow_origin(origin)
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .expose_headers([header::CONTENT_DISPOSITION, REQUEST_ID])
 }
 
 /// Binds, serves, and stops cleanly on SIGINT or SIGTERM.
