@@ -62,6 +62,18 @@ impl Qpdf {
                 "encrypt needs an owner password".into(),
             ));
         }
+        // The argument file holds one argument per line, so a password with
+        // a line break or NUL would become extra arguments.
+        for (name, value) in [
+            ("userPassword", user_password),
+            ("ownerPassword", owner_password),
+        ] {
+            if value.contains(['\n', '\r', '\0']) {
+                return Err(Error::InvalidRequest(format!(
+                    "'{name}' must not contain line breaks or NUL characters"
+                )));
+            }
+        }
         let dir = tempfile::Builder::new().prefix("rusticdoc-").tempdir()?;
         let input = dir.path().join("in.pdf");
         let out = dir.path().join("out.pdf");
@@ -121,6 +133,24 @@ fn require_pdf(doc: &Document) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn passwords_with_line_breaks_are_rejected_before_running_anything() {
+        let q = Qpdf::new(PathBuf::from("/nonexistent/qpdf"));
+        let doc = Document::new("a.pdf", b"%PDF-1.4 minimal".to_vec());
+        for bad in ["a\nb", "a\rb", "a\0b"] {
+            let err = q
+                .encrypt(&doc, "", bad, Duration::from_secs(1))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, Error::InvalidRequest(_)), "{bad:?}: {err}");
+            let err = q
+                .encrypt(&doc, bad, "owner", Duration::from_secs(1))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, Error::InvalidRequest(_)), "{bad:?}: {err}");
+        }
+    }
 
     #[tokio::test]
     async fn non_pdf_input_is_rejected_before_running_anything() {

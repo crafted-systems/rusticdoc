@@ -23,13 +23,17 @@ const EXIT_RESTART_REQUESTED: i32 = 81;
 /// Settings written into the seed profile: no macros, no link updates, no
 /// links from untrusted documents, so a crafted document cannot make
 /// LibreOffice fetch a URL or read a local file during conversion.
+///
+/// The link-update enumerations differ per application: Writer's
+/// `Content/Update/Link` is 0 = never, 1 = on request, 2 = always, while
+/// Calc's is 0 = always, 1 = never, 2 = on request.
 const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item>
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop></item>
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value></prop></item>
 <item oor:path="/org.openoffice.Office.Writer/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>0</value></prop></item>
-<item oor:path="/org.openoffice.Office.Calc/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>0</value></prop></item>
+<item oor:path="/org.openoffice.Office.Calc/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>1</value></prop></item>
 <item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse"><value>false</value></prop></item>
 </oor:items>
 "#;
@@ -38,7 +42,9 @@ const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 pub struct LibreOffice {
     bin: PathBuf,
     slots: Arc<Semaphore>,
-    seed: Arc<OnceCell<PathBuf>>,
+    /// The initialised profile, in a private temporary directory that lives
+    /// as long as the engine.
+    seed: Arc<OnceCell<tempfile::TempDir>>,
 }
 
 impl LibreOffice {
@@ -130,12 +136,20 @@ impl LibreOffice {
         let seed = self
             .seed
             .get_or_try_init(|| async move {
-                let dir =
-                    std::env::temp_dir().join(format!("rusticdoc-profile-{}", std::process::id()));
-                let _ = tokio::fs::remove_dir_all(&dir).await;
-                tokio::fs::create_dir_all(dir.join("user")).await?;
-                tokio::fs::write(dir.join("user/registrymodifications.xcu"), PROFILE_SETTINGS)
+                // A fresh directory with a random name and mode 0700, so no
+                // other local user can plant a path or a symlink there.
+                let tempdir = tempfile::Builder::new()
+                    .prefix("rusticdoc-profile-")
+                    .tempdir()?;
+                let dir = tempdir.path().to_path_buf();
+                tokio::fs::create_dir(dir.join("user")).await?;
+                let mut options = tokio::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                let mut file = options
+                    .open(dir.join("user/registrymodifications.xcu"))
                     .await?;
+                tokio::io::AsyncWriteExt::write_all(&mut file, PROFILE_SETTINGS.as_bytes()).await?;
+                drop(file);
                 let args = vec![
                     format!("-env:UserInstallation=file://{}", dir.display()),
                     "--headless".into(),
@@ -150,10 +164,11 @@ impl LibreOffice {
                     Err(e) => return Err(e),
                 }
                 tracing::info!(path = %dir.display(), "LibreOffice profile initialised");
-                Ok::<_, Error>(dir)
+                Ok::<_, Error>(tempdir)
             })
             .await?
-            .clone();
+            .path()
+            .to_path_buf();
         let target = profile.to_path_buf();
         tokio::task::spawn_blocking(move || copy_dir(&seed, &target))
             .await
