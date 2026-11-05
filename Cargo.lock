@@ -1693,6 +1693,7 @@ dependencies = [
 name = "rusticdoc-template"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "hex",
  "minijinja",
  "quick-xml",
