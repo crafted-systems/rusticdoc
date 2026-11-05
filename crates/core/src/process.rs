@@ -1,0 +1,71 @@
+//! Running an engine as a child process with a time limit.
+
+use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
+
+use tokio::process::Command;
+
+use crate::error::{Error, Result};
+
+/// Runs `bin` with `args`, kills it at `timeout`, and returns its stderr on
+/// failure as an [`Error::Engine`].
+pub async fn run(
+    engine: &'static str,
+    bin: &Path,
+    args: &[String],
+    cwd: &Path,
+    env: &[(&str, String)],
+    timeout: Duration,
+) -> Result<()> {
+    let mut cmd = Command::new(bin);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    tracing::debug!(engine, ?bin, ?args, "running");
+
+    let child = cmd.spawn().map_err(|e| Error::Engine {
+        engine,
+        message: format!("cannot start {}: {e}", bin.display()),
+    })?;
+
+    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(result) => result?,
+        Err(_) => return Err(Error::Timeout(timeout)),
+    };
+
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let tail: String = stderr
+        .lines()
+        .chain(stdout.lines())
+        .filter(|l| !l.trim().is_empty())
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    Err(Error::Engine {
+        engine,
+        message: format!(
+            "exit {}{}",
+            output.status.code().unwrap_or(-1),
+            if tail.is_empty() {
+                String::new()
+            } else {
+                format!(": {tail}")
+            }
+        ),
+    })
+}

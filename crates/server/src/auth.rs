@@ -1,0 +1,79 @@
+//! API keys and basic auth. Nothing is required until a key or credentials
+//! are configured; health, metrics and the API description stay open.
+
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{Request, StatusCode, header};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+use base64::Engine as _;
+
+use crate::error::ApiError;
+use crate::state::AppState;
+
+pub async fn require(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+    let config = &state.config;
+    let keys_set = !config.api_keys.is_empty();
+    let basic_set = config.basic_auth.is_some();
+    if !keys_set && !basic_set {
+        return next.run(req).await;
+    }
+
+    let headers = req.headers();
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer ").map(str::trim));
+    let api_key = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    if let Some(presented) = bearer.or(api_key).filter(|_| keys_set)
+        && config
+            .api_keys
+            .iter()
+            .any(|k| constant_time_eq(k.as_bytes(), presented.as_bytes()))
+    {
+        return next.run(req).await;
+    }
+
+    if let Some((user, pass)) = &config.basic_auth {
+        let basic = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Basic "))
+            .and_then(|v| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(v.trim())
+                    .ok()
+            })
+            .and_then(|v| String::from_utf8(v).ok());
+        if let Some(pair) = basic {
+            let expected = format!("{user}:{pass}");
+            if constant_time_eq(expected.as_bytes(), pair.as_bytes()) {
+                return next.run(req).await;
+            }
+        }
+    }
+
+    let mut res = ApiError::new(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "a valid API key or credentials are required",
+    )
+    .into_response();
+    if basic_set {
+        res.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            "Basic realm=\"rusticdoc\"".parse().unwrap(),
+        );
+    }
+    res
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}

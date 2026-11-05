@@ -1,0 +1,741 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "rusticdoc",
+    "description": "Fills Office and PDF templates from JSON, converts documents with LibreOffice, and runs PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously.",
+    "license": {
+      "name": "UNLICENSED"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Liveness.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Prometheus text format.",
+        "operationId": "metrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {}
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Readiness: the same as liveness today, kept separate so a warm-up can be\nadded without clients changing.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/convert": {
+      "post": {
+        "tags": [
+          "convert"
+        ],
+        "summary": "Converts uploads with LibreOffice. Several files come back as a ZIP, or\nas one PDF with `merge=true`.",
+        "operationId": "convert",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The converted file, or a ZIP of them",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/encrypt": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Encrypts a PDF with AES-256.",
+        "operationId": "encrypt",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/EncryptForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The encrypted PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/merge": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Merges PDFs in the order sent.",
+        "operationId": "merge",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The merged PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/render": {
+      "post": {
+        "tags": [
+          "render"
+        ],
+        "summary": "Fills a template and runs the steps.",
+        "description": "Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by\nwebhook, signed with `X-Rusticdoc-Signature` when a secret is configured.",
+        "operationId": "render",
+        "parameters": [
+          {
+            "name": "X-Rusticdoc-Webhook-Url",
+            "in": "header",
+            "description": "Deliver the result here instead of in the response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-Rusticdoc-Webhook-Error-Url",
+            "in": "header",
+            "description": "Deliver failures here as JSON",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rendered file",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/validate": {
+      "post": {
+        "tags": [
+          "render"
+        ],
+        "summary": "Checks a template against sample data without converting anything.",
+        "operationId": "validate",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Validation"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/version": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Engine versions and paths.",
+        "operationId": "version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ConvertForm": {
+        "type": "object",
+        "description": "The multipart form `/v1/convert` and `/forms/libreoffice/convert` accept.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "One or more documents."
+          },
+          "merge": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Merge several inputs into one PDF instead of returning a ZIP."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pdfa": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PDF/A level; implies PDF output."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output format. Default `pdf`."
+          }
+        }
+      },
+      "EncryptForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "ownerPassword"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary",
+            "description": "One PDF."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ownerPassword": {
+            "type": "string"
+          },
+          "userPassword": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "EngineStatus": {
+        "type": "object",
+        "required": [
+          "libreoffice",
+          "qpdf"
+        ],
+        "properties": {
+          "libreoffice": {
+            "type": "boolean"
+          },
+          "qpdf": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "The JSON body of every error response.",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "A stable, machine-readable kind.",
+            "example": "invalid_request"
+          },
+          "message": {
+            "type": "string",
+            "description": "What went wrong, for a person.",
+            "example": "unknown step 'teleport'"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "uptime_seconds",
+          "engines"
+        ],
+        "properties": {
+          "engines": {
+            "$ref": "#/components/schemas/EngineStatus"
+          },
+          "status": {
+            "type": "string",
+            "description": "`up` when the service answers.",
+            "example": "up"
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "MergeForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Two or more PDFs, merged in order."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RenderForm": {
+        "type": "object",
+        "description": "The multipart form `/v1/render` accepts. Documented here; parsed by hand.",
+        "required": [
+          "template",
+          "files"
+        ],
+        "properties": {
+          "ctx": {
+            "description": "JSON object visible as `ctx`."
+          },
+          "data": {
+            "description": "JSON object the template sees as its root."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Further files, used by `merge`."
+          },
+          "metadata": {
+            "description": "JSON object of metadata fields for `metadata`."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name of the result, without extension."
+          },
+          "owner_password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pdfa": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`."
+          },
+          "steps": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`.",
+            "example": "convert,pdfa,encrypt"
+          },
+          "template": {
+            "type": "string",
+            "format": "binary",
+            "description": "The template. Text formats are filled today; Office formats are\nconverted as they are until phase 1."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output format for `convert`. Default `pdf`."
+          },
+          "user_password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Validation": {
+        "type": "object",
+        "required": [
+          "ok",
+          "template_hash",
+          "format",
+          "engine"
+        ],
+        "properties": {
+          "engine": {
+            "type": "string",
+            "description": "The engine that would handle it."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present when `ok` is false."
+          },
+          "format": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "True when the template renders with the sample data."
+          },
+          "template_hash": {
+            "type": "string",
+            "description": "SHA-256 of the template, the cache key."
+          }
+        }
+      },
+      "Version": {
+        "type": "object",
+        "required": [
+          "version",
+          "engines"
+        ],
+        "properties": {
+          "engines": {
+            "description": "Paths of the engines in use, or null when absent."
+          },
+          "version": {
+            "type": "string",
+            "example": "0.1.0"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "api_key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "basic": {
+        "type": "http",
+        "scheme": "basic"
+      },
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "render",
+      "description": "Templates in, documents out"
+    },
+    {
+      "name": "convert",
+      "description": "Documents in, converted documents out"
+    },
+    {
+      "name": "pdf",
+      "description": "PDF operations"
+    },
+    {
+      "name": "service",
+      "description": "Health, version, metrics"
+    }
+  ]
+}

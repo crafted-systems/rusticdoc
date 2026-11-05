@@ -1,0 +1,5 @@
+target
+.git
+scan-reports
+*.md
+!README.md

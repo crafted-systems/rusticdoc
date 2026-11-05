@@ -1,0 +1,26 @@
+# Runs rusticdoc hardened, with a fonts directory mounted. From the project root:
+#   docker compose -f deploy/compose.yaml up -d --build
+name: rusticdoc
+
+services:
+  rusticdoc:
+    image: ${RUSTICDOC_IMAGE:-rusticdoc:local}
+    build:
+      context: ..
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    ports:
+      - "${RUSTICDOC_PORT:-3000}:3000"
+    environment:
+      RUSTICDOC_API_TIMEOUT: ${RUSTICDOC_API_TIMEOUT:-60s}
+      RUSTICDOC_WORKERS: ${RUSTICDOC_WORKERS:-2}
+      RUSTICDOC_API_KEYS: ${RUSTICDOC_API_KEYS:-}
+      RUSTICDOC_WEBHOOK_SECRET: ${RUSTICDOC_WEBHOOK_SECRET:-}
+      RUSTICDOC_LOG_LEVEL: ${RUSTICDOC_LOG_LEVEL:-info}
+    volumes:
+      - ${RUSTICDOC_FONTS:-./fonts}:/fonts:ro
+    tmpfs:
+      - /tmp
+      - /home/rusticdoc:uid=1001,gid=1001
