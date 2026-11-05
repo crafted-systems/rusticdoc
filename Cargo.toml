@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/core", "crates/server", "crates/cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+repository = "https://github.com/vmosoti/rusticdoc"
+rust-version = "1.85"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
