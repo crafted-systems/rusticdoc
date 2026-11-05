@@ -7,7 +7,7 @@ use rusticdoc_core::{RenderRequest, template};
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::metrics::StageLabels;
 use crate::routes::form::{Form, download, request_id};
 use crate::state::AppState;
@@ -58,7 +58,7 @@ pub struct RenderForm {
         ("X-Rusticdoc-Webhook-Error-Url" = Option<String>, Header, description = "Deliver failures here as JSON"),
     ),
     responses(
-        (status = 200, description = "The rendered file", content_type = "application/octet-stream", body = Vec<u8>),
+        (status = 200, description = "The rendered file", content_type = "application/octet-stream", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 401, description = "Credentials required", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
         (status = 501, description = "Not supported in this version", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
@@ -133,7 +133,7 @@ pub async fn run(
         ("X-Rusticdoc-Webhook-Url" = Option<String>, Header, description = "Deliver the ZIP here instead of in the response"),
     ),
     responses(
-        (status = 200, description = "A ZIP of the rendered files", content_type = "application/zip", body = Vec<u8>),
+        (status = 200, description = "A ZIP of the rendered files", content_type = "application/zip", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
     ),

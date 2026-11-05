@@ -4,7 +4,7 @@ use axum::response::Response;
 use rusticdoc_core::{Format, RenderRequest, Step};
 use utoipa::ToSchema;
 
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, download, request_id, zip};
 use crate::routes::render;
 use crate::state::AppState;
@@ -33,7 +33,7 @@ pub struct ConvertForm {
     post, path = "/v1/convert", tag = "convert",
     request_body(content_type = "multipart/form-data", content = ConvertForm),
     responses(
-        (status = 200, description = "The converted file, or a ZIP of them", content_type = "application/octet-stream", body = Vec<u8>),
+        (status = 200, description = "The converted file, or a ZIP of them", content_type = "application/octet-stream", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),

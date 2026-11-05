@@ -7,7 +7,7 @@ use axum::response::Response;
 use rusticdoc_core::{Document, Output, pdfform};
 use utoipa::ToSchema;
 
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, download, request_id};
 use crate::state::AppState;
 use crate::webhook::{self, Webhook};
@@ -86,7 +86,7 @@ pub async fn fields(
     post, path = "/v1/pdf/forms/fill", tag = "pdf-forms",
     request_body(content_type = "multipart/form-data", content = FillForm),
     responses(
-        (status = 200, description = "The filled PDF", content_type = "application/pdf", body = Vec<u8>),
+        (status = 200, description = "The filled PDF", content_type = "application/pdf", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody),
     ),
@@ -149,7 +149,7 @@ pub async fn fill(
     post, path = "/v1/pdf/overlay", tag = "pdf-forms",
     request_body(content_type = "multipart/form-data", content = OverlayForm),
     responses(
-        (status = 200, description = "The combined PDF", content_type = "application/pdf", body = Vec<u8>),
+        (status = 200, description = "The combined PDF", content_type = "application/pdf", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody),
     ),

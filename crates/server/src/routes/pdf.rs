@@ -4,7 +4,7 @@ use axum::response::Response;
 use rusticdoc_core::{RenderRequest, Step};
 use utoipa::ToSchema;
 
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, request_id};
 use crate::routes::render;
 use crate::state::AppState;
@@ -39,7 +39,7 @@ pub struct EncryptForm {
     post, path = "/v1/pdf/merge", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = MergeForm),
     responses(
-        (status = 200, description = "The merged PDF", content_type = "application/pdf", body = Vec<u8>),
+        (status = 200, description = "The merged PDF", content_type = "application/pdf", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),
@@ -72,7 +72,7 @@ pub async fn merge(
     post, path = "/v1/pdf/encrypt", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = EncryptForm),
     responses(
-        (status = 200, description = "The encrypted PDF", content_type = "application/pdf", body = Vec<u8>),
+        (status = 200, description = "The encrypted PDF", content_type = "application/pdf", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),

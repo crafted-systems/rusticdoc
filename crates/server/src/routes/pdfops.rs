@@ -15,7 +15,7 @@ use rusticdoc_core::pdfops::{
 use rusticdoc_core::{Document, Output};
 use utoipa::ToSchema;
 
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{request_id, zip, Form};
 use crate::routes::forms::finish;
 use crate::state::AppState;
@@ -173,7 +173,7 @@ fn pdf_output(name: String, doc: Document, stage: &str) -> Output {
 #[utoipa::path(
     post, path = "/v1/pdf/split", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = SplitForm),
-    responses((status = 200, description = "A PDF, or a ZIP of PDFs", content_type = "application/octet-stream", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "A PDF, or a ZIP of PDFs", content_type = "application/octet-stream", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn split(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -219,7 +219,7 @@ pub async fn split(State(state): State<AppState>, headers: HeaderMap, multipart:
 #[utoipa::path(
     post, path = "/v1/pdf/flatten", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = PdfForm),
-    responses((status = 200, description = "The flattened PDF", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The flattened PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn flatten(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -236,7 +236,7 @@ pub async fn flatten(State(state): State<AppState>, headers: HeaderMap, multipar
 #[utoipa::path(
     post, path = "/v1/pdf/rotate", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = RotateForm),
-    responses((status = 200, description = "The rotated PDF", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The rotated PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn rotate(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -257,7 +257,7 @@ pub async fn rotate(State(state): State<AppState>, headers: HeaderMap, multipart
 #[utoipa::path(
     post, path = "/v1/pdf/optimize", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = PdfForm),
-    responses((status = 200, description = "The smaller PDF", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The smaller PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn optimize(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -298,7 +298,7 @@ pub async fn metadata_read(
 #[utoipa::path(
     post, path = "/v1/pdf/metadata/write", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = MetadataWriteForm),
-    responses((status = 200, description = "The PDF with its metadata changed", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The PDF with its metadata changed", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn metadata_write(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -345,7 +345,7 @@ pub async fn bookmarks_read(
 #[utoipa::path(
     post, path = "/v1/pdf/bookmarks/write", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = BookmarksWriteForm),
-    responses((status = 200, description = "The PDF with its outline replaced", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The PDF with its outline replaced", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn bookmarks_write(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -366,7 +366,7 @@ pub async fn bookmarks_write(State(state): State<AppState>, headers: HeaderMap, 
 #[utoipa::path(
     post, path = "/v1/pdf/embed", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = EmbedForm),
-    responses((status = 200, description = "The PDF with attachments", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The PDF with attachments", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn embed(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -432,7 +432,7 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
 #[utoipa::path(
     post, path = "/v1/pdf/watermark", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = OverlayForm),
-    responses((status = 200, description = "The watermarked PDF", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The watermarked PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn watermark(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -450,7 +450,7 @@ pub async fn watermark(State(state): State<AppState>, headers: HeaderMap, multip
 #[utoipa::path(
     post, path = "/v1/pdf/stamp", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = OverlayForm),
-    responses((status = 200, description = "The stamped PDF", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The stamped PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn stamp(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
@@ -468,7 +468,7 @@ pub async fn stamp(State(state): State<AppState>, headers: HeaderMap, multipart:
 #[utoipa::path(
     post, path = "/v1/pdf/factur-x", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = FacturxForm),
-    responses((status = 200, description = "The Factur-X PDF", content_type = "application/pdf", body = Vec<u8>), (status = 400, description = "The request is wrong", body = ErrorBody)),
+    responses((status = 200, description = "The Factur-X PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn facturx(State(state): State<AppState>, headers: HeaderMap, multipart: Multipart) -> ApiResult<Response> {
