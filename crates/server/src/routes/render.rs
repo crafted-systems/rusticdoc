@@ -201,58 +201,74 @@ pub async fn batch(
     if elements.is_empty() {
         return Err(ApiError::bad_request(format!("'{split_by}' is empty")));
     }
-    if elements.len() > 1000 {
+    let limit = state.config.batch_limit.max(1);
+    if elements.len() > limit {
         return Err(ApiError::bad_request(format!(
-            "'{split_by}' has {} elements; the limit per batch is 1000",
+            "'{split_by}' has {} elements; the limit per batch is {limit}",
+            elements.len()
+        )));
+    }
+    // Each render works on its own copy of the data, so the memory a batch
+    // needs is elements x data; keep that within a few bodies.
+    let data_size = serde_json::to_vec(&data).map(|v| v.len()).unwrap_or(0);
+    if data_size.saturating_mul(elements.len()) > state.config.body_limit.saturating_mul(4) {
+        return Err(ApiError::bad_request(format!(
+            "{} elements of {data_size} bytes of data each is more than this service renders in one batch; split the request",
             elements.len()
         )));
     }
 
-    let env = rusticdoc_core::template::environment();
     let count = elements.len();
-    let mut requests = Vec::with_capacity(count);
-    for (index, element) in elements.into_iter().enumerate() {
-        let mut one = data.clone();
-        replace(
-            &mut one,
-            &split_by,
-            serde_json::Value::Array(vec![element.clone()]),
-        );
-        if let serde_json::Value::Object(map) = &mut one {
-            map.insert("item".into(), element);
-            map.insert(
-                "batch".into(),
-                serde_json::json!({ "index": index + 1, "count": count }),
-            );
-        }
-        let name = env
-            .render_str(
-                &name_template,
-                minijinja::Value::from(minijinja::value::Serde(&one)),
-            )
-            .map_err(|e| {
-                ApiError::new(
-                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-                    "template_error",
-                    format!("batchName: {e}"),
-                )
-            })?;
-        let mut req = RenderRequest::new(template.clone());
-        req.data = one;
-        req.ctx = ctx.clone();
-        req.steps = steps.clone();
-        req.output_name = Some(sanitize_name(&name, index + 1));
-        requests.push(req);
-    }
-
+    let total_timeout = state
+        .config
+        .api_timeout
+        .saturating_mul(u32::try_from(count).unwrap_or(u32::MAX));
     let rid = request_id(&headers);
     let st = state.clone();
     let job = async move {
-        let mut outputs = Vec::with_capacity(requests.len());
-        for req in requests {
+        let env = rusticdoc_core::template::environment();
+        let mut outputs = Vec::with_capacity(count);
+        for (index, element) in elements.into_iter().enumerate() {
+            // Built just before it runs and dropped after, never all at once.
+            let mut one = data.clone();
+            replace(
+                &mut one,
+                &split_by,
+                serde_json::Value::Array(vec![element.clone()]),
+            );
+            if let serde_json::Value::Object(map) = &mut one {
+                map.insert("item".into(), element);
+                map.insert(
+                    "batch".into(),
+                    serde_json::json!({ "index": index + 1, "count": count }),
+                );
+            }
+            let name = env
+                .render_str(
+                    &name_template,
+                    minijinja::Value::from(minijinja::value::Serde(&one)),
+                )
+                .map_err(|e| {
+                    ApiError::new(
+                        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                        "template_error",
+                        format!("batchName: {e}"),
+                    )
+                })?;
+            let mut req = RenderRequest::new(template.clone());
+            req.data = one;
+            req.ctx = ctx.clone();
+            req.steps = steps.clone();
+            req.output_name = Some(sanitize_name(&name, index + 1));
             outputs.push(execute(&st, req).await?);
         }
         crate::routes::form::zip(&zip_name, &outputs)
+    };
+    let job = async move {
+        match tokio::time::timeout(total_timeout, job).await {
+            Ok(result) => result,
+            Err(_) => Err(rusticdoc_core::Error::Timeout(total_timeout).into()),
+        }
     };
     match hook {
         None => Ok(download(job.await?)),

@@ -5,7 +5,7 @@ use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder
 use utoipa::{Modify, OpenApi};
 
 use crate::error::ErrorBody;
-use crate::routes::{convert, health, pdf, render};
+use crate::routes::{convert, forms, health, pdf, render};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -21,6 +21,9 @@ use crate::routes::{convert, health, pdf, render};
         convert::convert,
         pdf::merge,
         pdf::encrypt,
+        forms::fields,
+        forms::fill,
+        forms::overlay,
         health::health,
         health::ready,
         health::version,
@@ -33,6 +36,9 @@ use crate::routes::{convert, health, pdf, render};
         convert::ConvertForm,
         pdf::MergeForm,
         pdf::EncryptForm,
+        forms::FillForm,
+        forms::OverlayForm,
+        forms::FieldSchema,
         health::Health,
         health::EngineStatus,
         health::Version,
@@ -41,6 +47,7 @@ use crate::routes::{convert, health, pdf, render};
         (name = "render", description = "Templates in, documents out"),
         (name = "convert", description = "Documents in, converted documents out"),
         (name = "pdf", description = "PDF operations"),
+        (name = "pdf-forms", description = "PDF templates: form fields, tags in annotations, overlays"),
         (name = "service", description = "Health, version, metrics"),
     ),
     modifiers(&Security)

@@ -36,6 +36,8 @@ pub struct Config {
     pub webhook_attempts: u32,
     /// Origins allowed cross-origin access, or `*`. Empty means none.
     pub cors_origins: Vec<String>,
+    /// Most elements one batch render may hold.
+    pub batch_limit: usize,
     /// `json` or `pretty`.
     pub log_format: String,
     /// A `tracing` filter such as `info` or `rusticdoc=debug`.
@@ -72,6 +74,7 @@ impl Default for Config {
             webhook_allow_private: false,
             webhook_attempts: 3,
             cors_origins: Vec::new(),
+            batch_limit: 100,
             log_format: "json".into(),
             log_level: "info".into(),
         }
@@ -144,6 +147,9 @@ impl Config {
         }
         if let Some(v) = get("WEBHOOK_ATTEMPTS").and_then(|v| v.parse().ok()) {
             c.webhook_attempts = v;
+        }
+        if let Some(v) = get("BATCH_LIMIT").and_then(|v| v.parse().ok()) {
+            c.batch_limit = v;
         }
         if let Some(v) = get("CORS_ORIGINS") {
             c.cors_origins = v

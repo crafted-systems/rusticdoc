@@ -183,6 +183,136 @@
         ]
       }
     },
+    "/v1/pdf/forms/fields": {
+      "post": {
+        "tags": [
+          "pdf-forms"
+        ],
+        "summary": "Lists a PDF's form fields with their kinds, pages and values.",
+        "operationId": "fields",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FieldSchema"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/forms/fill": {
+      "post": {
+        "tags": [
+          "pdf-forms"
+        ],
+        "summary": "Fills a PDF form from data, applying tags in annotations, optionally\nflattening the result.",
+        "operationId": "fill",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/FillForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The filled PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
     "/v1/pdf/merge": {
       "post": {
         "tags": [
@@ -220,6 +350,65 @@
             }
           },
           "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/overlay": {
+      "post": {
+        "tags": [
+          "pdf-forms"
+        ],
+        "summary": "Lays the second PDF over the first, page by page.",
+        "operationId": "overlay",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The combined PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
             "content": {
               "application/json": {
                 "schema": {
@@ -610,6 +799,81 @@
           }
         }
       },
+      "FieldSchema": {
+        "type": "object",
+        "description": "One form field, as `/v1/pdf/forms/fields` lists them.",
+        "required": [
+          "name",
+          "kind",
+          "page",
+          "options"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`text`, `checkbox`, `radio`, `choice`, `signature` or `button`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Fully qualified name, such as `customer.name`."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based page of the first widget.",
+            "minimum": 0
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "FillForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "ctx": {},
+          "data": {
+            "description": "JSON object; a field named `customer.name` takes that path."
+          },
+          "files": {
+            "type": "string",
+            "format": "binary",
+            "description": "The PDF with form fields, and optionally tags in annotations."
+          },
+          "flatten": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Fix the values into the page content."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stripAnnotations": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Remove the annotations that carried tags. Default true."
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -646,6 +910,28 @@
               "format": "binary"
             },
             "description": "Two or more PDFs, merged in order."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OverlayForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Two PDFs: the base, then the overlay laid over it page by page."
           },
           "outputFilename": {
             "type": [
@@ -806,6 +1092,10 @@
     {
       "name": "pdf",
       "description": "PDF operations"
+    },
+    {
+      "name": "pdf-forms",
+      "description": "PDF templates: form fields, tags in annotations, overlays"
     },
     {
       "name": "service",

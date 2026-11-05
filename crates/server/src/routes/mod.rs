@@ -1,5 +1,6 @@
 pub mod convert;
 pub mod form;
+pub mod forms;
 pub mod health;
 pub mod pdf;
 pub mod render;
@@ -25,6 +26,9 @@ pub fn router() -> Router<AppState> {
         .route("/forms/pdfengines/merge", post(pdf::merge))
         .route("/v1/pdf/encrypt", post(pdf::encrypt))
         .route("/forms/pdfengines/encrypt", post(pdf::encrypt))
+        .route("/v1/pdf/forms/fields", post(forms::fields))
+        .route("/v1/pdf/forms/fill", post(forms::fill))
+        .route("/v1/pdf/overlay", post(forms::overlay))
 }
 
 /// Routes that stay open: liveness, readiness, version, metrics and the API
