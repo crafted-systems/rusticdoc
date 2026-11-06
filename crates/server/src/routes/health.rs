@@ -34,7 +34,8 @@ pub struct Version {
     pub engines: serde_json::Value,
 }
 
-/// Liveness.
+/// Liveness. With credentials configured, a caller without them sees the status
+/// and nothing else.
 #[utoipa::path(get, path = "/health", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
 pub async fn health(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // Pool numbers and engines are for callers the service knows.
@@ -85,7 +86,7 @@ pub async fn ready(state: State<AppState>, headers: HeaderMap) -> Response {
 }
 
 /// Engine versions and paths.
-#[utoipa::path(get, path = "/v1/version", tag = "service", responses((status = 200, description = "Version and engines", body = Version)))]
+#[utoipa::path(get, path = "/v1/version", tag = "service", responses((status = 200, description = "Version and engines", body = Version)), security(("api_key" = []), ("bearer" = []), ("basic" = [])))]
 pub async fn version(State(state): State<AppState>) -> Json<Version> {
     Json(Version {
         version: rusticdoc_core::VERSION,
@@ -93,7 +94,8 @@ pub async fn version(State(state): State<AppState>) -> Json<Version> {
     })
 }
 
-/// Prometheus text format.
+/// Prometheus text format. With credentials configured it needs them too, unless
+/// `RUSTICDOC_METRICS_PUBLIC` is set.
 #[utoipa::path(get, path = "/metrics", tag = "service", responses((status = 200, description = "Prometheus text format", content_type = "text/plain")))]
 pub async fn metrics(State(state): State<AppState>) -> Response {
     (

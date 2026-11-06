@@ -50,6 +50,13 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Entry>, TemplateError> {
             .name()
             .map_err(|e| TemplateError::new(format!("the file is not a valid package: {e}")))?
             .to_string();
+        // Entries go on to the output as they came, so a name that walks out of
+        // its directory would reach whoever unpacks the result.
+        if name.starts_with('/') || name.contains('\\') || name.split('/').any(|s| s == "..") {
+            return Err(TemplateError::new(format!(
+                "the package has an entry with an unsafe name: {name:?}"
+            )));
+        }
         let allowed = MAX_PART_BYTES.min(MAX_TOTAL_BYTES - total);
         let mut data = Vec::new();
         file.by_ref()
@@ -466,6 +473,23 @@ mod tests {
             rels_name("ppt/slides/slide1.xml"),
             "ppt/slides/_rels/slide1.xml.rels"
         );
+    }
+
+    #[test]
+    fn refuses_entries_that_walk_out_of_the_package() {
+        for name in ["../../etc/cron.d/x", "word/../../x", "/etc/passwd", "a\\b"] {
+            let entries = [Entry {
+                name: name.to_string(),
+                data: b"x".to_vec(),
+                stored: false,
+            }];
+            let err = read(&write(&entries).unwrap()).unwrap_err();
+            assert!(
+                err.message.contains("unsafe name"),
+                "{name}: {}",
+                err.message
+            );
+        }
     }
 
     #[test]

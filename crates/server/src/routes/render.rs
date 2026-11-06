@@ -52,8 +52,13 @@ pub struct RenderForm {
 
 /// Fills a template and runs the steps.
 ///
-/// Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by
-/// webhook, signed with `X-Rusticdoc-Signature` when a secret is configured.
+/// Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.
+/// With `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its
+/// own key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of
+/// `<timestamp>.<event>.<request id>.<body>`, with the timestamp in
+/// `X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in
+/// `X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself
+/// when the service requires no credentials; `rusticdoc webhook-secret` prints it.
 #[utoipa::path(
     post, path = "/v1/render", tag = "render",
     request_body(content_type = "multipart/form-data", content = RenderForm),

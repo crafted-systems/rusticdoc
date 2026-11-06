@@ -15,7 +15,7 @@
         "tags": [
           "service"
         ],
-        "summary": "Liveness.",
+        "summary": "Liveness. With credentials configured, a caller without them sees the status\nand nothing else.",
         "operationId": "health",
         "responses": {
           "200": {
@@ -36,7 +36,7 @@
         "tags": [
           "service"
         ],
-        "summary": "Prometheus text format.",
+        "summary": "Prometheus text format. With credentials configured it needs them too, unless\n`RUSTICDOC_METRICS_PUBLIC` is set.",
         "operationId": "metrics",
         "responses": {
           "200": {
@@ -1306,7 +1306,7 @@
           "render"
         ],
         "summary": "Fills a template and runs the steps.",
-        "description": "Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by\nwebhook, signed with `X-Rusticdoc-Signature` when a secret is configured.",
+        "description": "Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its\nown key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself\nwhen the service requires no credentials; `rusticdoc webhook-secret` prints it.",
         "operationId": "render",
         "parameters": [
           {
@@ -1572,7 +1572,18 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
       }
     }
   },
