@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use rusticdoc_core::config::RenderMode;
+use rusticdoc_core::render::Renderer;
 use rusticdoc_core::{Config, Engines, Pipeline};
 
 use crate::metrics::Metrics;
@@ -14,6 +16,8 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub http: reqwest::Client,
     pub started: Instant,
+    /// Places for webhook jobs.
+    pub jobs: crate::jobs::JobLimiter,
     /// Verifies bearer tokens when OpenID Connect is on.
     pub oidc: Option<Arc<crate::oidc::Verifier>>,
     /// The loaded fonts, scanned on first use and on reload.
@@ -25,8 +29,20 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config) -> Self {
         let engines = Arc::new(Engines::from_config(&config));
+        let renderer = match config.render_mode {
+            RenderMode::InProcess => Renderer::in_process(),
+            RenderMode::Isolated => Renderer::isolated(
+                config
+                    .render_worker_bin
+                    .clone()
+                    .unwrap_or_else(|| "rusticdoc".into()),
+                config.render_memory,
+                config.render_workers,
+            ),
+        };
         let pipeline = Pipeline::new(engines.clone(), config.api_timeout)
-            .with_max_output(config.max_render_bytes);
+            .with_max_output(config.max_render_bytes)
+            .with_renderer(renderer);
         let http = reqwest::Client::builder()
             .user_agent(format!("rusticdoc/{}", rusticdoc_core::VERSION))
             .timeout(config.api_timeout)
@@ -39,6 +55,10 @@ impl AppState {
             .clone()
             .map(|oidc| Arc::new(crate::oidc::Verifier::new(oidc)));
         Self {
+            jobs: crate::jobs::JobLimiter::new(
+                config.max_async_jobs,
+                config.max_async_jobs_per_caller,
+            ),
             oidc,
             config: Arc::new(config),
             engines,

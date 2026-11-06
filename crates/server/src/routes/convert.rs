@@ -6,10 +6,11 @@ use rusticdoc_core::{Document, Format, Output, RenderRequest, Step};
 use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
-use crate::routes::form::{Form, download, request_id, zip};
+use crate::routes::form::{Form, request_id, zip};
+use crate::routes::forms::finish_within;
 use crate::routes::gotenberg;
 use crate::state::AppState;
-use crate::webhook::{self, Webhook};
+use crate::webhook::{self, Hook, Webhook};
 
 /// The multipart form `/v1/convert` and `/forms/libreoffice/convert` accept.
 /// Gotenberg's LibreOffice options (`landscape`, `nativePageRanges`,
@@ -54,11 +55,14 @@ pub struct ConvertForm {
 )]
 pub async fn convert(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart, &state).await?;
+    // The route's time limit is a multi-file job's; reading the form gets the
+    // usual one.
+    let read = Form::read(multipart, &state);
+    let mut form = webhook::within(state.config.api_timeout, read).await?;
     if form.files.is_empty() {
         return Err(ApiError::bad_request(
             "no file in the form; send one or more as 'files'",
@@ -80,29 +84,35 @@ pub async fn convert(
     let merge = post.first() == Some(&Step::Merge);
 
     if files.len() == 1 || merge {
-        let mut req = RenderRequest::new(files[0].clone());
-        req.templating = false;
-        req.convert_options = options.clone();
-        req.steps = vec![Step::Convert { to }];
-        if merge && files.len() > 1 {
-            // The other inputs are converted first, then merged in order.
-            let mut extra = Vec::new();
-            for doc in &files[1..] {
-                let mut r = RenderRequest::new(doc.clone());
-                r.templating = false;
-                r.convert_options = options.clone();
-                r.steps = vec![Step::Convert { to: Format::Pdf }];
-                let out = tokio::time::timeout(state.config.api_timeout, state.pipeline.run(r))
-                    .await
-                    .map_err(|_| rusticdoc_core::Error::Timeout(state.config.api_timeout))??;
-                extra.push(Document::new(out.name, out.bytes));
+        let limit = job_limit(&state, files.len());
+        let st = state.clone();
+        let rid = request_id(&headers);
+        let job = async move {
+            let mut req = RenderRequest::new(files[0].clone());
+            req.templating = false;
+            req.convert_options = options.clone();
+            req.steps = vec![Step::Convert { to }];
+            if merge && files.len() > 1 {
+                // The other inputs are converted first, then merged in order.
+                let mut extra = Vec::new();
+                for doc in &files[1..] {
+                    let mut r = RenderRequest::new(doc.clone());
+                    r.templating = false;
+                    r.convert_options = options.clone();
+                    r.steps = vec![Step::Convert { to: Format::Pdf }];
+                    let out = tokio::time::timeout(st.config.api_timeout, st.pipeline.run(r))
+                        .await
+                        .map_err(|_| rusticdoc_core::Error::Timeout(st.config.api_timeout))??;
+                    extra.push(Document::new(out.name, out.bytes));
+                }
+                req.extra = extra;
             }
-            req.extra = extra;
-        }
-        req.steps
-            .extend(post.into_iter().filter(|s| merge || *s != Step::Merge));
-        req.output_name = output_name;
-        return crate::routes::render::run(state, hook, request_id(&headers), req).await;
+            req.steps
+                .extend(post.into_iter().filter(|s| merge || *s != Step::Merge));
+            req.output_name = output_name;
+            crate::routes::render::execute(&st, req).await
+        };
+        return finish_within(state, hook, rid, limit, job).await;
     }
 
     // Several files, no merge: each through the same steps, zipped together.
@@ -133,10 +143,10 @@ pub async fn convert(
 )]
 pub async fn convert_pdf(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     if form.files.is_empty() {
         return Err(ApiError::bad_request(
@@ -186,6 +196,7 @@ pub async fn run_each(
 ) -> ApiResult<Response> {
     let st = state.clone();
     let single = files.len() == 1;
+    let limit = job_limit(&state, files.len());
     let job = async move {
         let mut outputs: Vec<Output> = Vec::with_capacity(files.len());
         for doc in files {
@@ -208,16 +219,14 @@ pub async fn run_each(
             zip(output_name.as_deref().unwrap_or("converted"), &outputs)
         }
     };
-    match hook {
-        None => Ok(download(job.await?)),
-        Some(hook) => {
-            let st = state.clone();
-            let rid2 = rid.clone();
-            tokio::spawn(async move {
-                let result = job.await;
-                webhook::deliver(st, hook, rid2, result).await;
-            });
-            Ok(webhook::accepted(&rid))
-        }
+    finish_within(state, hook, rid, limit, job).await
+}
+
+/// One file gets the usual time limit, several the batch's.
+fn job_limit(state: &AppState, files: usize) -> std::time::Duration {
+    if files > 1 {
+        state.config.batch_timeout
+    } else {
+        state.config.api_timeout
     }
 }

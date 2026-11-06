@@ -8,6 +8,7 @@ use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand};
 
 mod pdf;
+use rusticdoc_core::config::RenderMode;
 use rusticdoc_core::job::parse_steps;
 use rusticdoc_core::{Config, Document, Engines, Format, Pipeline, RenderRequest, Step};
 use rusticdoc_server::openapi::ApiDoc;
@@ -57,6 +58,9 @@ enum Command {
         #[arg(short, long)]
         data: Option<PathBuf>,
     },
+    /// Evaluates templates for `serve`, in a process of their own.
+    #[command(name = "__render-worker", hide = true)]
+    RenderWorker,
 }
 
 #[derive(Args)]
@@ -111,9 +115,20 @@ struct ConvertArgs {
     output: Option<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // The worker reads no settings and starts no threads.
+    if matches!(cli.command, Command::RenderWorker) {
+        std::process::exit(rusticdoc_core::render::worker_main());
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("start the runtime")?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> anyhow::Result<()> {
     let mut config = Config::from_env();
     if cli.verbose > 0 {
         config.log_level = if cli.verbose == 1 {
@@ -130,6 +145,15 @@ async fn main() -> anyhow::Result<()> {
             }
             if let Some(b) = bind {
                 config.bind = b;
+            }
+            // Clients' templates run in workers unless the operator says
+            // otherwise, and never fall back on their own.
+            if !config.render_mode_set {
+                config.render_mode = RenderMode::Isolated;
+            }
+            if config.render_mode == RenderMode::Isolated && config.render_worker_bin.is_none() {
+                config.render_worker_bin =
+                    Some(std::env::current_exe().context("find the render worker")?);
             }
             rusticdoc_server::telemetry::init(&config.log_format, &config.log_level);
             let state = rusticdoc_server::AppState::new(config);
@@ -175,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
+        Command::RenderWorker => unreachable!("handled in main"),
         Command::Engines => {
             let engines = Engines::from_config(&config);
             println!("{}", serde_json::to_string_pretty(&engines.describe())?);

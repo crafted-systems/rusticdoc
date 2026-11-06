@@ -9,7 +9,7 @@ use crate::routes::form::{Form, request_id};
 use crate::routes::gotenberg;
 use crate::routes::render;
 use crate::state::AppState;
-use crate::webhook::Webhook;
+use crate::webhook::Hook;
 
 #[derive(ToSchema)]
 #[allow(dead_code)]
@@ -48,10 +48,10 @@ pub struct EncryptForm {
 )]
 pub async fn merge(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     if form.files.is_empty() {
         return Err(ApiError::bad_request("merge needs at least one PDF file"));
@@ -88,10 +88,10 @@ pub async fn merge(
 )]
 pub async fn encrypt(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let file = form.require_file("one PDF")?;
     // Gotenberg accepts either password; the owner password defaults to the

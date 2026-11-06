@@ -12,6 +12,7 @@ pub mod pdfengines;
 pub mod service;
 
 use std::future::Future;
+use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
@@ -24,8 +25,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use rusticdoc_core::compat::Compat;
 use rusticdoc_core::{Config, Document, Error, Output, job};
+use tracing::Instrument;
 use uuid::Uuid;
 
+use crate::auth::Principal;
 use crate::error::{ApiError, ErrorText};
 use crate::routes::form::{self as uploads, Form, download, request_id};
 use crate::state::AppState;
@@ -147,6 +150,24 @@ where
     Fut: Future<Output = Result<Reply, ApiError>> + Send + 'static,
 {
     let headers = req.headers().clone();
+    // A webhook job's place is taken before the body is read.
+    let wants_hook = !state.config.compat.webhook_disabled
+        && ["gotenberg-webhook-url", "x-rusticdoc-webhook-url"]
+            .iter()
+            .any(|name| headers.contains_key(*name));
+    let permit = if wants_hook {
+        let caller = req
+            .extensions()
+            .get::<Principal>()
+            .map(|p| p.0.as_str())
+            .unwrap_or("public");
+        match state.jobs.try_acquire(caller) {
+            Ok(permit) => Some(Arc::new(permit)),
+            Err(e) => return e.into_response(),
+        }
+    } else {
+        None
+    };
     let form = match read_form(&state, req).await {
         Ok(form) => form,
         Err(e) => return e.into_response(),
@@ -155,7 +176,7 @@ where
         None
     } else {
         match Webhook::from_gotenberg_headers(&headers, state.config.webhook_allow_private).await {
-            Ok(hook) => hook,
+            Ok(hook) => hook.map(|hook| Webhook { permit, ..hook }),
             Err(e) => return e.into_response(),
         }
     };
@@ -201,7 +222,7 @@ where
     if state.config.compat.webhook_sync {
         delivery.await;
     } else {
-        tokio::spawn(delivery);
+        tokio::spawn(delivery.instrument(tracing::Span::current()));
     }
     webhook::accepted(&rid)
 }

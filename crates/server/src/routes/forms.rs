@@ -4,13 +4,14 @@ use axum::Json;
 use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use rusticdoc_core::pdfops::blocking;
 use rusticdoc_core::{Document, Output, pdfform};
 use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, download, request_id};
 use crate::state::AppState;
-use crate::webhook::{self, Webhook};
+use crate::webhook::{self, Hook, Webhook};
 
 /// One form field, as `/v1/pdf/forms/fields` lists them.
 #[derive(ToSchema)]
@@ -68,15 +69,10 @@ pub async fn fields(
     let mut form = Form::read(multipart, &state).await?;
     let file = form.require_file("one PDF")?;
     rusticdoc_core::pdfops::require_pdf(&file)?;
-    let fields = tokio::task::spawn_blocking(move || pdfform::fields(&file.bytes))
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "io_error",
-                e.to_string(),
-            )
-        })??;
+    let fields = blocking(state.config.api_timeout, move |_| {
+        pdfform::fields(&file.bytes)
+    })
+    .await?;
     Ok(Json(fields))
 }
 
@@ -94,10 +90,10 @@ pub async fn fields(
 )]
 pub async fn fill(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let file = form.require_file("one PDF")?;
     rusticdoc_core::pdfops::require_pdf(&file)?;
@@ -121,19 +117,19 @@ pub async fn fill(
         .filter(|s| s != ".pdf")
         .unwrap_or_else(|| file.name.clone());
 
+    let st = state.clone();
     let job = async move {
-        let bytes = tokio::task::spawn_blocking(move || {
-            let env = rusticdoc_core::template::environment();
-            pdfform::fill(&file.bytes, &data, &env, &options)
-        })
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "io_error",
-                e.to_string(),
+        let bytes = st
+            .pipeline
+            .renderer()
+            .fill(
+                &file.bytes,
+                &data,
+                &options,
+                st.config.max_render_bytes,
+                st.config.api_timeout,
             )
-        })??;
+            .await?;
         Ok::<Output, ApiError>(Output {
             name,
             content_type: "application/pdf",
@@ -157,10 +153,10 @@ pub async fn fill(
 )]
 pub async fn overlay(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     if form.files.len() != 2 {
         return Err(ApiError::bad_request(
@@ -176,16 +172,9 @@ pub async fn overlay(
         .map(|s| format!("{}.pdf", s.trim()))
         .filter(|s| s != ".pdf")
         .unwrap_or_else(|| base.name.clone());
+    let limit = state.config.api_timeout;
     let job = async move {
-        let bytes = tokio::task::spawn_blocking(move || pdfform::overlay(&base.bytes, &over.bytes))
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    "io_error",
-                    e.to_string(),
-                )
-            })??;
+        let bytes = blocking(limit, move |_| pdfform::overlay(&base.bytes, &over.bytes)).await?;
         Ok::<Output, ApiError>(Output {
             name,
             content_type: "application/pdf",
@@ -206,6 +195,22 @@ pub async fn finish<F>(
 where
     F: std::future::Future<Output = ApiResult<Output>> + Send + 'static,
 {
+    let limit = state.config.api_timeout;
+    finish_within(state, hook, request_id, limit, job).await
+}
+
+/// As [`finish`], with one time limit over the whole job however it is delivered.
+pub async fn finish_within<F>(
+    state: AppState,
+    hook: Option<Webhook>,
+    request_id: String,
+    limit: std::time::Duration,
+    job: F,
+) -> ApiResult<Response>
+where
+    F: std::future::Future<Output = ApiResult<Output>> + Send + 'static,
+{
+    let job = webhook::within(limit, job);
     match hook {
         None => {
             let out = job.await?;
@@ -213,11 +218,7 @@ where
             Ok(download(out))
         }
         Some(hook) => {
-            let rid = request_id.clone();
-            tokio::spawn(async move {
-                let result = job.await;
-                webhook::deliver(state, hook, rid, result).await;
-            });
+            webhook::spawn_job(state, hook, request_id.clone(), job);
             Ok(webhook::accepted(&request_id))
         }
     }

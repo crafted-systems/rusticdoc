@@ -63,6 +63,24 @@ pub struct FillOptions {
     pub strip_tag_annotations: bool,
 }
 
+/// What one fill may spend, across every tag in the document.
+#[derive(Debug, Clone, Copy)]
+pub struct FillLimits {
+    /// Bytes the tags may write in all.
+    pub max_render_bytes: usize,
+    /// When the fill must stop.
+    pub deadline: crate::pdfops::Deadline,
+}
+
+impl Default for FillLimits {
+    fn default() -> Self {
+        Self {
+            max_render_bytes: crate::limits::DEFAULT_MAX_RENDER_BYTES,
+            deadline: crate::pdfops::Deadline::new(std::time::Duration::from_secs(30)),
+        }
+    }
+}
+
 /// Lists the fields of a form.
 ///
 /// A field without widgets on any page reports page `0`. A PDF without an
@@ -92,8 +110,20 @@ pub fn fill(
     env: &minijinja::Environment<'static>,
     options: &FillOptions,
 ) -> Result<Vec<u8>> {
+    fill_within(pdf, data, env, options, FillLimits::default())
+}
+
+/// As [`fill`], with one budget for everything the document's tags evaluate.
+pub fn fill_within(
+    pdf: &[u8],
+    data: &serde_json::Value,
+    env: &minijinja::Environment<'static>,
+    options: &FillOptions,
+    limits: FillLimits,
+) -> Result<Vec<u8>> {
+    limits.deadline.check()?;
     let doc = load(pdf)?;
-    let doc = fill::fill(doc, data, env, options)?;
+    let doc = fill::fill(doc, data, env, options, limits)?;
     save(doc)
 }
 

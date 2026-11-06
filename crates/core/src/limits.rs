@@ -30,3 +30,6 @@ pub fn charge_output(total: &mut usize, bytes: usize, budget: usize) -> crate::R
     }
     Ok(())
 }
+
+/// Template tags one PDF form may hold.
+pub const MAX_FILL_TAGS: usize = 1_000;
