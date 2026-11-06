@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::rich::html::{self, Block, Inline};
 use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK, REL_IMAGE};
 use crate::rich::{
-    blank, emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, text_node,
-    Picture, Rich, Seg,
+    blank, emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, serialize,
+    shell, text_node, Picture, Rich, Seg,
 };
 use crate::xml::{self, Elem, Node};
 use crate::TemplateError;
@@ -29,87 +29,23 @@ const NAMESPACES: &[(&str, &str)] = &[
     ),
 ];
 
-const RPR_ORDER: &[&str] = &[
-    "w:rStyle",
-    "w:rFonts",
-    "w:b",
-    "w:bCs",
-    "w:i",
-    "w:iCs",
-    "w:caps",
-    "w:smallCaps",
-    "w:strike",
-    "w:dstrike",
-    "w:outline",
-    "w:shadow",
-    "w:emboss",
-    "w:imprint",
-    "w:noProof",
-    "w:snapToGrid",
-    "w:vanish",
-    "w:webHidden",
-    "w:color",
-    "w:spacing",
-    "w:w",
-    "w:kern",
-    "w:position",
-    "w:sz",
-    "w:szCs",
-    "w:highlight",
-    "w:u",
-    "w:effect",
-    "w:bdr",
-    "w:shd",
-    "w:fitText",
-    "w:vertAlign",
-    "w:rtl",
-    "w:cs",
-    "w:em",
-    "w:lang",
-    "w:eastAsianLayout",
-    "w:specVanish",
-    "w:oMath",
-];
+const RPR_ORDER: &str =
+    "w:rStyle w:rFonts w:b w:bCs w:i w:iCs w:caps w:smallCaps w:strike w:dstrike \
+     w:outline w:shadow w:emboss w:imprint w:noProof w:snapToGrid w:vanish w:webHidden \
+     w:color w:spacing w:w w:kern w:position w:sz w:szCs w:highlight w:u w:effect w:bdr \
+     w:shd w:fitText w:vertAlign w:rtl w:cs w:em w:lang w:eastAsianLayout w:specVanish \
+     w:oMath";
 
-const PPR_ORDER: &[&str] = &[
-    "w:pStyle",
-    "w:keepNext",
-    "w:keepLines",
-    "w:pageBreakBefore",
-    "w:framePr",
-    "w:widowControl",
-    "w:numPr",
-    "w:suppressLineNumbers",
-    "w:pBdr",
-    "w:shd",
-    "w:tabs",
-    "w:suppressAutoHyphens",
-    "w:kinsoku",
-    "w:wordWrap",
-    "w:overflowPunct",
-    "w:topLinePunct",
-    "w:autoSpaceDE",
-    "w:autoSpaceDN",
-    "w:bidi",
-    "w:adjustRightInd",
-    "w:snapToGrid",
-    "w:spacing",
-    "w:ind",
-    "w:contextualSpacing",
-    "w:mirrorIndents",
-    "w:suppressOverlap",
-    "w:jc",
-    "w:textDirection",
-    "w:textAlignment",
-    "w:textboxTightWrap",
-    "w:outlineLvl",
-    "w:divId",
-    "w:cnfStyle",
-    "w:rPr",
-    "w:sectPr",
-    "w:pPrChange",
-];
+const PPR_ORDER: &str =
+    "w:pStyle w:keepNext w:keepLines w:pageBreakBefore w:framePr w:widowControl w:numPr \
+     w:suppressLineNumbers w:pBdr w:shd w:tabs w:suppressAutoHyphens w:kinsoku \
+     w:wordWrap w:overflowPunct w:topLinePunct w:autoSpaceDE w:autoSpaceDN w:bidi \
+     w:adjustRightInd w:snapToGrid w:spacing w:ind w:contextualSpacing w:mirrorIndents \
+     w:suppressOverlap w:jc w:textDirection w:textAlignment w:textboxTightWrap \
+     w:outlineLvl w:divId w:cnfStyle w:rPr w:sectPr w:pPrChange";
 
+/// What the markup around one table cell comes to, roughly.
+const CELL_MARKUP: usize = 80;
 /// Half-points per heading level.
 const HEADING_SIZES: [u32; 6] = [48, 36, 28, 24, 22, 20];
 /// Indent of one list level, in twentieths of a point.
@@ -140,12 +76,6 @@ pub fn rewrite(
         ensure_ns(root, NAMESPACES);
     }
     ctx.walk(nodes)
-}
-
-fn serialize(elem: &Elem) -> String {
-    let mut out = String::new();
-    xml::write_xml(std::slice::from_ref(&Node::Elem(elem.clone())), &mut out);
-    out
 }
 
 fn prop(name: &str, attrs: &[(&str, &str)]) -> Elem {
@@ -254,15 +184,15 @@ impl Docx<'_, '_> {
         let copy_ppr = without_section(ppr.as_ref());
         let mut out: Vec<Node> = Vec::new();
         let mut cur: Vec<Node> = Vec::new();
+        let empty = shell(&p);
         let close = |cur: &mut Vec<Node>, ppr: Option<&Elem>, out: &mut Vec<Node>| {
-            let mut para = p.clone();
-            para.children.clear();
+            let mut para = empty.clone();
             para.make_open();
             para.children.extend(ppr.cloned().map(Node::Elem));
             para.children.append(cur);
             out.push(Node::Elem(para));
         };
-        for child in p.children.iter().cloned() {
+        for child in p.children {
             let Node::Elem(mut e) = child else {
                 cur.push(child);
                 continue;
@@ -349,9 +279,8 @@ impl Docx<'_, '_> {
     /// Cuts a run at its markers; the text around them stays in copies of the
     /// run, with its properties.
     fn split_run(&self, run: &Elem) -> Result<Vec<Piece>, TemplateError> {
-        let shell = |children: Vec<Node>| {
-            let mut copy = run.clone();
-            copy.children.clear();
+        let piece = |children: Vec<Node>| {
+            let mut copy = shell(run);
             copy.children
                 .extend(run.child("w:rPr").cloned().map(Node::Elem));
             copy.children.extend(children);
@@ -371,14 +300,14 @@ impl Docx<'_, '_> {
                         for seg in segs {
                             match seg {
                                 Seg::Text(s) => {
-                                    let mut t = e.clone();
+                                    let mut t = shell(e);
                                     t.set_attr("xml:space", "preserve");
                                     t.children = vec![text_node(s)];
                                     pending.push(Node::Elem(t));
                                 }
                                 Seg::Mark(id) => {
                                     if !pending.is_empty() {
-                                        out.push(shell(std::mem::take(&mut pending)));
+                                        out.push(piece(std::mem::take(&mut pending)));
                                     }
                                     out.push(Piece::Mark(id));
                                 }
@@ -390,7 +319,7 @@ impl Docx<'_, '_> {
             }
         }
         if !pending.is_empty() {
-            out.push(shell(pending));
+            out.push(piece(pending));
         }
         Ok(out)
     }
@@ -558,6 +487,7 @@ impl Docx<'_, '_> {
         heading: Option<u8>,
         out: &mut String,
     ) -> Result<(), TemplateError> {
+        let start = out.len();
         let mut props = ppr
             .cloned()
             .unwrap_or_else(|| Elem::new("w:pPr", &[], false));
@@ -617,7 +547,7 @@ impl Docx<'_, '_> {
             }
         }
         out.push_str("</w:p>");
-        Ok(())
+        self.pkg.charge(out.len() - start)
     }
 
     fn table(
@@ -653,6 +583,7 @@ impl Docx<'_, '_> {
                     out,
                     "<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>"
                 );
+                self.pkg.charge(CELL_MARKUP)?;
                 let cell = row.get(i);
                 let mut inner = String::new();
                 if let Some(cell) = cell {

@@ -19,6 +19,10 @@ pub const MAX_IMAGES: usize = 200;
 pub const MAX_BARCODE_INPUT: usize = 4096;
 /// The widest a printed linear barcode gets, in modules.
 const MAX_BARCODE_MODULES: usize = 4096;
+/// The tallest a linear barcode gets, in modules.
+const MAX_BARCODE_LINES: usize = 400;
+/// The largest barcode image generated, width times height.
+const MAX_BARCODE_PIXELS: usize = 4_000_000;
 /// The page text width that caps an image's natural size.
 pub const TEXT_WIDTH_PT: f64 = 450.0;
 /// The longest side accepted, in points (200 inches).
@@ -189,18 +193,25 @@ fn png(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// A whole number of device pixels per module, so edges stay crisp.
-fn module_px(size_pt: f64, modules: usize) -> u32 {
-    ((size_pt * 4.0 / modules as f64).ceil() as u32).clamp(2, 16)
+/// A whole number of device pixels per module, so edges stay crisp; as many as
+/// the size asks for, as far as the image stays within its pixel limit.
+fn module_px(size_pt: f64, columns: usize, lines: usize) -> usize {
+    let wanted = ((size_pt * 4.0 / columns as f64).ceil() as usize).clamp(2, 16);
+    let fits = (MAX_BARCODE_PIXELS / (columns * lines)).isqrt();
+    wanted.min(fits).max(1)
 }
 
-fn matrix_png(rows: &[Vec<bool>], size_pt: f64) -> Result<Vec<u8>, String> {
+fn matrix_png(rows: &[&[bool]], size_pt: f64) -> Result<Vec<u8>, String> {
     let (columns, lines) = (rows[0].len(), rows.len());
-    let m = module_px(size_pt, columns) as usize;
+    if columns * lines > MAX_BARCODE_PIXELS {
+        return Err("the barcode is too large to draw".into());
+    }
+    let m = module_px(size_pt, columns, lines);
     let mut pixels = Vec::with_capacity(columns * m * lines * m);
+    let mut line = Vec::with_capacity(columns * m);
     for row in rows {
-        let mut line = Vec::with_capacity(columns * m);
-        for dark in row {
+        line.clear();
+        for dark in *row {
             line.extend(std::iter::repeat_n(if *dark { 0u8 } else { 255 }, m));
         }
         for _ in 0..m {
@@ -257,6 +268,7 @@ pub fn barcode(kind: &str, value: &str, size: Option<f64>) -> Result<(Media, (f6
             rows[QUIET + i / width][QUIET + i % width] = *color == qrcode::Color::Dark;
         }
         let size = size.unwrap_or(144.0);
+        let rows: Vec<&[bool]> = rows.iter().map(Vec::as_slice).collect();
         (matrix_png(&rows, size)?, (size, size))
     } else {
         const QUIET: usize = 10;
@@ -270,8 +282,8 @@ pub fn barcode(kind: &str, value: &str, size: Option<f64>) -> Result<(Media, (f6
         let mut row = vec![false; QUIET];
         row.extend(modules.iter().map(|m| *m != 0));
         row.extend(std::iter::repeat_n(false, QUIET));
-        let lines = (total / 4).max(50);
-        let rows = vec![row; lines];
+        let lines = (total / 4).clamp(50, MAX_BARCODE_LINES);
+        let rows = vec![row.as_slice(); lines];
         let size = size.unwrap_or(200.0);
         let height = size * lines as f64 / total as f64;
         (matrix_png(&rows, size)?, (size, height))
@@ -336,6 +348,20 @@ mod tests {
         }
         assert!(barcode("qr", &"x".repeat(MAX_BARCODE_INPUT + 1), None).is_err());
         assert!(barcode("code128", &"x".repeat(MAX_BARCODE_INPUT), None).is_err());
+    }
+
+    #[test]
+    fn no_size_draws_more_than_the_pixel_limit() {
+        // Without a limit this asks for 57,000 by 5,600 pixels.
+        for (kind, value) in [("code128", "x".repeat(360)), ("qr", "x".repeat(2000))] {
+            let (media, printed) = barcode(kind, &value, Some(MAX_SIDE_PT)).unwrap();
+            let pixels = media.px.0 as usize * media.px.1 as usize;
+            assert!(pixels <= MAX_BARCODE_PIXELS, "{kind}: {:?}", media.px);
+            assert_eq!(printed.0, MAX_SIDE_PT, "the printed size is unaffected");
+        }
+        assert_eq!(module_px(MAX_SIDE_PT, 4096, 400), 1);
+        assert_eq!(module_px(100.0, 29, 29), 14);
+        assert_eq!(module_px(MAX_SIDE_PT, 185, 185), 10);
     }
 
     #[test]

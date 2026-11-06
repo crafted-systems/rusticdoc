@@ -1083,6 +1083,100 @@ fn html_limits_and_bad_links_are_template_errors() {
     }
 }
 
+#[test]
+fn a_huge_html_table_is_refused_in_every_format_that_expands_it() {
+    // Small input: one wide row, then thousands of rows padded to its width.
+    let huge = format!(
+        "<table><tr>{}</tr>{}</table>",
+        "<td>".repeat(250),
+        "<tr><td>".repeat(9_000)
+    );
+    assert!(huge.len() < 100_000);
+    for (format, doc) in [
+        (Format::Docx, docx(&p("{{ b | html }}"))),
+        (Format::Odt, odt("<text:p>{{ b | html }}</text:p>")),
+        (Format::Pptx, pptx(&[&shape(&["{{ b | html }}"])])),
+    ] {
+        let err = render_err(format, &doc, json!({ "b": huge }));
+        assert!(err.contains("at most 50000"), "{err}");
+    }
+    let err = render_err(
+        Format::Docx,
+        &docx(&p("{{ b | html }}")),
+        json!({ "b": format!("<table>{}</table>", "<tr><td>".repeat(10_001)) }),
+    );
+    assert!(err.contains("at most 10000 are allowed"), "{err}");
+    // Values that pass one at a time add up over a render.
+    let doc = docx(&p("{% for b in bodies %}{{ b | html }}{% endfor %}"));
+    let table = format!(
+        "<table>{}</table>",
+        format!("<tr>{}</tr>", "<td>".repeat(100)).repeat(400)
+    );
+    let err = render_err(Format::Docx, &doc, json!({ "bodies": vec![table; 3] }));
+    assert!(err.contains("cells in all"), "{err}");
+}
+
+#[test]
+fn generated_html_markup_counts_against_the_package_limit() {
+    // Every generated paragraph repeats the template paragraph's properties,
+    // so 1 MB of short paragraphs would come to about 375 MB.
+    let filler = "x".repeat(3000);
+    let body = format!(
+        "<w:p><w:pPr><w:pStyle w:val=\"{filler}\"/></w:pPr><w:r><w:t>{{{{ b | html }}}}</w:t></w:r></w:p>"
+    );
+    let html = "<p>x</p>".repeat(1024 * 1024 / 8);
+    let result = compile(Format::Docx, &docx(&body))
+        .unwrap()
+        .render(&json!({ "b": html }));
+    let err = match result {
+        Ok(_) => panic!("must not render"),
+        Err(e) => e,
+    };
+    assert!(err.message.contains("package limit"), "{err}");
+}
+
+#[test]
+fn an_oversized_barcode_size_stays_within_the_pixel_limit() {
+    let doc = docx(&p("{{ v | barcode(\"code128\", size=14400) }}"));
+    let out = render(Format::Docx, &doc, json!({"v": "x".repeat(360)}));
+    let png = bytes_of(&out, "word/media/rich1.png").unwrap();
+    let side = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as u64;
+    assert!(
+        side(16) * side(20) <= 4_000_000,
+        "{} x {}",
+        side(16),
+        side(20)
+    );
+    let xml = part(&out, "word/document.xml");
+    assert!(
+        xml.contains("<wp:extent cx=\"182880000\" "),
+        "the printed size holds: {xml}"
+    );
+}
+
+#[test]
+fn many_values_in_one_run_stay_fast() {
+    // An inline loop puts every marker in one text node; handling each must
+    // not copy all of it. Quadratic work here takes minutes, not moments.
+    let url = "https://a.example";
+    let data = json!({ "n": 20_000, "u": url, "b": "<p>x</p>", "t": "y".repeat(100) });
+    let started = std::time::Instant::now();
+    let loop_of = |tag: &str| format!("{{% for i in range(n) %}}{{{{ t }}}}{tag}{{% endfor %}}");
+    let tag = loop_of("{{ u | link(\"x\") }}{{ b | html }}");
+    render(Format::Docx, &docx(&p(&tag)), data.clone());
+    render(
+        Format::Odt,
+        &odt(&format!("<text:p>{tag}</text:p>")),
+        data.clone(),
+    );
+    render(
+        Format::Pptx,
+        &pptx(&[&shape(&[&loop_of("{{ u | link(\"x\") }}")])]),
+        data,
+    );
+    assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
+}
+
 // --- chart ----------------------------------------------------------------
 
 fn sales() -> Value {
@@ -1666,4 +1760,159 @@ fn quick_xml_reader(bytes: &[u8]) -> quick_xml::Reader<&[u8]> {
     let mut reader = quick_xml::Reader::from_reader(bytes);
     reader.config_mut().check_end_names = true;
     reader
+}
+
+// --- LibreOffice ----------------------------------------------------------
+
+fn report_data(chart: bool) -> Value {
+    let logo = b64(&png(200, 100));
+    json!({
+        "customer": "Ada & Co",
+        "logo": logo,
+        "sku": "SKU-42",
+        "url": "https://example.com/?a=1&b=2",
+        "status": "Overdue",
+        "body": "<h2>Heading two</h2><p>Para <b>bold</b> text</p><script>alert(1)</script><ul><li>Item one</li><li>Item two</li></ul><ol><li>Step one</li></ol><table><tr><th>Cell head</th><td>Cell value</td></tr></table>",
+        "items": [{"name": "Lamp", "logo": logo}, {"name": "Plug", "logo": logo}],
+        "chart": chart,
+        "rows": [
+            {"month": "January", "sales": 10, "costs": 4},
+            {"month": "February", "sales": 20, "costs": 8},
+        ],
+    })
+}
+
+struct Case {
+    file: &'static str,
+    template: &'static [u8],
+    format: Format,
+    chart: bool,
+    /// Text that must show in the PDF, beyond what every format shows.
+    text: &'static [&'static str],
+    /// The fewest images: logo, barcodes and the images of the rows.
+    images: usize,
+    pages: Option<u32>,
+}
+
+/// Renders LibreOffice-made templates of every format, converts the result to
+/// PDF with LibreOffice and looks at what it drew. Skips without the images.
+#[test]
+fn libreoffice_opens_rich_output_and_shows_the_content() {
+    if !libreoffice_available() {
+        eprintln!("skipping: docker images not available");
+        return;
+    }
+    let all: &[&str] = &[
+        "Report for Ada",
+        "Click here",
+        "Overdue",
+        "Heading two",
+        "Para bold text",
+        "Item one",
+        "Item two",
+        "Step one",
+        "Cell head",
+    ];
+    let cases = [
+        Case {
+            file: "out.docx",
+            template: include_bytes!("fixtures/rich.docx"),
+            format: Format::Docx,
+            chart: true,
+            text: &[
+                "Lamp",
+                "Plug",
+                "Second page",
+                "Revenue",
+                "January",
+                "February",
+                "sales",
+                "costs",
+            ],
+            images: 5,
+            pages: Some(2),
+        },
+        Case {
+            file: "out.odt",
+            template: include_bytes!("fixtures/rich.odt"),
+            format: Format::Odt,
+            chart: false,
+            text: &["Lamp", "Plug", "Second page", "Cell value"],
+            images: 5,
+            pages: Some(2),
+        },
+        Case {
+            file: "out.xlsx",
+            template: include_bytes!("fixtures/rich.xlsx"),
+            format: Format::Xlsx,
+            chart: true,
+            text: &[
+                "Lamp", "Plug", "Keep", "Revenue", "January", "February", "sales", "costs",
+            ],
+            images: 3,
+            pages: None,
+        },
+        Case {
+            file: "out.ods",
+            template: include_bytes!("fixtures/rich.ods"),
+            format: Format::Ods,
+            chart: false,
+            text: &["Lamp", "Plug", "Keep", "Below"],
+            images: 3,
+            pages: None,
+        },
+        Case {
+            file: "out.pptx",
+            template: include_bytes!("fixtures/rich.pptx"),
+            format: Format::Pptx,
+            chart: true,
+            text: &["Revenue", "January", "February", "sales", "costs"],
+            images: 2,
+            pages: Some(1),
+        },
+        Case {
+            file: "out.odp",
+            template: include_bytes!("fixtures/rich.odp"),
+            format: Format::Odp,
+            chart: false,
+            text: &[],
+            images: 2,
+            pages: Some(1),
+        },
+    ];
+    let keep = std::env::var("RICH_KEEP").ok();
+    let temp = tempfile::tempdir().unwrap();
+    let dir = keep.as_deref().unwrap_or(temp.path().to_str().unwrap());
+    for case in &cases {
+        let out = render(case.format, case.template, report_data(case.chart));
+        std::fs::write(format!("{dir}/{}", case.file), &out).unwrap();
+        assert!(
+            soffice(dir, "pdf", case.file),
+            "{}: conversion failed",
+            case.file
+        );
+        let pdf = case.file.replace('.', "_") + ".pdf";
+        std::fs::rename(format!("{dir}/out.pdf"), format!("{dir}/{pdf}")).unwrap();
+        let text = pdf_text(dir, &pdf);
+        for expected in all.iter().chain(case.text) {
+            assert!(
+                text.contains(expected),
+                "{}: no {expected:?} in {text}",
+                case.file
+            );
+        }
+        assert!(!text.contains("alert"), "{}: {text}", case.file);
+        assert!(!text.contains("{{"), "{}: {text}", case.file);
+        let images = pdf_images(dir, &pdf);
+        assert!(images.len() >= case.images, "{}: {images:?}", case.file);
+        if let Some(pages) = case.pages {
+            assert_eq!(pdf_pages(dir, &pdf), pages, "{}", case.file);
+        }
+        let links = pdf_links(dir, &pdf);
+        assert!(
+            links.iter().any(|l| l.contains("example.com")),
+            "{}: {links:?}",
+            case.file
+        );
+    }
 }

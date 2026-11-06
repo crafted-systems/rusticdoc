@@ -630,3 +630,132 @@ pub fn xlsx_styled(rows: &[String]) -> Vec<u8> {
         .collect();
     zip(&refs)
 }
+
+// --- LibreOffice ----------------------------------------------------------
+
+/// The images that have `soffice`, best first.
+const OFFICE_IMAGES: [&str; 2] = [
+    "rusticdoc:local",
+    "ghcr.io/crafted-systems/gotenberg-slim-office:latest",
+];
+const TOOLS_IMAGE: &str = "gotenberg/integration-tools:latest";
+
+fn docker_has(image: &str) -> bool {
+    matches!(run("docker", &["image", "inspect", image]), Some((true, _)))
+}
+
+fn office_image() -> Option<&'static str> {
+    OFFICE_IMAGES.iter().copied().find(|i| docker_has(i))
+}
+
+/// Whether the images the conversion tests need are present.
+pub fn libreoffice_available() -> bool {
+    office_image().is_some() && docker_has(TOOLS_IMAGE)
+}
+
+/// Converts `file` in `dir` with LibreOffice. The profile is kept on the
+/// host between the warm-up run and the conversion; without that first
+/// run, soffice exits with code 81.
+pub fn soffice(dir: &str, to: &str, file: &str) -> bool {
+    let Some(image) = office_image() else {
+        return false;
+    };
+    std::fs::create_dir_all(format!("{dir}/profile")).unwrap();
+    let mount = format!("{dir}:/w");
+    let profile = format!("{dir}/profile:/tmp/p");
+    let input = format!("/w/{file}");
+    let base = [
+        "run",
+        "--rm",
+        "--platform",
+        "linux/arm64",
+        "-v",
+        &mount,
+        "-v",
+        &profile,
+        "--entrypoint",
+        "/usr/lib/libreoffice/program/soffice.bin",
+        image,
+        "-env:UserInstallation=file:///tmp/p",
+        "--headless",
+    ];
+    if !std::path::Path::new(&format!("{dir}/profile/user")).exists() {
+        let mut warm = base.to_vec();
+        warm.push("--terminate_after_init");
+        run("docker", &warm);
+    }
+    let mut convert = base.to_vec();
+    convert.extend(["--convert-to", to, "--outdir", "/w", &input]);
+    matches!(run("docker", &convert), Some((true, _)))
+}
+
+fn pdf_tool(dir: &str, tool: &[&str], file: &str) -> String {
+    let mount = format!("{dir}:/w");
+    let pdf = format!("/w/{file}");
+    let mut args = vec![
+        "run",
+        "--rm",
+        "--platform",
+        "linux/arm64",
+        "-v",
+        &mount,
+        TOOLS_IMAGE,
+    ];
+    args.extend_from_slice(tool);
+    args.push(&pdf);
+    let (ok, text) = run("docker", &args).unwrap();
+    assert!(ok, "{tool:?} failed: {text}");
+    text
+}
+
+pub fn pdf_text(dir: &str, file: &str) -> String {
+    let mount = format!("{dir}:/w");
+    let pdf = format!("/w/{file}");
+    let args = [
+        "run",
+        "--rm",
+        "--platform",
+        "linux/arm64",
+        "-v",
+        &mount,
+        TOOLS_IMAGE,
+        "pdftotext",
+        "-layout",
+        &pdf,
+        "-",
+    ];
+    let (ok, text) = run("docker", &args).unwrap();
+    assert!(ok, "pdftotext failed: {text}");
+    text
+}
+
+/// `(width, height)` in pixels of every image `pdfimages -list` reports.
+pub fn pdf_images(dir: &str, file: &str) -> Vec<(u32, u32)> {
+    pdf_tool(dir, &["pdfimages", "-list"], file)
+        .lines()
+        .skip(2)
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            Some((cols.get(3)?.parse().ok()?, cols.get(4)?.parse().ok()?))
+        })
+        .collect()
+}
+
+/// The link targets in a PDF's annotations.
+pub fn pdf_links(dir: &str, file: &str) -> Vec<String> {
+    let bytes = std::fs::read(format!("{dir}/{file}")).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    Regex::new(r"/URI *\(([^)]*)\)")
+        .unwrap()
+        .captures_iter(&text)
+        .map(|c| c[1].to_string())
+        .collect()
+}
+
+/// The page count `pdfinfo` reports.
+pub fn pdf_pages(dir: &str, file: &str) -> u32 {
+    pdf_tool(dir, &["pdfinfo"], file)
+        .lines()
+        .find_map(|l| l.strip_prefix("Pages:")?.trim().parse().ok())
+        .unwrap_or(0)
+}

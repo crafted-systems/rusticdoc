@@ -8,6 +8,14 @@
 pub const MAX_INPUT: usize = 1024 * 1024;
 /// The deepest nesting accepted.
 pub const MAX_DEPTH: usize = 64;
+/// The widest table accepted. Short rows are padded to the widest, so a table
+/// costs rows times columns however little text it holds.
+pub const MAX_TABLE_COLUMNS: usize = 256;
+pub const MAX_TABLE_ROWS: usize = 10_000;
+/// The most cells one table may come to, with padding.
+pub const MAX_TABLE_CELLS: usize = 50_000;
+/// The most cells all tables of a document may come to, with padding.
+pub const MAX_DOCUMENT_CELLS: usize = 100_000;
 
 /// Formatting a run carries. `color` is `RRGGBB`; `href` is checked.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -458,9 +466,12 @@ fn decode_entities(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         rest = &rest[at..];
-        let entity = rest[1..]
-            .find(';')
-            .filter(|n| *n <= 10)
+        // No entity is long, so a `&` never looks further than this; bytes,
+        // because the window may end inside a character.
+        let window = &rest.as_bytes()[1..rest.len().min(12)];
+        let entity = window
+            .iter()
+            .position(|b| *b == b';')
             .map(|n| &rest[1..n + 1]);
         let decoded = entity.and_then(|name| {
             let named = match name {
@@ -502,10 +513,10 @@ fn decode_entities(text: &str) -> String {
     out
 }
 
-/// Reads `name="value"` pairs up to the closing `>`; returns the pairs,
-/// whether the tag closed itself, and the offset just past it.
 type TagAttrs = (Vec<(String, String)>, bool, usize);
 
+/// Reads `name="value"` pairs up to the closing `>`; returns the pairs,
+/// whether the tag closed itself, and the offset just past it.
 fn read_attrs(tag: &str) -> Option<TagAttrs> {
     let b = tag.as_bytes();
     let mut attrs = Vec::new();
@@ -633,7 +644,53 @@ pub fn parse(input: &str) -> Result<Vec<Block>, String> {
         parser.pop();
     }
     parser.flush();
+    table_cells(&parser.root)?;
     Ok(parser.root)
+}
+
+/// How many cells the tables come to once padded, refusing what is too large.
+pub fn table_cells(blocks: &[Block]) -> Result<usize, String> {
+    let mut total = 0usize;
+    for block in blocks {
+        match block {
+            Block::Para(_) | Block::Heading(..) => {}
+            Block::List { items, .. } => {
+                for item in items {
+                    total += table_cells(item)?;
+                }
+            }
+            Block::Table(rows) => {
+                let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+                if columns > MAX_TABLE_COLUMNS {
+                    return Err(format!(
+                        "a table has {columns} columns; at most {MAX_TABLE_COLUMNS} are allowed"
+                    ));
+                }
+                if rows.len() > MAX_TABLE_ROWS {
+                    return Err(format!(
+                        "a table has {} rows; at most {MAX_TABLE_ROWS} are allowed",
+                        rows.len()
+                    ));
+                }
+                let cells = rows.len() * columns;
+                if cells > MAX_TABLE_CELLS {
+                    return Err(format!(
+                        "a table comes to {cells} cells; at most {MAX_TABLE_CELLS} are allowed"
+                    ));
+                }
+                total += cells;
+                for cell in rows.iter().flatten() {
+                    total += table_cells(&cell.blocks)?;
+                }
+            }
+        }
+        if total > MAX_DOCUMENT_CELLS {
+            return Err(format!(
+                "the tables hold more than {MAX_DOCUMENT_CELLS} cells in all"
+            ));
+        }
+    }
+    Ok(total)
 }
 
 /// The text of the blocks, a line per paragraph, list item, table row or
@@ -811,6 +868,48 @@ mod tests {
         for bad in ["ff0000", "#ff00", "#gggggg", "#ff0000\"", "\"#fff", ""] {
             assert_eq!(check_hex(bad), None, "{bad}");
         }
+    }
+
+    fn table(rows: usize, columns: usize) -> String {
+        let row = format!("<tr>{}</tr>", "<td>".repeat(columns));
+        format!("<table>{}</table>", row.repeat(rows))
+    }
+
+    #[test]
+    fn limits_what_a_table_can_expand_to() {
+        assert!(parse(&table(1, MAX_TABLE_COLUMNS)).is_ok());
+        let err = parse(&table(1, MAX_TABLE_COLUMNS + 1)).unwrap_err();
+        assert!(err.contains("columns"), "{err}");
+        let err = parse(&table(MAX_TABLE_ROWS + 1, 1)).unwrap_err();
+        assert!(err.contains("rows"), "{err}");
+        // One wide row makes every short row expensive.
+        let wide = format!(
+            "<table><tr>{}</tr>{}</table>",
+            "<td>".repeat(200),
+            "<tr><td>".repeat(5_000)
+        );
+        assert!(wide.len() < MAX_INPUT);
+        let err = parse(&wide).unwrap_err();
+        assert!(err.contains("at most 50000"), "{err}");
+        // Tables that pass one by one can still add up.
+        let err = parse(&table(100, 400 / 4).repeat(11)).unwrap_err();
+        assert!(err.contains("in all"), "{err}");
+        // A table nested in cells counts too.
+        let nested = format!("<table><tr><td>{}</table>", table(100, 100).repeat(11));
+        assert!(parse(&nested).unwrap_err().contains("in all"));
+    }
+
+    #[test]
+    fn looking_for_an_entity_stops_early() {
+        // Every `&` would otherwise search to the end of the input.
+        let text = "&".repeat(MAX_INPUT - 1);
+        let started = std::time::Instant::now();
+        assert_eq!(decode_entities(&text), text);
+        assert!(started.elapsed().as_secs() < 5);
+        // The window can end inside a character.
+        let text = "&\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9};";
+        assert_eq!(decode_entities(text), text);
+        assert_eq!(decode_entities("&#x1F600;"), "\u{1F600}");
     }
 
     #[test]

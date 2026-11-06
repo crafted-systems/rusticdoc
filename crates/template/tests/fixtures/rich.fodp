@@ -15,7 +15,7 @@
         <draw:frame svg:x="1cm" svg:y="5.5cm" svg:width="12cm" svg:height="2cm"><draw:text-box><text:p>{{ body | html }}</text:p></draw:text-box></draw:frame>
         <draw:frame svg:x="14cm" svg:y="1cm" svg:width="6cm" svg:height="3cm"><draw:text-box><text:p>{{ logo | image(width=120) }}</text:p></draw:text-box></draw:frame>
         <draw:frame svg:x="14cm" svg:y="5cm" svg:width="6cm" svg:height="3cm"><draw:text-box><text:p>{{ sku | barcode("code128", size=120) }}</text:p></draw:text-box></draw:frame>
-        <draw:frame svg:x="1cm" svg:y="9cm" svg:width="12cm" svg:height="7cm"><draw:text-box><text:p>{% if chart %}{{ rows | chart(type="line", x="month", y=["sales","costs"], title="Revenue", width=340, height=200) }}{% endif %}</text:p></draw:text-box></draw:frame>
+        <draw:frame svg:x="1cm" svg:y="9cm" svg:width="12cm" svg:height="7cm"><draw:text-box><text:p>{% if chart %}{{ rows | chart(type="line", x="month", y=["sales","costs"], title="Revenue", width=340, height=170) }}{% endif %}</text:p></draw:text-box></draw:frame>
       </draw:page>
     </office:presentation>
   </office:body>

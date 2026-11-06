@@ -10,8 +10,8 @@ use std::sync::Arc;
 use crate::rich::html::{self, Block, Inline, Style};
 use crate::rich::pkg::Pkg;
 use crate::rich::{
-    blank, ensure_ns, esc, esc_attr, has_mark, insert_ordered, misplaced, segments, spans,
-    text_node, Picture, Rich, Seg,
+    blank, ensure_ns, esc, esc_attr, has_mark, insert_ordered, marker, misplaced, segments, shell,
+    text_node, Picture, Rich, Seg, MARK_OPEN,
 };
 use crate::xml::{self, Elem, Node};
 use crate::{Format, TemplateError};
@@ -33,11 +33,10 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("xlink", "http://www.w3.org/1999/xlink"),
 ];
 
-const STYLE_CHILD_ORDER: &[&str] = &[
-    "style:table-cell-properties",
-    "style:paragraph-properties",
-    "style:text-properties",
-];
+const STYLE_CHILD_ORDER: &str =
+    "style:table-cell-properties style:paragraph-properties style:text-properties";
+/// What the markup around one table cell comes to, roughly.
+const CELL_MARKUP: usize = 100;
 
 /// Point sizes per heading level.
 const HEADING_SIZES: [u32; 6] = [24, 18, 14, 12, 11, 10];
@@ -122,6 +121,7 @@ impl StyleBook {
             }
             insert_ordered(&mut style, child, STYLE_CHILD_ORDER);
         }
+        self.existing.insert(name.clone(), style.clone());
         self.added.push(Node::Elem(style));
         self.made.insert(key, name.clone());
         name
@@ -354,56 +354,57 @@ impl Odf<'_, '_> {
     }
 
     fn paragraph(&mut self, p: Elem, parent: &str) -> Result<Vec<Node>, TemplateError> {
+        let empty = shell(&p);
+        let base = p.attr("text:style-name");
+        let with = |nodes: Vec<Node>| {
+            let mut para = empty.clone();
+            para.children = nodes;
+            para
+        };
+        let mut pieces = self.cut(p.children)?.into_iter();
+        let mut cur = match pieces.next() {
+            Some(Cut::Nodes(nodes)) => with(nodes),
+            _ => with(Vec::new()),
+        };
         let mut out = Vec::new();
-        let mut cur = p;
-        loop {
-            let blocks: Vec<usize> = {
-                let mut found = Vec::new();
-                self.block_marks(&cur.children, &mut found)?;
-                found
+        while let Some(piece) = pieces.next() {
+            let Cut::Mark(id) = piece else { continue };
+            let next = match pieces.next() {
+                Some(Cut::Nodes(nodes)) => nodes,
+                _ => Vec::new(),
             };
-            let Some(&target) = blocks.first() else {
-                break;
-            };
-            let Some((left, right)) = split_at(&cur.children, target)? else {
-                break;
-            };
-            let mut before = cur.clone();
-            before.children = left;
-            let mut after = cur.clone();
-            after.children = right;
-            let item = self.items[target].clone();
+            let item = self.items[id].clone();
             match &*item {
                 Rich::Html(blocks) => {
-                    if !blank(&before.children) {
-                        out.push(self.inline_paragraph(before)?);
+                    if !blank(&cur.children) {
+                        out.push(self.inline_paragraph(cur)?);
                     }
-                    let style = cur.attr("text:style-name");
                     let mut xml = String::new();
                     let tables = parent != "text:list-item";
-                    self.blocks(blocks, style.as_deref(), tables, &mut xml)?;
+                    self.blocks(blocks, base.as_deref(), tables, &mut xml)?;
                     if !xml.is_empty() {
                         out.push(Node::Raw(xml));
                     }
+                    cur = with(next);
+                }
+                Rich::PageBreak if blank(&next) => {
+                    // Nothing follows: the break goes after this paragraph.
+                    let own = cur.attr("text:style-name");
+                    let style = self.break_style("fo:break-after", own.as_deref());
+                    cur.set_attr("text:style-name", &style);
+                    out.push(self.inline_paragraph(cur)?);
+                    cur = with(next);
                 }
                 Rich::PageBreak => {
-                    let base = cur.attr("text:style-name");
-                    if blank(&after.children) {
-                        // Nothing follows: the break goes after this paragraph.
-                        let style = self.break_style("fo:break-after", base.as_deref());
-                        before.set_attr("text:style-name", &style);
-                        out.push(self.inline_paragraph(before)?);
-                        return Ok(out);
-                    }
-                    if !blank(&before.children) {
-                        out.push(self.inline_paragraph(before)?);
+                    if !blank(&cur.children) {
+                        out.push(self.inline_paragraph(cur)?);
                     }
                     let style = self.break_style("fo:break-before", base.as_deref());
-                    after.set_attr("text:style-name", &style);
+                    cur = with(next);
+                    cur.set_attr("text:style-name", &style);
                 }
                 _ => return Err(self.fail("this value is not block content")),
             }
-            cur = after;
         }
         if !blank(&cur.children) || out.is_empty() {
             out.push(self.inline_paragraph(cur)?);
@@ -423,21 +424,46 @@ impl Odf<'_, '_> {
         )
     }
 
-    fn block_marks(&self, nodes: &[Node], out: &mut Vec<usize>) -> Result<(), TemplateError> {
-        for n in nodes {
-            match n {
-                Node::Text(t) => {
-                    for (_, _, id) in spans(&t.raw).map_err(|m| self.fail(&m))? {
-                        if self.is_block(id) {
-                            out.push(id);
+    /// Cuts a paragraph's content at its block markers, in one pass, repeating
+    /// the elements that hold one on both sides. Other markers stay in the text.
+    fn cut(&self, nodes: Vec<Node>) -> Result<Vec<Cut>, TemplateError> {
+        let mut out = Vec::new();
+        let mut cur = Vec::new();
+        for node in nodes {
+            match node {
+                Node::Text(t) if t.raw.contains(MARK_OPEN) => {
+                    for seg in segments(&t.raw).map_err(|m| self.fail(&m))? {
+                        match seg {
+                            Seg::Text(s) => cur.push(text_node(s)),
+                            Seg::Mark(id) if self.is_block(id) => {
+                                out.push(Cut::Nodes(std::mem::take(&mut cur)));
+                                out.push(Cut::Mark(id));
+                            }
+                            Seg::Mark(id) => cur.push(text_node(marker(id))),
                         }
                     }
                 }
-                Node::Elem(e) => self.block_marks(&e.children, out)?,
-                Node::Raw(_) => {}
+                Node::Elem(mut e) if has_mark(&e.children) => {
+                    let empty = shell(&e);
+                    for piece in self.cut(std::mem::take(&mut e.children))? {
+                        match piece {
+                            Cut::Nodes(children) => {
+                                let mut part = empty.clone();
+                                part.children = children;
+                                cur.push(Node::Elem(part));
+                            }
+                            Cut::Mark(id) => {
+                                out.push(Cut::Nodes(std::mem::take(&mut cur)));
+                                out.push(Cut::Mark(id));
+                            }
+                        }
+                    }
+                }
+                other => cur.push(other),
             }
         }
-        Ok(())
+        out.push(Cut::Nodes(cur));
+        Ok(out)
     }
 
     fn inline_paragraph(&mut self, mut p: Elem) -> Result<Node, TemplateError> {
@@ -449,7 +475,7 @@ impl Odf<'_, '_> {
         let mut out = Vec::with_capacity(nodes.len());
         for node in nodes {
             match node {
-                Node::Text(t) if has_mark(std::slice::from_ref(&Node::Text(t.clone()))) => {
+                Node::Text(t) if t.raw.contains(MARK_OPEN) => {
                     for seg in segments(&t.raw).map_err(|m| self.fail(&m))? {
                         match seg {
                             Seg::Text(s) => out.push(text_node(s)),
@@ -525,7 +551,9 @@ impl Odf<'_, '_> {
                     .iter()
                     .map(|line| esc(line))
                     .collect();
-                Ok(vec![Node::Raw(lines.join("<text:line-break/>"))])
+                let markup = lines.join("<text:line-break/>");
+                self.pkg.charge(markup.len())?;
+                Ok(vec![Node::Raw(markup)])
             }
             Rich::Chart(_) | Rich::PageBreak => Err(self.fail("this value cannot be placed here")),
         }
@@ -565,6 +593,7 @@ impl Odf<'_, '_> {
             .map(|s| format!(" text:style-name=\"{}\"", esc_attr(s)))
             .unwrap_or_default();
         for block in blocks {
+            let start = out.len();
             match block {
                 Block::Para(runs) => {
                     let body = self.runs(runs, None);
@@ -599,7 +628,12 @@ impl Odf<'_, '_> {
                     for line in html::plain_lines(&[Block::Table(rows.clone())]) {
                         let _ = write!(out, "<text:p{style_attr}>{}</text:p>", esc(&line));
                     }
+                    self.pkg.charge(out.len() - start)?;
                 }
+            }
+            // What lists and tables hold was counted when it was written.
+            if matches!(block, Block::Para(_) | Block::Heading(..)) {
+                self.pkg.charge(out.len() - start)?;
             }
         }
         Ok(())
@@ -638,6 +672,7 @@ impl Odf<'_, '_> {
                     out,
                     "<table:table-cell table:style-name=\"{border}\" office:value-type=\"string\">"
                 );
+                self.pkg.charge(CELL_MARKUP)?;
                 let mut inner = String::new();
                 if let Some(cell) = row.get(i) {
                     if cell.header {
@@ -739,34 +774,8 @@ fn style_attrs(style: &Style, heading_size: Option<u32>) -> Vec<(&'static str, S
     attrs
 }
 
-type Cut = (Vec<Node>, Vec<Node>);
-
-/// Cuts a paragraph's content at the first marker for table index `target`,
-/// repeating the elements that contain it on both sides.
-fn split_at(nodes: &[Node], target: usize) -> Result<Option<Cut>, TemplateError> {
-    for (i, node) in nodes.iter().enumerate() {
-        let cut = match node {
-            Node::Text(t) => spans(&t.raw)
-                .map_err(TemplateError::new)?
-                .into_iter()
-                .find(|(_, _, id)| *id == target)
-                .map(|(start, end, _)| (text_node(&t.raw[..start]), text_node(&t.raw[end..]))),
-            Node::Elem(e) => split_at(&e.children, target)?.map(|(left, right)| {
-                let mut l = e.clone();
-                l.children = left;
-                let mut r = e.clone();
-                r.children = right;
-                (Node::Elem(l), Node::Elem(r))
-            }),
-            Node::Raw(_) => None,
-        };
-        if let Some((l, r)) = cut {
-            let mut left = nodes[..i].to_vec();
-            left.push(l);
-            let mut right = vec![r];
-            right.extend_from_slice(&nodes[i + 1..]);
-            return Ok(Some((left, right)));
-        }
-    }
-    Ok(None)
+/// A piece of a paragraph cut at its block markers.
+enum Cut {
+    Nodes(Vec<Node>),
+    Mark(usize),
 }
