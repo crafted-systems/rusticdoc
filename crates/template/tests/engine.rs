@@ -795,3 +795,19 @@ fn rendered_files_convert_to_pdf_with_the_expected_text() {
         assert!(text.contains(expected), "missing {expected} in {text}");
     }
 }
+
+#[test]
+fn validation_keeps_going_past_filters_on_missing_values() {
+    let doc = docx(
+        &(p("{{ issued | date(\"%d\") }}")
+            + &p("{{ total | currency(\"EUR\") }}")
+            + &p("{{ share | round(2) }}")
+            + &p("{{ who }}")),
+    );
+    let found = validate(Format::Docx, &doc, &json!({}));
+    let errors: Vec<_> = found
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert_eq!(errors.len(), 4, "{found:?}");
+}

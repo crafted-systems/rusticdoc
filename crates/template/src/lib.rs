@@ -491,6 +491,41 @@ pub fn validate(format: Format, bytes: &[u8], data: &serde_json::Value) -> Vec<D
     let source = program::emit(&compiled.parts, &compiled.table, Mode::Probe);
     let mut env = format.environment(&compiled.settings);
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
+    // A filter that refuses undefined input would end the probe at the first
+    // missing value, so these pass it on for `__probe` to record.
+    env.add_filter(
+        "date",
+        |v: Value,
+         format: Option<String>,
+         timezone: Option<String>|
+         -> std::result::Result<Value, minijinja::Error> {
+            if v.is_undefined() {
+                return Ok(v);
+            }
+            filters::date(&v, format.as_deref(), timezone.as_deref()).map(Value::from)
+        },
+    );
+    env.add_filter(
+        "currency",
+        |v: Value, code: Option<String>| -> std::result::Result<Value, minijinja::Error> {
+            if v.is_undefined() {
+                return Ok(v);
+            }
+            Ok(Value::from(filters::currency(f64::try_from(v)?, code)))
+        },
+    );
+    env.add_filter(
+        "round",
+        |v: Value, precision: Option<i32>| -> std::result::Result<Value, minijinja::Error> {
+            if v.is_undefined() {
+                return Ok(v);
+            }
+            // The probe's output is thrown away, so the value only has to
+            // stay a number.
+            let _ = precision;
+            Ok(Value::from(f64::try_from(v)?))
+        },
+    );
     let rec = records.clone();
     env.add_filter("__probe", move |v: Value, id: usize| {
         if v.is_undefined() {
