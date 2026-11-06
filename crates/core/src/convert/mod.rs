@@ -49,6 +49,11 @@ const DEFAULT_START_TIMEOUT: Duration = Duration::from_secs(60);
 /// The link-update enumerations differ per application: Writer's
 /// `Content/Update/Link` is 0 = never, 1 = on request, 2 = always, while
 /// Calc's is 0 = always, 1 = never, 2 = on request.
+///
+/// None of that stops the HTML loader, whose `<link rel="stylesheet">` and frames
+/// fetch whatever they name with no check of their own. So everything LibreOffice
+/// fetches also goes through a proxy on a port where nothing listens, and the image
+/// goes further and removes its network content providers.
 const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item>
@@ -57,6 +62,14 @@ const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <item oor:path="/org.openoffice.Office.Writer/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>0</value></prop></item>
 <item oor:path="/org.openoffice.Office.Calc/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>1</value></prop></item>
 <item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse"><value>false</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetProxyType" oor:op="fuse"><value>1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetHTTPProxyName" oor:op="fuse"><value>127.0.0.1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetHTTPProxyPort" oor:op="fuse"><value>1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetHTTPSProxyName" oor:op="fuse"><value>127.0.0.1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetHTTPSProxyPort" oor:op="fuse"><value>1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetFTPProxyName" oor:op="fuse"><value>127.0.0.1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetFTPProxyPort" oor:op="fuse"><value>1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetNoProxy" oor:op="fuse"><value></value></prop></item>
 </oor:items>
 "#;
 
@@ -569,6 +582,17 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_profile_sends_every_fetch_to_a_dead_proxy() {
+        for scheme in ["HTTP", "HTTPS", "FTP"] {
+            let name = format!("ooInet{scheme}ProxyName\" oor:op=\"fuse\"><value>127.0.0.1<");
+            let port = format!("ooInet{scheme}ProxyPort\" oor:op=\"fuse\"><value>1<");
+            assert!(PROFILE_SETTINGS.contains(&name), "{scheme}");
+            assert!(PROFILE_SETTINGS.contains(&port), "{scheme}");
+        }
+        assert!(PROFILE_SETTINGS.contains("ooInetProxyType\" oor:op=\"fuse\"><value>1<"));
+    }
 
     #[test]
     fn restart_requests_are_recognised() {
