@@ -983,3 +983,66 @@ async fn shutdown_lets_requests_finish_and_then_returns() {
         .unwrap();
     assert!(answer(&mut idle).await.is_empty());
 }
+
+// ---------------------------------------------------------------- deny lists
+
+/// Every way a webhook URL reaches the service, in the spellings a deny pattern on
+/// the canonical URL must still catch.
+#[tokio::test]
+async fn deny_lists_catch_a_trailing_dot_and_an_uppercase_host_on_every_path() {
+    let hosts = ["https://evil.example./x", "https://EVIL.example/x"];
+    let mut c = config();
+    c.compat.webhook_deny_list = vec!["^https://evil\\.example/".into()];
+    c.compat.download_deny_list = vec!["^https://evil\\.example/".into()];
+    let pdf = fixtures::pages(1);
+    let template: [Part<'_>; 1] = [("template", Some("t.txt"), b"hello")];
+    let files: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
+    for url in hosts {
+        // /v1, under both header names.
+        for header_name in ["x-rusticdoc-webhook-url", "gotenberg-webhook-url"] {
+            let request = form("/v1/render", &template)
+                .header(header_name, url)
+                .body(Body::from(body_of(&template)))
+                .unwrap();
+            let res = service(c.clone()).oneshot(request).await.unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{header_name} {url}");
+        }
+        // The error URL, on /v1.
+        let request = form("/v1/render", &template)
+            .header("x-rusticdoc-webhook-url", "https://1.1.1.1/ok")
+            .header("x-rusticdoc-webhook-error-url", url)
+            .body(Body::from(body_of(&template)))
+            .unwrap();
+        let res = service(c.clone()).oneshot(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "error url {url}");
+        // The result, error and events URLs on /forms.
+        for (result, error, events) in [
+            (url, "https://1.1.1.1/e", "https://1.1.1.1/v"),
+            ("https://1.1.1.1/r", url, "https://1.1.1.1/v"),
+            ("https://1.1.1.1/r", "https://1.1.1.1/e", url),
+        ] {
+            let request = form("/forms/pdfengines/flatten", &files)
+                .header("gotenberg-webhook-url", result)
+                .header("gotenberg-webhook-error-url", error)
+                .header("gotenberg-webhook-events-url", events)
+                .body(Body::from(body_of(&files)))
+                .unwrap();
+            let res = service(c.clone()).oneshot(request).await.unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::FORBIDDEN,
+                "{result} {error} {events}"
+            );
+        }
+        // downloadFrom, which has its own lists.
+        let entry = format!(r#"[{{"url":"{url}"}}]"#);
+        let parts: [Part<'_>; 1] = [("downloadFrom", None, entry.as_bytes())];
+        for path in ["/v1/pdf/merge", "/forms/pdfengines/merge"] {
+            let res = service(c.clone())
+                .oneshot(post(path, &parts))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path} {url}");
+        }
+    }
+}

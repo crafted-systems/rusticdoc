@@ -415,13 +415,6 @@ pub async fn resolve(url: &str, policy: &UrlPolicy) -> Result<Target, ApiError> 
             "webhook URL '{shown}' must not carry credentials; use extra headers"
         )));
     }
-    if !policy.permits(parsed.as_str()) {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "url_not_allowed",
-            format!("URL '{}' is not allowed on this service", redact(url)),
-        ));
-    }
     let raw_host = parsed
         .host_str()
         .ok_or_else(|| ApiError::bad_request(format!("webhook URL '{shown}' has no host")))?
@@ -434,6 +427,28 @@ pub async fn resolve(url: &str, policy: &UrlPolicy) -> Result<Target, ApiError> 
         .port_or_known_default()
         .ok_or_else(|| ApiError::bad_request(format!("webhook URL '{shown}' has no port")))?;
 
+    // The URL the client sends and the key it pins must be one string, and the
+    // lists judge that string too: what they see is exactly what gets fetched, so
+    // `evil.com.` cannot pass as something other than `evil.com`.
+    let canonical = match bare.parse::<IpAddr>() {
+        Ok(ip) => ip.to_string(),
+        Err(_) => bare.clone(),
+    };
+    let host_for_url = if canonical.contains(':') {
+        format!("[{canonical}]")
+    } else {
+        canonical
+    };
+    parsed
+        .set_host(Some(&host_for_url))
+        .map_err(|_| ApiError::bad_request(format!("webhook host '{bare}' is not valid")))?;
+    if !policy.permits(parsed.as_str()) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "url_not_allowed",
+            format!("URL '{}' is not allowed on this service", redact(url)),
+        ));
+    }
     if !allow_private && is_private_name(&bare) {
         return Err(private(url));
     }
@@ -455,15 +470,6 @@ pub async fn resolve(url: &str, policy: &UrlPolicy) -> Result<Target, ApiError> 
         return Err(private(url));
     }
 
-    // The URL the client sends and the key it pins must be one string.
-    let host_for_url = if bare.contains(':') {
-        format!("[{bare}]")
-    } else {
-        bare.clone()
-    };
-    parsed
-        .set_host(Some(&host_for_url))
-        .map_err(|_| ApiError::bad_request(format!("webhook host '{bare}' is not valid")))?;
     let host = parsed
         .host_str()
         .unwrap_or(&bare)
@@ -995,6 +1001,30 @@ mod tests {
         let wide = lists(&[".+"], &[], false);
         let err = resolve("http://127.0.0.1/x", &wide).await.unwrap_err();
         assert!(err.body.message.contains("private"), "{}", err.body.message);
+    }
+
+    #[tokio::test]
+    async fn the_lists_judge_the_url_as_it_will_be_fetched() {
+        let deny = lists(&[], &["^https://evil\\.example/"], true);
+        for url in [
+            "https://evil.example./x",
+            "https://EVIL.example/x",
+            "https://Evil.Example./x",
+            "https://evil.example../x",
+        ] {
+            let err = resolve(url, &deny).await.unwrap_err();
+            assert_eq!(err.status, StatusCode::FORBIDDEN, "{url}");
+        }
+        // IP literals are judged in their canonical form.
+        let deny = lists(&[], &["^http://\\[2606:4700::1111\\]/"], true);
+        let err = resolve("http://[2606:4700:0:0:0:0:0:1111]/x", &deny)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::FORBIDDEN);
+        // An allow list reads the same string, and that string is what is stored.
+        let allow = lists(&["^http://1\\.1\\.1\\.1/"], &[], false);
+        let target = resolve("http://1.1.1.1./x", &allow).await.unwrap();
+        assert_eq!(target.url, "http://1.1.1.1/x");
     }
 
     #[tokio::test]
