@@ -743,14 +743,18 @@ pub async fn sign(
     let name = output_name(&form, &doc, "");
     let st = state.clone();
     let job = async move {
-        let mut current = doc;
-        for overlay in &overlays {
-            current = st
-                .engines
-                .pdf
-                .stamp(&current, overlay, st.config.api_timeout)
-                .await?;
-        }
+        // One budget for every placement, not one each.
+        let budget = st.config.api_timeout;
+        let work = async {
+            let mut current = doc;
+            for overlay in &overlays {
+                current = st.engines.pdf.stamp(&current, overlay, budget).await?;
+            }
+            Ok::<_, rusticdoc_core::Error>(current)
+        };
+        let current = tokio::time::timeout(budget, work)
+            .await
+            .map_err(|_| rusticdoc_core::Error::Timeout(budget))??;
         Ok(pdf_output(name, current, "sign"))
     };
     finish(state, hook, request_id(&headers), job).await

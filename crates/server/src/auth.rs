@@ -7,15 +7,34 @@ use axum::http::{Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
+use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::state::AppState;
 
-pub async fn require(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+/// Who a request is, for scoping what it may reuse: a digest of the key or
+/// the basic-auth user, never the secret itself. `public` when the service
+/// requires no credentials.
+#[derive(Debug, Clone)]
+pub struct Principal(pub String);
+
+fn digest(kind: &str, secret: &str) -> Principal {
+    Principal(format!(
+        "{kind}:{}",
+        hex::encode(Sha256::digest(secret.as_bytes()))
+    ))
+}
+
+pub async fn require(
+    State(state): State<AppState>,
+    mut req: Request<Body>,
+    next: Next,
+) -> Response {
     let config = &state.config;
     let keys_set = !config.api_keys.is_empty();
     let basic_set = config.basic_auth.is_some();
     if !keys_set && !basic_set {
+        req.extensions_mut().insert(Principal("public".into()));
         return next.run(req).await;
     }
 
@@ -34,6 +53,8 @@ pub async fn require(State(state): State<AppState>, req: Request<Body>, next: Ne
             .iter()
             .any(|k| constant_time_eq(k.as_bytes(), presented.as_bytes()))
     {
+        let principal = digest("key", presented);
+        req.extensions_mut().insert(principal);
         return next.run(req).await;
     }
 
@@ -51,6 +72,8 @@ pub async fn require(State(state): State<AppState>, req: Request<Body>, next: Ne
         if let Some(pair) = basic {
             let expected = format!("{user}:{pass}");
             if constant_time_eq(expected.as_bytes(), pair.as_bytes()) {
+                let principal = digest("basic", user);
+                req.extensions_mut().insert(principal);
                 return next.run(req).await;
             }
         }

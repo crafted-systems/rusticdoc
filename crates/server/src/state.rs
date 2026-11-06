@@ -16,6 +16,8 @@ pub struct AppState {
     pub started: Instant,
     /// The loaded fonts, scanned on first use and on reload.
     pub fonts: Arc<tokio::sync::RwLock<Option<Arc<Vec<rusticdoc_core::fonts::FontInfo>>>>>,
+    /// The fonts directory's signature and when a reload last ran.
+    pub fonts_reload: Arc<tokio::sync::Mutex<Option<(String, Instant)>>>,
 }
 
 impl AppState {
@@ -36,6 +38,7 @@ impl AppState {
             http,
             started: Instant::now(),
             fonts: Default::default(),
+            fonts_reload: Default::default(),
         }
     }
 }

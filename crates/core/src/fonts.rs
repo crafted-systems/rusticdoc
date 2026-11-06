@@ -63,6 +63,42 @@ pub fn list(fonts_dir: &Path) -> Vec<FontInfo> {
     out
 }
 
+/// A digest of the fonts directory's file names, sizes and modification
+/// times, to tell whether a reload has anything to do. Bounded in depth and
+/// in entries, so a huge mount cannot make this slow.
+pub fn directory_signature(dir: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    fn walk(dir: &Path, depth: u32, rows: &mut Vec<String>) {
+        if depth > 8 || rows.len() > 20_000 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let path = entry.path();
+            if meta.is_dir() {
+                walk(&path, depth + 1, rows);
+            } else {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                rows.push(format!("{}|{}|{modified}", path.display(), meta.len()));
+            }
+        }
+    }
+    let mut rows = Vec::new();
+    walk(dir, 0, &mut rows);
+    rows.sort_unstable();
+    hex::encode(Sha256::digest(rows.join("\n").as_bytes()))
+}
+
 /// True for a TrueType, OpenType or collection file, by its magic bytes.
 pub fn is_font(bytes: &[u8]) -> bool {
     matches!(
@@ -256,6 +292,15 @@ mod tests {
             "carlito".into(),
         ];
         assert_eq!(missing(&wanted, &loaded), vec!["Comic Sans MS"]);
+    }
+
+    #[test]
+    fn the_directory_signature_follows_its_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = directory_signature(dir.path());
+        assert_eq!(empty, directory_signature(dir.path()));
+        std::fs::write(dir.path().join("a.ttf"), b"x").unwrap();
+        assert_ne!(empty, directory_signature(dir.path()));
     }
 
     #[test]

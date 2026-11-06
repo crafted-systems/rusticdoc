@@ -1,12 +1,13 @@
-use axum::Json;
 use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use axum::{Extension, Json};
 use rusticdoc_core::job::parse_steps;
 use rusticdoc_core::{RenderRequest, Step, template};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::metrics::StageLabels;
 use crate::routes::form::{Form, download, request_id};
@@ -68,6 +69,7 @@ pub struct RenderForm {
 )]
 pub async fn render(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
@@ -86,7 +88,7 @@ pub async fn render(
         {
             // Stateless by contract: a miss is a 404 and the client sends
             // the file again.
-            Some(hash) => template::recall(hash).ok_or_else(|| {
+            Some(hash) => template::recall(&principal.0, hash).ok_or_else(|| {
                 ApiError::new(
                     axum::http::StatusCode::NOT_FOUND,
                     "template_not_cached",
@@ -100,7 +102,7 @@ pub async fn render(
             }
         },
     };
-    template::remember(&template);
+    template::remember(&principal.0, &template);
     let mut req = RenderRequest::new(template);
     req.data = form.json("data")?;
     req.ctx = form.json("ctx")?;

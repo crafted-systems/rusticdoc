@@ -1040,3 +1040,88 @@ async fn fonts_are_listed_behind_auth_and_reload_without_engines() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn template_reuse_is_scoped_to_the_caller() {
+    let mut c = config();
+    c.api_keys = vec!["tenant-a".into(), "tenant-b".into()];
+    let router = app(AppState::new(c));
+    let body = format!("Scoped {{{{ who }}}} {:?}", std::thread::current().id());
+    let hash = rusticdoc_core::template::template_hash(body.as_bytes());
+
+    let mut req = post_form(
+        "/v1/render",
+        &[
+            ("template", Some("t.txt"), &body),
+            ("data", None, r#"{"who":"a"}"#),
+        ],
+    );
+    req.headers_mut()
+        .insert("x-api-key", "tenant-a".parse().unwrap());
+    assert_eq!(
+        router.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let mut req = post_form(
+        "/v1/render",
+        &[
+            ("templateHash", None, &hash),
+            ("data", None, r#"{"who":"a"}"#),
+        ],
+    );
+    req.headers_mut()
+        .insert("x-api-key", "tenant-a".parse().unwrap());
+    assert_eq!(
+        router.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let mut req = post_form(
+        "/v1/render",
+        &[
+            ("templateHash", None, &hash),
+            ("data", None, r#"{"who":"b"}"#),
+        ],
+    );
+    req.headers_mut()
+        .insert("x-api-key", "tenant-b".parse().unwrap());
+    assert_eq!(
+        router.oneshot(req).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn font_reload_is_rate_limited_and_skips_an_unchanged_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = config();
+    c.fonts_dir = dir.path().to_path_buf();
+    let state = AppState::new(c);
+    let router = app(state.clone());
+    let res = router
+        .clone()
+        .oneshot(Request::post("/fonts/reload").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(body["changed"], true);
+    let res = router
+        .clone()
+        .oneshot(Request::post("/fonts/reload").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // Past the interval, an unchanged directory restarts nothing.
+    if let Some((_, at)) = state.fonts_reload.lock().await.as_mut() {
+        *at -= Duration::from_secs(60);
+    }
+    let res = router
+        .oneshot(Request::post("/fonts/reload").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(body["changed"], false);
+}
