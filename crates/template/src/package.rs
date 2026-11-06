@@ -242,7 +242,7 @@ const SLIDE_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
 const SLIDE_CT: &str = "application/vnd.openxmlformats-officedocument.presentationml.slide+xml";
 
-fn rels_name(part: &str) -> String {
+pub fn rels_name(part: &str) -> String {
     match part.rsplit_once('/') {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{part}.rels"),

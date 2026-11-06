@@ -7,9 +7,13 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+barcoders = { version = "2", default-features = false, features = ["std"] }
+base64 = "0.23.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 hex = "0.4.3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
+qrcode = { version = "0.14", default-features = false }
 quick-xml = "0.41.0"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
