@@ -6,7 +6,8 @@ use std::sync::Arc;
 use crate::rich::html;
 use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK, REL_IMAGE};
 use crate::rich::{
-    emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, Rich, Seg,
+    emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, serialize, Rich,
+    Seg,
 };
 use crate::xml::{self, Elem, Node};
 use crate::TemplateError;
@@ -24,30 +25,10 @@ const NAMESPACES: &[(&str, &str)] = &[
     ),
 ];
 
-const RPR_ORDER: &[&str] = &[
-    "a:ln",
-    "a:noFill",
-    "a:solidFill",
-    "a:gradFill",
-    "a:blipFill",
-    "a:pattFill",
-    "a:grpFill",
-    "a:effectLst",
-    "a:effectDag",
-    "a:highlight",
-    "a:uLnTx",
-    "a:uLn",
-    "a:uFillTx",
-    "a:uFill",
-    "a:latin",
-    "a:ea",
-    "a:cs",
-    "a:sym",
-    "a:hlinkClick",
-    "a:hlinkMouseOver",
-    "a:rtl",
-    "a:extLst",
-];
+const RPR_ORDER: &str =
+    "a:ln a:noFill a:solidFill a:gradFill a:blipFill a:pattFill a:grpFill a:effectLst \
+     a:effectDag a:highlight a:uLnTx a:uLn a:uFillTx a:uFill a:latin a:ea a:cs a:sym \
+     a:hlinkClick a:hlinkMouseOver a:rtl a:extLst";
 
 const FILLS: &[&str] = &[
     "a:noFill",
@@ -93,12 +74,6 @@ fn fill(tag: &str, rgb: &str) -> Elem {
     elem.children
         .push(Node::Elem(Elem::new("a:srgbClr", &[("val", rgb)], true)));
     elem
-}
-
-fn serialize(elem: &Elem) -> String {
-    let mut out = String::new();
-    xml::write_xml(std::slice::from_ref(&Node::Elem(elem.clone())), &mut out);
-    out
 }
 
 /// A copy of the run's properties with these set, always as `a:rPr`.
@@ -255,11 +230,13 @@ impl Pptx<'_, '_> {
                 Rich::Html(blocks) => {
                     for (i, line) in html::plain_lines(blocks).iter().enumerate() {
                         if i > 0 {
-                            let mut br_props = plain.clone();
-                            br_props.children.clear();
                             out.push(Node::Raw("<a:br/>".to_string()));
                         }
-                        out.push(run(&plain, &esc(line)));
+                        let line = run(&plain, &esc(line));
+                        if let Node::Raw(markup) = &line {
+                            self.pkg.charge(markup.len())?;
+                        }
+                        out.push(line);
                     }
                 }
                 Rich::PageBreak => return Err(self.fail("a slide has no page breaks")),

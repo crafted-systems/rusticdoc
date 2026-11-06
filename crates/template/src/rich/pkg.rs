@@ -41,6 +41,9 @@ pub struct Pkg<'a> {
     manifest: Option<Vec<Node>>,
     media: HashMap<[u8; 32], String>,
     next_name: u32,
+    next_part: HashMap<(String, String), u32>,
+    /// Bytes of generated markup so far.
+    generated: u64,
 }
 
 /// The path of `to` as seen from the directory of `from`.
@@ -63,18 +66,36 @@ impl<'a> Pkg<'a> {
             manifest: None,
             media: HashMap::new(),
             next_name: 1,
+            next_part: HashMap::new(),
+            generated: 0,
         }
     }
 
-    fn free_name(&self, dir: &str, stem: &str, ext: &str) -> String {
-        let mut n = 1;
+    fn free_name(&mut self, dir: &str, stem: &str, ext: &str) -> String {
+        let next = self
+            .next_part
+            .entry((dir.to_string(), stem.to_string()))
+            .or_insert(1);
         loop {
-            let name = format!("{dir}/{stem}{n}.{ext}");
-            n += 1;
+            let name = format!("{dir}/{stem}{next}.{ext}");
+            *next += 1;
             if package::get(self.entries, &name).is_none() {
                 return name;
             }
         }
+    }
+
+    /// Counts generated markup against the package limit while it is being
+    /// written, so that small input cannot expand without bound before the
+    /// final check.
+    pub fn charge(&mut self, bytes: usize) -> Result<(), TemplateError> {
+        self.generated += bytes as u64;
+        if self.generated > MAX_TOTAL_BYTES {
+            return Err(TemplateError::new(format!(
+                "the generated content is larger than the package limit of {MAX_TOTAL_BYTES} bytes"
+            )));
+        }
+        Ok(())
     }
 
     /// The part holding these bytes, created the first time. No name comes
@@ -299,6 +320,15 @@ mod tests {
             relative("xl/worksheets/sheet1.xml", "xl/drawings/drawing1.xml"),
             "../drawings/drawing1.xml"
         );
+    }
+
+    #[test]
+    fn generated_markup_counts_against_the_limit() {
+        let mut entries = Vec::new();
+        let mut pkg = Pkg::new(&mut entries);
+        assert!(pkg.charge(MAX_TOTAL_BYTES as usize).is_ok());
+        let err = pkg.charge(1).unwrap_err();
+        assert!(err.message.contains("package limit"), "{err}");
     }
 
     #[test]

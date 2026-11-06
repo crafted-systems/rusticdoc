@@ -41,6 +41,8 @@ const MARK_DIGIT: u32 = 0x10;
 
 /// The most rich values one render may register.
 const MAX_VALUES: usize = 100_000;
+/// The most charts one render may place.
+const MAX_CHARTS: usize = 200;
 
 const NAMES: [&str; 7] = [
     "image",
@@ -103,7 +105,11 @@ struct Inner {
     items: Vec<Arc<Rich>>,
     media: HashMap<[u8; 32], Arc<Media>>,
     pictures: usize,
+    charts: usize,
+    html_cells: usize,
     media_bytes: u64,
+    /// Text the table holds on to, for values repeated in a loop.
+    retained: u64,
 }
 
 impl Table {
@@ -117,6 +123,16 @@ impl Table {
             return Err(format!(
                 "at most {MAX_VALUES} rich values are allowed in one render"
             ));
+        }
+        let retained = match &rich {
+            Rich::Link { url, text } => url.len() + text.len(),
+            Rich::Color { text, .. } => text.len(),
+            Rich::Chart(chart) => chart.text_bytes(),
+            _ => 0,
+        };
+        inner.retained += retained as u64;
+        if inner.retained > MAX_TOTAL_BYTES {
+            return Err(too_much_text());
         }
         inner.items.push(Arc::new(rich));
         Ok(inner.items.len() - 1)
@@ -147,9 +163,41 @@ impl Table {
         Ok(media)
     }
 
+    /// Counts one html value: the bytes it keeps and its table cells.
+    fn count_html(&self, bytes: usize, cells: usize) -> Result<(), String> {
+        let mut inner = self.lock();
+        inner.retained += bytes as u64;
+        inner.html_cells += cells;
+        if inner.retained > MAX_TOTAL_BYTES {
+            return Err(too_much_text());
+        }
+        if inner.html_cells > html::MAX_DOCUMENT_CELLS {
+            return Err(format!(
+                "the HTML tables hold more than {} cells in all",
+                html::MAX_DOCUMENT_CELLS
+            ));
+        }
+        Ok(())
+    }
+
+    fn count_chart(&self) -> Result<(), String> {
+        let mut inner = self.lock();
+        inner.charts += 1;
+        if inner.charts > MAX_CHARTS {
+            return Err(format!(
+                "at most {MAX_CHARTS} charts are allowed in one render"
+            ));
+        }
+        Ok(())
+    }
+
     fn items(&self) -> Vec<Arc<Rich>> {
         self.lock().items.clone()
     }
+}
+
+fn too_much_text() -> String {
+    format!("the rich values hold more than the package limit of {MAX_TOTAL_BYTES} bytes")
 }
 
 /// What a rich filter returns. Only this type makes the formatter print a
@@ -280,6 +328,25 @@ fn blank(nodes: &[Node]) -> bool {
     })
 }
 
+/// The element without its content, so that cutting a run or paragraph into
+/// pieces does not copy all of it for every piece.
+fn shell(e: &Elem) -> Elem {
+    Elem {
+        name: e.name.clone(),
+        open: e.open.clone(),
+        self_closing: e.self_closing,
+        children: Vec::new(),
+        before: Vec::new(),
+        after: Vec::new(),
+    }
+}
+
+fn serialize(elem: &Elem) -> String {
+    let mut out = String::new();
+    xml::write_xml(std::slice::from_ref(&Node::Elem(elem.clone())), &mut out);
+    out
+}
+
 fn text_node(raw: impl Into<String>) -> Node {
     Node::Text(Text {
         raw: raw.into(),
@@ -315,13 +382,14 @@ fn ensure_ns(root: &mut Elem, namespaces: &[(&str, &str)]) {
 }
 
 /// Puts `new` where a schema's element order wants it, replacing a child of
-/// the same name. Children the order does not list are left where they are.
-fn insert_ordered(parent: &mut Elem, new: Elem, order: &[&str]) {
+/// the same name. `order` is a space-separated list of names; children it does
+/// not list are left where they are.
+fn insert_ordered(parent: &mut Elem, new: Elem, order: &str) {
     parent.make_open();
     parent
         .children
         .retain(|n| !matches!(n, Node::Elem(e) if e.name == new.name));
-    let rank = |name: &str| order.iter().position(|o| *o == name);
+    let rank = |name: &str| order.split(' ').position(|o| o == name);
     let at = rank(&new.name).and_then(|mine| {
         parent.children.iter().position(
             |n| matches!(n, Node::Elem(e) if rank(&e.name).is_some_and(|theirs| theirs > mine)),
@@ -601,7 +669,12 @@ fn html_filter(state: &mut State, value: Value) -> Result<Value, Error> {
     if value.is_undefined() {
         return undefined(state, "html");
     }
-    let blocks = html::parse(&display(&value)).map_err(|e| fail("html", e))?;
+    let input = display(&value);
+    let blocks = html::parse(&input).map_err(|e| fail("html", e))?;
+    let cells = html::table_cells(&blocks).map_err(|e| fail("html", e))?;
+    shared_table(state)
+        .count_html(input.len(), cells)
+        .map_err(|e| fail("html", e))?;
     register(state, "html", Rich::Html(blocks))
 }
 
@@ -625,6 +698,9 @@ fn chart_filter(
     if value.is_undefined() {
         return undefined(state, "chart");
     }
+    shared_table(state)
+        .count_chart()
+        .map_err(|e| fail("chart", e))?;
     let chart = Chart::build(&value, options).map_err(|e| fail("chart", e))?;
     register(state, "chart", Rich::Chart(chart))
 }
@@ -699,13 +775,13 @@ mod tests {
 
     #[test]
     fn inserts_in_schema_order_and_replaces() {
-        let order = ["a", "b", "c"];
+        let order = "a b c";
         let mut p = xml::parse("<p><a/><c/></p>").unwrap();
         let root = xml::root_mut(&mut p).unwrap();
-        insert_ordered(root, Elem::new("b", &[], true), &order);
+        insert_ordered(root, Elem::new("b", &[], true), order);
         assert_eq!(xml::to_xml(&p), "<p><a/><b/><c/></p>");
         let root = xml::root_mut(&mut p).unwrap();
-        insert_ordered(root, Elem::new("a", &[("x", "1")], true), &order);
+        insert_ordered(root, Elem::new("a", &[("x", "1")], true), order);
         assert_eq!(xml::to_xml(&p), "<p><a x=\"1\"/><b/><c/></p>");
     }
 

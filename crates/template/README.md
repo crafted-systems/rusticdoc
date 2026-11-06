@@ -34,6 +34,115 @@ newline in a value becomes a line break in DOCX and ODT.
   `key`, and falls back to the key.
 - Everything minijinja ships: `upper`, `default`, `join`, `sum`, `round`, …
 
+## Rich content
+
+These filters produce content other than text. Print the result directly:
+`{{ logo | image(width=120) }}`. It may be assigned first (`{% set x = … %}`),
+but going through another filter, `~`, a macro or a `{% set %}…{% endset %}`
+block is an error, because a rich value is not a string.
+
+| Filter | Example |
+| --- | --- |
+| `image` | `{{ logo \| image(width=120) }}` |
+| `barcode` | `{{ sku \| barcode("code128") }}`, `{{ url \| barcode("qr", size=90) }}` |
+| `link` | `{{ url \| link("Click here") }}` |
+| `color` | `{{ status \| color("#ff0000", background="#ffee00") }}` |
+| `html` | `{{ body \| html }}` |
+| `chart` | `{{ rows \| chart(type="bar", x="month", y=["sales","costs"], title="Revenue") }}` |
+| `pagebreak` | `{{ "" \| pagebreak }}` |
+
+What each becomes:
+
+| Filter | DOCX | PPTX | XLSX | ODT | ODS | ODP |
+| --- | --- | --- | --- | --- | --- | --- |
+| `image`, `barcode` | inline `w:drawing` | `p:pic` at the tag's shape | `xdr:oneCellAnchor` at the tag's cell | inline `draw:frame` | `draw:frame` on the cell | `draw:frame` on the page at the tag's shape |
+| `link` | `w:hyperlink` | `a:hlinkClick` on the run | `hyperlinks` entry on the cell | `text:a` | `text:a` | `text:a` |
+| `color` | `w:color`, `w:shd` on the run | `a:solidFill`, `a:highlight` on the run | new font, fill and format for the whole cell | `text:span` with a style | new style for the whole cell | `text:span` with a style |
+| `html` | native paragraphs and tables | plain text with line breaks | plain text with line breaks | native paragraphs, lists and tables | plain text with line breaks | plain text with line breaks |
+| `chart` | native chart | native chart at the tag's shape | native chart at the tag's cell, data on a hidden sheet | error | error | error |
+| `pagebreak` | page break | error | error | page break | error | error |
+
+**`image`** takes a data URI, raw base64, or an object
+`{"data": base64, "mime": ..., "width": ..., "height": ...}`. The value must
+carry the bytes: this crate never fetches a URL, so the caller resolves those
+first. PNG and JPEG only, checked by their magic bytes. `width` and `height`
+are in points, and the aspect is kept when one is given. Arguments win over the
+object's sizes. The default is the natural size at 96 dpi, capped at the page
+text width (450 pt). Identical bytes share one media part.
+
+**`barcode`** takes `qr`, `code128` (printable ASCII), `code39`, `ean13` or
+`ean8` (with or without the check digit, which is verified when present). It
+draws a PNG with a whole number of pixels per module and places it like an
+image. `size` is the printed width in points. No human-readable text is drawn.
+
+**`link`** shows its argument, or the address without one. Only `http`, `https`
+and `mailto` are allowed; anything else, such as `javascript:` or `file:`, is
+an error.
+
+**`color`** takes `#rgb` or `#rrggbb`, strictly, and may come from data. Sheets
+have no runs here, so in XLSX and ODS it colours the whole cell, and the last
+`color` in a cell wins.
+
+**`html`** reads `p`, `br`, `b`/`strong`, `i`/`em`, `u`, `s`, `sub`, `sup`, `ul`,
+`ol`, `li`, `h1`..`h6`, `a`, `span style="color:#hex"`, `table`, `tr`, `td` and
+`th`. Other tags are dropped and their text kept; `script` and `style` go whole.
+No attribute is copied except a checked `href` and colour. An `a` with a scheme
+`link` would refuse is an error, while a `span` with any other style just loses
+the style. In DOCX and ODT the tag's paragraph is replaced by generated ones
+using its properties, and text around the tag stays in paragraphs of its own;
+lists are indents with a literal bullet or number in DOCX and `text:list` in
+ODT, headings are bold and sized, and in DOCX the tag's `w:r` run properties
+carry over. PPTX, XLSX, ODS and ODP keep no structure: the text is flattened
+with a line break per paragraph, item or row (`•` and `1.` stay, table cells
+are separated by tabs), and XLSX sets wrap text on the cell.
+
+**`chart`** takes a list of objects. `type` is `bar`, `column`, `line` or `pie`
+(one `y`); `x` and `y` name keys; `title`, `width` and `height` (points, default
+450 by 270) are optional. A `null` or missing value is a gap, while a series
+with no value at all is an error. DOCX and PPTX charts carry their values
+inline in `c:strCache` and `c:numCache` with no embedded workbook: the chart
+renders, but its data cannot be edited in Word or PowerPoint. Excel reads a chart
+from cells and ignores caches, so an XLSX chart also adds a hidden sheet,
+`RichChartData`, holding the values the references point at.
+
+**`pagebreak`** is useful between loop iterations. In ODT a tag with nothing
+after it breaks after its paragraph, and otherwise the text after it starts a
+new paragraph on the new page.
+
+### Limits
+
+| What | Limit |
+| --- | --- |
+| One image | 20 MB |
+| Images and barcodes in one render | 200 |
+| Barcode value | 4 KB, 4096 modules when linear |
+| Barcode image | 4 megapixels (the module gets smaller, the printed size does not) |
+| Charts in one render | 200 |
+| Values in one chart | 1,000, all finite numbers |
+| One `html` value | 1 MB, nested at most 64 deep |
+| One HTML table | 256 columns, 10,000 rows, 50,000 cells counting padded ones |
+| All HTML tables in one render | 100,000 cells counting padded ones |
+| Rich values in one render | 100,000 |
+| Text held by rich values, and generated markup, in one render | 256 MB each |
+| The whole package with what was added | 256 MB |
+
+### In text templates
+
+`environment()` is for text and has no package, so there the rich filters fail
+with a clear error. `rich_environment(format)` has the real filters for checking
+tags outside a compiled template; their results print as nothing, so no marker
+ever leaves the crate. Only `Compiled::render` places content.
+
+### How it works
+
+A rich filter checks its value, stores it in a table belonging to that render
+and prints a private marker. The marker is built only from characters XML
+forbids, which the formatter strips from every other value, so data cannot
+forge one. After rendering, each part with markers is rewritten and media,
+parts, relationships and content types are added; no name, path or relationship
+target is taken from data except a checked URL. Parts without markers stay
+byte-identical. Bad values are template errors, placed at their tag.
+
 ## What a loop or condition repeats
 
 There are no special tags; where the opening and closing tags sit decides:
@@ -64,6 +173,8 @@ the notes of the original are not shared with the copies.
 mismatched blocks, blocks whose tags sit where no rule applies (both
 positions named), undefined values met during a test render, and a warning
 for a loop over a value that is not an array.
+Rich filters are valid tags; their bad arguments are reported whatever the
+sample data holds, and bad values in the sample data like any other error.
 
 ## Not supported yet
 
@@ -75,3 +186,8 @@ for a loop over a value that is not an array.
 - Tags in attributes, field codes or document properties; `{% raw %}`.
 - Tags inside DOCX text boxes nested in drawings are read, but a block
   cannot span a text box and the body.
+- Charts in ODT, ODS and ODP. Editing a chart's data in Word or PowerPoint.
+- A picture in a PPTX placeholder that inherits its position from the layout
+  lands at the slide's origin: the offset is read from the shape itself.
+- `html` inside a DOCX hyperlink or content control, and native structure for
+  `html` in PPTX, XLSX, ODS and ODP.

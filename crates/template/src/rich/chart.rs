@@ -11,6 +11,8 @@ use crate::sheet::num_to_col;
 
 /// The most values one chart may hold.
 pub const MAX_POINTS: usize = 1000;
+/// The most bytes of category labels one chart may hold.
+const MAX_LABEL_BYTES: usize = 16 * 1024 * 1024;
 
 const DEFAULT_WIDTH_PT: f64 = 450.0;
 const DEFAULT_HEIGHT_PT: f64 = 270.0;
@@ -135,6 +137,7 @@ impl Chart {
             ));
         }
         let mut categories = Vec::with_capacity(rows);
+        let mut label_bytes = 0;
         let mut series: Vec<Series> = options
             .y
             .iter()
@@ -151,11 +154,18 @@ impl Chart {
             if category.is_undefined() {
                 return Err(format!("row {} has no {:?}", i + 1, options.x));
             }
-            categories.push(if category.is_none() {
+            let label = if category.is_none() {
                 String::new()
             } else {
                 category.to_string()
-            });
+            };
+            label_bytes += label.len();
+            if label_bytes > MAX_LABEL_BYTES {
+                return Err(format!(
+                    "the category labels are longer than {MAX_LABEL_BYTES} bytes"
+                ));
+            }
+            categories.push(label);
             for s in &mut series {
                 let v = row.get_attr(&s.name).map_err(|e| e.to_string())?;
                 s.values.push(number(&v, &s.name, i)?);
@@ -196,6 +206,12 @@ impl Chart {
             let _ = write!(out, "<row r=\"{r}\">{cells}</row>");
         }
         out
+    }
+
+    /// The bytes of text this chart holds on to.
+    pub fn text_bytes(&self) -> usize {
+        let labels: usize = self.categories.iter().map(String::len).sum();
+        labels + self.series.iter().map(|s| s.name.len()).sum::<usize>()
     }
 
     /// How many sheet rows [`Chart::sheet_rows`] writes.

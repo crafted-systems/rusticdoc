@@ -19,77 +19,21 @@ use crate::sheet::{col_to_num, split_ref};
 use crate::xml::{self, Elem, Node};
 use crate::TemplateError;
 
-const WORKSHEET_ORDER: &[&str] = &[
-    "sheetPr",
-    "dimension",
-    "sheetViews",
-    "sheetFormatPr",
-    "cols",
-    "sheetData",
-    "sheetCalcPr",
-    "sheetProtection",
-    "protectedRanges",
-    "scenarios",
-    "autoFilter",
-    "sortState",
-    "dataConsolidate",
-    "customSheetViews",
-    "mergeCells",
-    "phoneticPr",
-    "conditionalFormatting",
-    "dataValidations",
-    "hyperlinks",
-    "printOptions",
-    "pageMargins",
-    "pageSetup",
-    "headerFooter",
-    "rowBreaks",
-    "colBreaks",
-    "customProperties",
-    "cellWatches",
-    "ignoredErrors",
-    "smartTags",
-    "drawing",
-    "drawingHF",
-    "picture",
-    "oleObjects",
-    "controls",
-    "webPublishItems",
-    "tableParts",
-    "extLst",
-];
+const WORKSHEET_ORDER: &str =
+    "sheetPr dimension sheetViews sheetFormatPr cols sheetData sheetCalcPr \
+     sheetProtection protectedRanges scenarios autoFilter sortState dataConsolidate \
+     customSheetViews mergeCells phoneticPr conditionalFormatting dataValidations \
+     hyperlinks printOptions pageMargins pageSetup headerFooter rowBreaks colBreaks \
+     customProperties cellWatches ignoredErrors smartTags drawing drawingHF picture \
+     oleObjects controls webPublishItems tableParts extLst";
 
-const STYLES_ORDER: &[&str] = &[
-    "numFmts",
-    "fonts",
-    "fills",
-    "borders",
-    "cellStyleXfs",
-    "cellXfs",
-    "cellStyles",
-    "dxfs",
-    "tableStyles",
-    "colors",
-    "extLst",
-];
+const STYLES_ORDER: &str =
+    "numFmts fonts fills borders cellStyleXfs cellXfs cellStyles dxfs tableStyles colors \
+     extLst";
 
-const FONT_ORDER: &[&str] = &[
-    "b",
-    "i",
-    "strike",
-    "condense",
-    "extend",
-    "outline",
-    "shadow",
-    "u",
-    "vertAlign",
-    "sz",
-    "color",
-    "name",
-    "family",
-    "charset",
-    "scheme",
-];
+const FONT_ORDER: &str =
+    "b i strike condense extend outline shadow u vertAlign sz color name family charset \
+     scheme";
 
 const STYLES_CT: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 const SHEET_CT: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
@@ -99,6 +43,33 @@ const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const C_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
 const MAIN_NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const DECL: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
+
+const DEFAULT_SECTIONS: [(&str, &str); 5] = [
+    (
+        "fonts",
+        "<fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>",
+    ),
+    (
+        "fills",
+        "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill>\
+         <patternFill patternType=\"gray125\"/></fill></fills>",
+    ),
+    (
+        "borders",
+        "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border>\
+         </borders>",
+    ),
+    (
+        "cellStyleXfs",
+        "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" \
+         borderId=\"0\"/></cellStyleXfs>",
+    ),
+    (
+        "cellXfs",
+        "<cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" \
+         xfId=\"0\"/></cellXfs>",
+    ),
+];
 
 /// What a cell asks of `xl/styles.xml`.
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
@@ -196,36 +167,10 @@ impl Styles {
         };
         root.make_open();
         // The workbook may have had no styles at all.
-        let fonts = section(
-            root,
-            "fonts",
-            "<fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>",
-        );
-        let _ = fonts;
-        let _ = section(
-            root,
-            "fills",
-            "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill>\
-             <patternFill patternType=\"gray125\"/></fill></fills>",
-        );
-        let _ = section(
-            root,
-            "borders",
-            "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border>\
-             </borders>",
-        );
-        let _ = section(
-            root,
-            "cellStyleXfs",
-            "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" \
-             borderId=\"0\"/></cellStyleXfs>",
-        );
-        let xfs = section(
-            root,
-            "cellXfs",
-            "<cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" \
-             xfId=\"0\"/></cellXfs>",
-        );
+        for (name, default) in DEFAULT_SECTIONS {
+            section(root, name, default);
+        }
+        let xfs = section(root, "cellXfs", "<cellXfs count=\"0\"/>");
         let mut xf = nth(xfs, "xf", base).cloned().unwrap_or_else(|| {
             Elem::new(
                 "xf",
@@ -384,12 +329,6 @@ impl Book {
     }
 }
 
-/// A picture or chart waiting for its place in the sheet's drawing.
-enum Anchored<'a> {
-    Picture(&'a crate::rich::Picture),
-    Chart(&'a crate::rich::Chart),
-}
-
 struct Placement {
     item: Arc<Rich>,
     col: u32,
@@ -480,18 +419,12 @@ fn resolve_cell(
                         };
                         let item = items[id].clone();
                         match &*item {
-                            Rich::Picture(p) => {
-                                let height = p.height_pt;
-                                placements.push(Placement {
-                                    item: item.clone(),
-                                    col,
-                                    row,
-                                    y_offset,
-                                });
-                                y_offset += emu(height);
-                            }
-                            Rich::Chart(chart) => {
-                                let height = chart.height_pt;
+                            Rich::Picture(_) | Rich::Chart(_) => {
+                                let height = match &*item {
+                                    Rich::Picture(p) => p.height_pt,
+                                    Rich::Chart(c) => c.height_pt,
+                                    _ => 0.0,
+                                };
                                 placements.push(Placement {
                                     item: item.clone(),
                                     col,
@@ -515,7 +448,9 @@ fn resolve_cell(
                                 out.push_str(&esc(text));
                             }
                             Rich::Html(blocks) => {
-                                out.push_str(&esc(&html::plain_lines(blocks).join("\n")));
+                                let text = esc(&html::plain_lines(blocks).join("\n"));
+                                pkg.charge(text.len())?;
+                                out.push_str(&text);
                                 format.wrap = true;
                             }
                             Rich::PageBreak => {
@@ -586,35 +521,29 @@ fn place_all(
     };
     let src = package::text_of(pkg.entries, &drawing)
         .ok_or_else(|| misplaced(part, "", format!("{drawing} is missing")))?;
-    let mut next_id = max_id(&src, "xdr:cNvPr", "id") + 1;
+    let first_id = max_id(&src, "xdr:cNvPr", "id") + 1;
     let mut nodes = xml::parse(&src).map_err(|e| misplaced(&drawing, "", e))?;
     let Some(dr) = xml::root_mut(&mut nodes) else {
         return Err(misplaced(&drawing, "", "the drawing has no root element"));
     };
     ensure_ns(dr, &[("a", A_NS), ("r", OFFICE_RELS), ("c", C_NS)]);
     dr.make_open();
-    for placement in placements {
-        let anchored = match &*placement.item {
-            Rich::Picture(p) => Anchored::Picture(p),
-            Rich::Chart(c) => Anchored::Chart(c),
-            _ => continue,
-        };
-        let id = next_id;
-        next_id += 1;
-        let (body, cx, cy) = match anchored {
-            Anchored::Picture(p) => {
+    for (id, placement) in (first_id..).zip(placements) {
+        let (body, cx, cy) = match &*placement.item {
+            Rich::Picture(p) => {
                 let media = pkg.media_part(&p.media, "xl/media")?;
                 let rid = pkg.rel_to(&drawing, REL_IMAGE, &media)?;
                 let (cx, cy) = (emu(p.width_pt), emu(p.height_pt));
                 (pic_xml(id, &rid, cx, cy), cx, cy)
             }
-            Anchored::Chart(chart) => {
+            Rich::Chart(chart) => {
                 let xml = book.chart_xml(pkg, chart);
                 let chart_part = pkg.new_part("xl/charts", "chart", xml, CHART_CT)?;
                 let rid = pkg.rel_to(&drawing, REL_CHART, &chart_part)?;
                 let (cx, cy) = (emu(chart.width_pt), emu(chart.height_pt));
                 (chart_frame_xml(id, &rid), cx, cy)
             }
+            _ => continue,
         };
         let mut anchor = String::new();
         let _ = write!(
