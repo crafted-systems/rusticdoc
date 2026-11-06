@@ -5,14 +5,12 @@
 # pdfcpu. No Node, Java or Chromium. Build from the project root:
 #   docker build -t rusticdoc .
 
-ARG RUST_IMAGE=rust:1-slim-trixie
-ARG DEBIAN_IMAGE=debian:13-slim
-ARG GOLANG_IMAGE=golang:1-trixie
+# Base images are pinned by digest; dependabot's docker ecosystem keeps them fresh.
 
 # ----------------------------------------------
 # pdfcpu, a static Go binary, verified through the Go checksum database.
 # ----------------------------------------------
-FROM $GOLANG_IMAGE AS pdfcpu
+FROM golang:1-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS pdfcpu
 ARG PDFCPU_VERSION=v0.16.4
 RUN CGO_ENABLED=0 GOBIN=/out go install -ldflags "-s -w -X 'main.version=$PDFCPU_VERSION' -X 'github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model.VersionStr=$PDFCPU_VERSION'" \
     github.com/pdfcpu/pdfcpu/cmd/pdfcpu@$PDFCPU_VERSION
@@ -20,7 +18,7 @@ RUN CGO_ENABLED=0 GOBIN=/out go install -ldflags "-s -w -X 'main.version=$PDFCPU
 # ----------------------------------------------
 # Build
 # ----------------------------------------------
-FROM $RUST_IMAGE AS build
+FROM rust:1.99.1-slim-trixie@sha256:7eab7ce19273ce785e0ca7578bdf7bc1fcbae621775a8197379a04c9f6e03cd5 AS build
 WORKDIR /src
 # Dependencies first, so source edits do not refetch them.
 COPY Cargo.toml Cargo.lock ./
@@ -44,9 +42,8 @@ RUN find crates -name '*.rs' -exec touch {} + \
 # ----------------------------------------------
 # Runtime
 # ----------------------------------------------
-FROM $DEBIAN_IMAGE AS runtime
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime
 
-ARG APT_SNAPSHOT=""
 ENV TZ=UTC LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 LABEL org.opencontainers.image.title="rusticdoc" \
@@ -54,8 +51,7 @@ LABEL org.opencontainers.image.title="rusticdoc" \
       org.opencontainers.image.source="https://github.com/vmosoti/rusticdoc" \
       org.opencontainers.image.base.name="debian:13-slim"
 
-RUN echo "apt snapshot: $APT_SNAPSHOT" \
-    && groupadd --gid 1001 rusticdoc \
+RUN groupadd --gid 1001 rusticdoc \
     && useradd --uid 1001 --gid rusticdoc --shell /usr/sbin/nologin --home /home/rusticdoc --no-create-home rusticdoc \
     && mkdir -p /home/rusticdoc /fonts \
     && echo "deb http://deb.debian.org/debian trixie-backports main" >> /etc/apt/sources.list \
