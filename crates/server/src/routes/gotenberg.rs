@@ -289,7 +289,7 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
                 .and_then(|v| v.parse::<f32>().ok())
                 .unwrap_or(default)
         };
-        out.push(Overlay {
+        let overlay = Overlay {
             placement: None,
             kind,
             position,
@@ -297,7 +297,9 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
             rotation: num("rot", 0.0),
             scale: num("sc", 0.5).clamp(0.01, 1.0),
             pages: at(&pages).trim().to_string(),
-        });
+        };
+        overlay.validate()?;
+        out.push(overlay);
     }
     Ok(out)
 }

@@ -1046,3 +1046,91 @@ async fn deny_lists_catch_a_trailing_dot_and_an_uppercase_host_on_every_path() {
         }
     }
 }
+
+// ---------------------------------------------------------------- F16, F17
+
+#[tokio::test]
+async fn colours_are_refused_where_overlays_are_built() {
+    let pdf = fixtures::pages(1);
+    for colour in [
+        "#ff0000, url:example.com/x",
+        "#ff0000, fontname:Courier",
+        "red",
+        "a\u{e9}123",
+    ] {
+        let options = serde_json::json!({ "fillcolor": colour }).to_string();
+        let parts: [Part<'_>; 4] = [
+            ("files", Some("a.pdf"), &pdf),
+            ("stampSource", None, b"text"),
+            ("stampExpression", None, b"DRAFT"),
+            ("stampOptions", None, options.as_bytes()),
+        ];
+        let res = service(config())
+            .oneshot(post("/forms/pdfengines/stamp", &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{colour}");
+        let parts: [Part<'_>; 3] = [
+            ("files", Some("a.pdf"), &pdf),
+            ("text", None, b"DRAFT"),
+            ("colour", None, colour.as_bytes()),
+        ];
+        let res = service(config())
+            .oneshot(post("/v1/pdf/stamp", &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{colour}");
+    }
+    let parts: [Part<'_>; 3] = [
+        ("files", Some("a.pdf"), &pdf),
+        ("text", None, b"DRAFT"),
+        ("colour", None, b"#FF0000"),
+    ];
+    let res = service(config())
+        .oneshot(post("/v1/pdf/stamp", &parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_password_with_a_line_break_is_a_400_before_any_engine() {
+    let pdf = fixtures::pages(1);
+    for path in ["/v1/pdf/encrypt", "/forms/pdfengines/encrypt"] {
+        let parts: [Part<'_>; 2] = [
+            ("files", Some("a.pdf"), &pdf),
+            ("userPassword", None, b"a\nb"),
+        ];
+        let res = service(config()).oneshot(post(path, &parts)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{path}");
+        assert!(text(res).await.contains("line breaks"), "{path}");
+    }
+}
+
+// ---------------------------------------------------------------- the allow-list
+
+#[tokio::test]
+async fn only_known_file_types_reach_libreoffice() {
+    for name in [
+        "evil.oxt",
+        "macro.xba",
+        "conf.xcu",
+        "db.odb",
+        "script.py",
+        "noext",
+    ] {
+        let parts: [Part<'_>; 1] = [("files", Some(name), b"x")];
+        let res = service(config())
+            .oneshot(post("/v1/convert", &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{name}");
+        let parts: [Part<'_>; 2] = [("template", Some(name), b"x"), ("steps", None, b"convert")];
+        let res = service(config())
+            .oneshot(post("/v1/render", &parts))
+            .await
+            .unwrap();
+        assert_ne!(res.status(), StatusCode::OK, "{name}");
+        assert_ne!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "{name}");
+    }
+}

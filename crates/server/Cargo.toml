@@ -14,6 +14,7 @@ hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 http = "1.5.0"
 http-body-util = "0.1.5"
+libc = "0.2"
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 mime = "0.3.18"
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }

@@ -689,7 +689,7 @@ pub fn bind_overlays(
             "br" | "bottom-right" => Position::BottomRight,
             _ => Position::Center,
         };
-        out.push(Overlay {
+        let overlay = Overlay {
             placement: None,
             kind: overlay_kind,
             position,
@@ -697,7 +697,9 @@ pub fn bind_overlays(
             rotation: num(&["rotation", "rot"], 0.0),
             scale: num(&["scale", "sc"], 0.5).clamp(0.01, 1.0),
             pages: entry.pages.trim().to_string(),
-        });
+        };
+        overlay.validate().map_err(super::client_error)?;
+        out.push(overlay);
     }
     Ok(out)
 }

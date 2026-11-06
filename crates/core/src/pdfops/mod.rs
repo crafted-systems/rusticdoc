@@ -173,12 +173,19 @@ pub struct Overlay {
 impl Overlay {
     /// Refuses what no engine should be given.
     pub fn validate(&self) -> Result<()> {
-        if let OverlayKind::Text { text, .. } = &self.kind
-            && text.len() > MAX_OVERLAY_TEXT
-        {
-            return Err(Error::InvalidRequest(format!(
-                "stamp or watermark text is longer than {MAX_OVERLAY_TEXT} bytes"
-            )));
+        if let OverlayKind::Text { text, colour, .. } = &self.kind {
+            if text.len() > MAX_OVERLAY_TEXT {
+                return Err(Error::InvalidRequest(format!(
+                    "stamp or watermark text is longer than {MAX_OVERLAY_TEXT} bytes"
+                )));
+            }
+            // pdfcpu reads this inside a description string, where anything else
+            // could carry options of its own.
+            if draw::parse_colour(colour).is_err() {
+                return Err(Error::InvalidRequest(format!(
+                    "colour '{colour}' is not #rrggbb"
+                )));
+            }
         }
         Ok(())
     }
@@ -610,6 +617,39 @@ macro_rules! fallback {
     }};
 }
 
+/// For encryption: a failure stops here, whatever the order says. An engine that
+/// has refused a document must not hand its passwords to the next one, which may
+/// have to take them on its command line.
+macro_rules! no_fall_through {
+    ($self:ident, $key:expr, $op:ident, $($arg:expr),*) => {{
+        let engines = $self.engines_for($key);
+        for engine in engines {
+            match engine.$op($($arg),*).await {
+                Err(Error::Unsupported(_)) => continue,
+                other => return other,
+            }
+        }
+        Err(Error::EngineUnavailable(if engines.is_empty() {
+            "no PDF engine is configured".to_string()
+        } else {
+            concat!("no PDF engine can ", stringify!($op)).to_string()
+        }))
+    }};
+}
+
+/// Argument files hold one argument per line, so a password with a line break or
+/// NUL would become extra arguments. Refused before any engine sees it.
+fn check_passwords(user: &str, owner: &str) -> Result<()> {
+    for (name, value) in [("userPassword", user), ("ownerPassword", owner)] {
+        if value.contains(['\n', '\r', '\0']) {
+            return Err(Error::InvalidRequest(format!(
+                "'{name}' must not contain line breaks or NUL characters"
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl MultiEngine {
     pub fn new(engines: Vec<Arc<dyn PdfEngine>>) -> Self {
         Self {
@@ -742,7 +782,8 @@ impl MultiEngine {
         fallback!(self, Op::Optimize, optimize, doc, t)
     }
     pub async fn encrypt(&self, doc: &Document, u: &str, o: &str, t: Duration) -> Result<Document> {
-        fallback!(self, Op::Encrypt, encrypt, doc, u, o, t)
+        check_passwords(u, o)?;
+        no_fall_through!(self, Op::Encrypt, encrypt, doc, u, o, t)
     }
     pub async fn read_metadata(&self, doc: &Document, t: Duration) -> Result<Metadata> {
         fallback!(self, Op::ReadMetadata, read_metadata, doc, t)
@@ -797,7 +838,8 @@ impl MultiEngine {
         o: &EncryptOptions,
         t: Duration,
     ) -> Result<Document> {
-        fallback!(self, Op::Encrypt, encrypt_with, doc, o, t)
+        check_passwords(&o.user_password, &o.owner_password)?;
+        no_fall_through!(self, Op::Encrypt, encrypt_with, doc, o, t)
     }
     pub async fn optimize_images(&self, doc: &Document, q: u8, t: Duration) -> Result<Document> {
         fallback!(self, Op::OptimizeImages, optimize_images, doc, q, t)

@@ -8,6 +8,32 @@ use tokio::process::Command;
 
 use crate::error::{Error, Result};
 
+/// All a child engine gets of this process's environment. API keys and the webhook
+/// secret live there, and engines work on documents from clients.
+const PASSED_ENV: &[&str] = &[
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "HOME",
+    "TMPDIR",
+    "FONTCONFIG_FILE",
+    "TZ",
+    // Where python3-uno lives, on installs that keep it out of the default path.
+    "PYTHONPATH",
+    "UNO_PATH",
+    "URE_BOOTSTRAP",
+];
+
+/// Replaces `cmd`'s environment with the allow-listed part of this one.
+pub fn clean_env(cmd: &mut Command) {
+    cmd.env_clear();
+    for name in PASSED_ENV {
+        if let Some(value) = std::env::var_os(name) {
+            cmd.env(name, value);
+        }
+    }
+}
+
 /// Runs `bin` with `args`, kills it at `timeout`, and returns its stderr on
 /// failure as an [`Error::Engine`].
 pub async fn run(
@@ -19,6 +45,7 @@ pub async fn run(
     timeout: Duration,
 ) -> Result<()> {
     let mut cmd = Command::new(bin);
+    clean_env(&mut cmd);
     cmd.args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())

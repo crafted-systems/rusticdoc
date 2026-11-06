@@ -146,6 +146,7 @@ impl Worker {
             uuid::Uuid::new_v4().simple()
         );
         let mut cmd = Command::new(&launch.python);
+        crate::process::clean_env(&mut cmd);
         if let Some(conf) = write_fontconfig(dir.path(), launch).await? {
             cmd.env("FONTCONFIG_FILE", conf);
         }

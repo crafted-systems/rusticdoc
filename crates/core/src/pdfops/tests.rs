@@ -1042,3 +1042,55 @@ async fn request_sizes_are_capped() {
         Error::InvalidRequest(_)
     ));
 }
+
+mod encrypt_order {
+    use super::super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn script(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn a_qpdf_failure_does_not_hand_the_passwords_to_pdfcpu() {
+        let dir = tempfile::tempdir().unwrap();
+        let called = dir.path().join("called");
+        let qpdf = script(dir.path(), "qpdf", "exit 2");
+        let pdfcpu = script(
+            dir.path(),
+            "pdfcpu",
+            &format!("echo \"$@\" > {}", called.display()),
+        );
+        let engines = MultiEngine::for_forms(Some(qpdf), Some(pdfcpu), &BTreeMap::new());
+        let doc = Document::new("a.pdf", fixtures::pages(1));
+        let options = EncryptOptions {
+            user_password: "secret".into(),
+            owner_password: "secret".into(),
+            ..EncryptOptions::default()
+        };
+        let err = engines
+            .encrypt_with(&doc, &options, Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Engine { engine: "qpdf", .. }), "{err}");
+        assert!(!called.exists(), "pdfcpu saw the passwords");
+    }
+
+    #[tokio::test]
+    async fn a_line_break_stops_before_any_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let called = dir.path().join("called");
+        let qpdf = script(dir.path(), "qpdf", &format!("touch {}", called.display()));
+        let engines = MultiEngine::for_forms(Some(qpdf), None, &BTreeMap::new());
+        let doc = Document::new("a.pdf", fixtures::pages(1));
+        let err = engines
+            .encrypt(&doc, "a\nb", "c", Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
+        assert!(!called.exists());
+    }
+}
