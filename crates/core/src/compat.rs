@@ -178,24 +178,31 @@ pub fn validate_permissions(encrypt: &EncryptOptions) -> Result<()> {
 
 /// The formats to convert to so the output meets Factur-X's PDF/A-3
 /// requirement. An existing PDF that is PDF/A-3 already stays as it is.
-pub fn facturx_formats(
+pub async fn facturx_formats(
     has_facturx: bool,
     formats: &PdfFormats,
     source_is_office: bool,
     inputs: &[Document],
-) -> PdfFormats {
+    timeout: Duration,
+) -> Result<PdfFormats> {
     let mut formats = formats.clone();
     if !has_facturx || formats.is_pdfa3() {
-        return formats;
+        return Ok(formats);
     }
-    let all_pdfa3 = !source_is_office
-        && inputs
-            .iter()
-            .all(|doc| pdfops::pdfa_part(doc).as_deref() == Some("3"));
+    let mut all_pdfa3 = !source_is_office;
+    if all_pdfa3 {
+        for doc in inputs {
+            let part = pdfops::pdfa_part_off_thread(doc, timeout).await?;
+            if part.as_deref() != Some("3") {
+                all_pdfa3 = false;
+                break;
+            }
+        }
+    }
     if !all_pdfa3 {
         formats.pdfa = "PDF/A-3b".into();
     }
-    formats
+    Ok(formats)
 }
 
 /// Runs the routes against a service's engines.
@@ -228,7 +235,7 @@ impl Compat<'_> {
         let mut produced = 0;
         for doc in docs {
             let stem = stem_of(&doc.name);
-            let mode = split_mode(split, doc)?;
+            let mode = split_mode(split, doc, self.timeout).await?;
             let parts = self.forms().split(doc, &mode, self.timeout).await?;
             for part in &parts {
                 limits::charge_output(&mut produced, part.bytes.len(), limits::MAX_OUTPUT_BYTES)?;
@@ -506,7 +513,14 @@ impl Compat<'_> {
         let merged = self.forms().merge(&inputs, self.timeout).await?;
         let mut docs = vec![Document::new("merged.pdf", merged.bytes)];
         docs = self.before_convert(steps, docs).await?;
-        let formats = facturx_formats(steps.facturx.is_some(), &steps.formats, false, &docs);
+        let formats = facturx_formats(
+            steps.facturx.is_some(),
+            &steps.formats,
+            false,
+            &docs,
+            self.timeout,
+        )
+        .await?;
         docs = self.convert_stub(&formats, docs).await?;
         let outline = self
             .merged_outline(&inputs, bookmarks, auto_index_bookmarks, title_bookmarks)
@@ -555,7 +569,7 @@ impl Compat<'_> {
             } else {
                 outline.append(&mut own);
             }
-            offset += pdfops::page_count(input)?;
+            offset += pdfops::page_count_off_thread(input, self.timeout).await?;
         }
         Ok(outline)
     }
@@ -586,7 +600,14 @@ impl Compat<'_> {
     ) -> Result<Vec<Document>> {
         let docs = self.split_stub(split, &inputs).await?;
         let docs = self.before_convert(steps, docs).await?;
-        let formats = facturx_formats(steps.facturx.is_some(), &steps.formats, false, &docs);
+        let formats = facturx_formats(
+            steps.facturx.is_some(),
+            &steps.formats,
+            false,
+            &docs,
+            self.timeout,
+        )
+        .await?;
         let docs = self.convert_stub(&formats, docs).await?;
         self.after_convert(steps, docs).await
     }
@@ -600,7 +621,8 @@ impl Compat<'_> {
         metadata: &BTreeMap<String, EmbedMetadata>,
         facturx: Option<&Facturx>,
     ) -> Result<Vec<Document>> {
-        let formats = facturx_formats(facturx.is_some(), formats, false, &inputs);
+        let formats =
+            facturx_formats(facturx.is_some(), formats, false, &inputs, self.timeout).await?;
         let docs = self.convert_stub(&formats, inputs).await?;
         let docs = self.embed_stub(embeds, metadata, docs).await?;
         self.facturx_stub(facturx, docs).await
@@ -616,7 +638,14 @@ impl Compat<'_> {
         split: Option<&Split>,
         steps: &PostSteps,
     ) -> Result<Vec<Document>> {
-        let formats = facturx_formats(steps.facturx.is_some(), &steps.formats, true, &[]);
+        let formats = facturx_formats(
+            steps.facturx.is_some(),
+            &steps.formats,
+            true,
+            &[],
+            self.timeout,
+        )
+        .await?;
         let post_processing = steps.has_post_processing();
         // PDF/A applied natively survives only if nothing edits the file later.
         let native = native_formats && split.is_none() && !post_processing;
@@ -746,13 +775,13 @@ pub fn stem_of(name: &str) -> String {
 /// The engines' split mode for one document. Page selections are resolved here:
 /// Gotenberg's clients send pdfcpu's and qpdf's forms (`2-`, `2-z`, `r1`), and
 /// outside `unify` every selected page is a part of its own.
-fn split_mode(split: &Split, doc: &Document) -> Result<SplitMode> {
+async fn split_mode(split: &Split, doc: &Document, timeout: Duration) -> Result<SplitMode> {
     match split.mode.as_str() {
         "intervals" => Ok(SplitMode::Intervals {
             span: split.span.parse().map_err(|_| bad(SPLIT_NOT_SUPPORTED))?,
         }),
         "pages" => {
-            let count = pdfops::page_count(doc)?;
+            let count = pdfops::page_count_off_thread(doc, timeout).await?;
             let ranges = selection(&split.span, count).ok_or_else(|| bad(SPLIT_NOT_SUPPORTED))?;
             let parsed = pages::parse(&ranges, count).map_err(|_| bad(SPLIT_NOT_SUPPORTED))?;
             if split.unify {
@@ -998,20 +1027,51 @@ mod tests {
         assert_eq!(titled[0].title, "a");
     }
 
-    #[test]
-    fn formats_for_facturx() {
+    #[tokio::test]
+    async fn formats_for_facturx() {
         let plain = PdfFormats::default();
+        let limit = Duration::from_secs(30);
         assert_eq!(
-            facturx_formats(true, &plain, true, &[]).pdfa,
+            facturx_formats(true, &plain, true, &[], limit)
+                .await
+                .unwrap()
+                .pdfa,
             "PDF/A-3b",
             "an office document becomes PDF/A-3"
         );
-        assert_eq!(facturx_formats(false, &plain, true, &[]), plain);
+        assert_eq!(
+            facturx_formats(false, &plain, true, &[], limit)
+                .await
+                .unwrap(),
+            plain
+        );
         let doc = Document::new("a.pdf", fixtures::pages(1));
         assert_eq!(
-            facturx_formats(true, &plain, false, &[doc]).pdfa,
+            facturx_formats(true, &plain, false, &[doc], limit)
+                .await
+                .unwrap()
+                .pdfa,
             "PDF/A-3b"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn parsing_leaves_the_async_thread_free() {
+        // On one thread, a ticker only ticks if the parse runs elsewhere.
+        let ticks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = ticks.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        let doc = Document::new("a.pdf", fixtures::pages(20_000));
+        let count = pdfops::page_count_off_thread(&doc, Duration::from_secs(60))
+            .await
+            .unwrap();
+        assert_eq!(count, 20_000);
+        assert!(ticks.load(std::sync::atomic::Ordering::Relaxed) > 2);
     }
 
     #[test]

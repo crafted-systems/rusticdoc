@@ -11,10 +11,16 @@
 //! disabled, so neither DNS rebinding nor a redirect can turn a webhook into
 //! a request to something beside the service.
 //!
-//! The signature covers the timestamp and the body:
-//! `X-Rusticdoc-Signature: v1=<hex HMAC-SHA256 of "<timestamp>.<body>">`,
-//! with the timestamp in `X-Rusticdoc-Timestamp`. Receivers verify the
-//! signature and reject timestamps outside their freshness window.
+//! Each caller signs with its own key, so one tenant cannot send another's
+//! receiver something that verifies: the key is `HMAC-SHA256(secret, principal)`,
+//! or the secret itself when the service requires no credentials and the
+//! principal is `public`. `rusticdoc webhook-secret` prints a caller's key.
+//!
+//! The signature covers the timestamp, the event, the request id and the body:
+//! `X-Rusticdoc-Signature: v1=<hex HMAC-SHA256 of
+//! "<timestamp>.<event>.<request id>.<body>">`, with the timestamp in
+//! `X-Rusticdoc-Timestamp` and the event in `X-Rusticdoc-Event`. Receivers verify
+//! the signature and reject timestamps outside their freshness window.
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -173,6 +179,8 @@ pub struct Webhook {
     pub traceparent: Option<HeaderValue>,
     /// This job's place among the running ones, held through its delivery.
     pub permit: Option<Arc<JobPermit>>,
+    /// The caller, whose key signs the delivery.
+    pub principal: String,
 }
 
 /// The webhook a `/v1/*` request asks for, with its place among the running
@@ -201,6 +209,7 @@ impl FromRequestParts<AppState> for Hook {
             return Ok(Self(None));
         };
         hook.permit = Some(Arc::new(state.jobs.try_acquire(caller)?));
+        hook.principal = caller.to_string();
         Ok(Self(Some(hook)))
     }
 }
@@ -311,6 +320,7 @@ impl Webhook {
             errors_to_error_url_only: false,
             traceparent: None,
             permit: None,
+            principal: "public".to_string(),
         }))
     }
 
@@ -390,16 +400,19 @@ fn valid_traceparent(value: &str) -> bool {
 /// normalised host, which is also the key the delivery client pins.
 pub async fn resolve(url: &str, policy: &UrlPolicy) -> Result<Target, ApiError> {
     let allow_private = policy.allow_private;
+    // Messages are logged, and a URL can carry what the logs should not: every
+    // one of them shows it redacted.
+    let shown = redact(url);
     let mut parsed = reqwest::Url::parse(url)
-        .map_err(|e| ApiError::bad_request(format!("webhook URL '{url}': {e}")))?;
+        .map_err(|e| ApiError::bad_request(format!("webhook URL {shown}: {e}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(ApiError::bad_request(format!(
-            "webhook URL '{url}' must be http or https"
+            "webhook URL '{shown}' must be http or https"
         )));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(ApiError::bad_request(format!(
-            "webhook URL '{url}' must not carry credentials; use extra headers"
+            "webhook URL '{shown}' must not carry credentials; use extra headers"
         )));
     }
     if !policy.permits(parsed.as_str()) {
@@ -411,7 +424,7 @@ pub async fn resolve(url: &str, policy: &UrlPolicy) -> Result<Target, ApiError> 
     }
     let raw_host = parsed
         .host_str()
-        .ok_or_else(|| ApiError::bad_request(format!("webhook URL '{url}' has no host")))?
+        .ok_or_else(|| ApiError::bad_request(format!("webhook URL '{shown}' has no host")))?
         .to_string();
     let bare = raw_host
         .trim_matches(|c| c == '[' || c == ']')
@@ -419,7 +432,7 @@ pub async fn resolve(url: &str, policy: &UrlPolicy) -> Result<Target, ApiError> 
         .to_ascii_lowercase();
     let port = parsed
         .port_or_known_default()
-        .ok_or_else(|| ApiError::bad_request(format!("webhook URL '{url}' has no port")))?;
+        .ok_or_else(|| ApiError::bad_request(format!("webhook URL '{shown}' has no port")))?;
 
     if !allow_private && is_private_name(&bare) {
         return Err(private(url));
@@ -496,6 +509,14 @@ pub fn is_global_ip(ip: IpAddr) -> bool {
             };
             let compatible = s[..6] == [0, 0, 0, 0, 0, 0] && (s[6] != 0 || s[7] != 0);
             let nat64 = s[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
+            // IPv4-translated (::ffff:0:0/96), local-use NAT64 (64:ff9b:1::/48) and
+            // discard (100::/64) lead nowhere public.
+            if s[..4] == [0, 0, 0, 0] && s[4] == 0xffff && s[5] == 0
+                || s[..3] == [0x64, 0xff9b, 1]
+                || s[..4] == [0x100, 0, 0, 0]
+            {
+                return false;
+            }
             let embedded = if compatible || nat64 {
                 Some(v4_at(s[6], s[7]))
             } else if s[0] == 0x2002 {
@@ -548,24 +569,47 @@ pub fn redact(url: &str) -> String {
     }
 }
 
-/// `v1=<hex hmac>` over `"<timestamp>.<body>"`.
-pub fn sign(secret: &str, timestamp: u64, body: &[u8]) -> String {
+/// The key `principal`'s deliveries are signed with: `HMAC-SHA256(secret,
+/// principal)`, or the secret itself for `public`, where no credentials are
+/// configured and there is one tenant.
+pub fn signing_key(secret: &str, principal: &str) -> Vec<u8> {
+    if principal == "public" {
+        return secret.as_bytes().to_vec();
+    }
     let mut mac =
         Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac accepts any key length");
-    mac.update(timestamp.to_string().as_bytes());
-    mac.update(b".");
+    mac.update(principal.as_bytes());
+    mac.finalize().into_bytes().to_vec()
+}
+
+/// `v1=<hex hmac>` over `"<timestamp>.<event>.<request id>.<body>"`.
+pub fn sign(key: &[u8], timestamp: u64, event: &str, request_id: &str, body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("hmac accepts any key length");
+    mac.update(format!("{timestamp}.{event}.{request_id}.").as_bytes());
     mac.update(body);
     format!("v1={}", hex::encode(mac.finalize().into_bytes()))
 }
 
 /// A client pinned to the target's vetted addresses, following no redirects.
-pub fn client_for(target: &Target, timeout: Duration) -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder()
+///
+/// Proxy variables in the environment are ignored: a proxy would resolve the name
+/// itself and undo the pinning. `RUSTICDOC_OUTBOUND_PROXY` asks for one explicitly,
+/// and then the URL checks still apply but the pinning does not.
+pub fn client_for(
+    target: &Target,
+    timeout: Duration,
+    proxy: Option<&str>,
+) -> reqwest::Result<reqwest::Client> {
+    let builder = reqwest::Client::builder()
         .user_agent(format!("rusticdoc/{}", rusticdoc_core::VERSION))
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
         .resolve_to_addrs(&target.host, &target.addrs)
-        .build()
+        .no_proxy();
+    match proxy {
+        Some(proxy) => builder.proxy(reqwest::Proxy::all(proxy)?).build(),
+        None => builder.build(),
+    }
 }
 
 /// Posts the result, or the error, and records the outcome.
@@ -628,7 +672,11 @@ pub async fn deliver(
     };
     let url = target.url.clone();
     let shown = redact(&url);
-    let client = match client_for(&target, state.config.api_timeout) {
+    let client = match client_for(
+        &target,
+        state.config.api_timeout,
+        state.config.outbound_proxy.as_deref(),
+    ) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(url = %shown, error = %e, "webhook client could not be built");
@@ -638,6 +686,11 @@ pub async fn deliver(
         }
     };
     let trace_header = &state.config.compat.trace_header;
+    let key = state
+        .config
+        .webhook_secret
+        .as_ref()
+        .map(|secret| signing_key(secret, &hook.principal));
 
     let attempts = state.config.webhook_attempts.max(1);
     for attempt in 1..=attempts {
@@ -657,8 +710,8 @@ pub async fn deliver(
         {
             req = req.header("content-disposition", d);
         }
-        if let Some(secret) = &state.config.webhook_secret {
-            req = req.header(SIGNATURE, sign(secret, timestamp, &body));
+        if let Some(key) = &key {
+            req = req.header(SIGNATURE, sign(key, timestamp, event, &request_id, &body));
         }
         if let Some(traceparent) = &hook.traceparent {
             req = req.header("traceparent", traceparent);
@@ -684,6 +737,7 @@ pub async fn deliver(
                 tracing::warn!(url = %shown, event, attempt, status = res.status().as_u16(), "webhook rejected");
             }
             Err(e) => {
+                let e = e.without_url();
                 tracing::warn!(url = %shown, event, attempt, error = %e, "webhook failed");
             }
         }
@@ -704,7 +758,11 @@ async fn send_event(state: &AppState, hook: &Webhook, request_id: &str, event: &
         return;
     };
     let shown = redact(&target.url);
-    let client = match client_for(target, state.config.api_timeout) {
+    let client = match client_for(
+        target,
+        state.config.api_timeout,
+        state.config.outbound_proxy.as_deref(),
+    ) {
         Ok(client) => client,
         Err(e) => {
             tracing::warn!(url = %shown, error = %e, "webhook events client could not be built");
@@ -719,7 +777,19 @@ async fn send_event(state: &AppState, hook: &Webhook, request_id: &str, event: &
     if let Some(traceparent) = &hook.traceparent {
         req = req.header("traceparent", traceparent);
     }
-    if let Err(e) = req.body(event.to_string()).send().await {
+    let name = event["event"].as_str().unwrap_or("webhook.event");
+    let body = event.to_string();
+    req = req.header(EVENT, name);
+    if let Some(secret) = &state.config.webhook_secret {
+        let key = signing_key(secret, &hook.principal);
+        let timestamp = unix_now();
+        req = req.header(TIMESTAMP, timestamp.to_string()).header(
+            SIGNATURE,
+            sign(&key, timestamp, name, request_id, body.as_bytes()),
+        );
+    }
+    if let Err(e) = req.body(body).send().await {
+        let e = e.without_url();
         tracing::warn!(url = %shown, error = %e, "webhook event was not delivered");
     }
 }
@@ -821,6 +891,12 @@ mod tests {
             "::10.0.0.1",
             "64:ff9b::7f00:1",
             "2002:0a00:0001::",
+            "::ffff:0:7f00:1",
+            "::ffff:0:808:808",
+            "64:ff9b:1::1",
+            "64:ff9b:1:abcd::808:808",
+            "100::1",
+            "100::ffff:ffff:ffff:ffff",
         ] {
             assert!(!is_global_ip(ip(p)), "{p} should not be global");
         }
@@ -936,12 +1012,43 @@ mod tests {
     }
 
     #[test]
-    fn signature_covers_timestamp_and_body() {
-        let s = sign("secret", 1700000000, b"body");
-        assert!(s.starts_with("v1="));
-        assert_eq!(s, sign("secret", 1700000000, b"body"));
-        assert_ne!(s, sign("secret", 1700000001, b"body"));
-        assert_ne!(s, sign("other", 1700000000, b"body"));
+    fn signature_covers_timestamp_event_request_id_and_body() {
+        // Computed apart from this code, with Python's hmac module.
+        assert_eq!(
+            sign(b"k", 1700000000, "render.completed", "rid-1", b"body"),
+            "v1=e05cfcf77b34600c9118e4239910dece12b05df5186b8c3b25cf6b8e0286195e"
+        );
+        let s = sign(b"k", 1700000000, "e", "r", b"b");
+        assert_ne!(s, sign(b"k", 1700000001, "e", "r", b"b"));
+        assert_ne!(s, sign(b"k", 1700000000, "x", "r", b"b"));
+        assert_ne!(s, sign(b"k", 1700000000, "e", "x", b"b"));
+        assert_ne!(s, sign(b"k", 1700000000, "e", "r", b"x"));
+        assert_ne!(s, sign(b"x", 1700000000, "e", "r", b"b"));
+    }
+
+    #[test]
+    fn each_caller_has_its_own_signing_key() {
+        assert_eq!(
+            hex::encode(signing_key("master", "key:abc")),
+            "fed23b5bf025ca341ad9baafe0fa4f6da51c5db6e789ba6be0377bc09e42f448"
+        );
+        assert_ne!(signing_key("m", "key:a"), signing_key("m", "key:b"));
+        assert_ne!(signing_key("m", "key:a"), b"m".to_vec());
+        assert_eq!(signing_key("m", "public"), b"m".to_vec());
+    }
+
+    #[tokio::test]
+    async fn refusals_do_not_echo_query_or_credentials() {
+        for url in [
+            "http://user:pw@hooks.example.com/x?token=SECRET",
+            "ftp://user:pw@hooks.example.com/x?token=SECRET",
+            "http://127.0.0.1/x?token=SECRET",
+        ] {
+            let err = resolve(url, &UrlPolicy::private(false)).await.unwrap_err();
+            let message = err.body.message;
+            assert!(!message.contains("SECRET"), "{message}");
+            assert!(!message.contains("pw"), "{message}");
+        }
     }
 
     #[test]

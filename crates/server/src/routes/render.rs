@@ -2,7 +2,7 @@ use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::{Extension, Json};
-use rusticdoc_core::job::parse_steps;
+use rusticdoc_core::job::{parse_steps, safe_file_name};
 use rusticdoc_core::render::MAX_BATCH_NAME_BYTES;
 use rusticdoc_core::{RenderRequest, Step, template};
 use serde::Serialize;
@@ -115,10 +115,7 @@ pub async fn render(
     options.pdfua = false;
     req.convert_options = options;
     req.steps = named_steps(&mut form)?;
-    req.output_name = form
-        .field("outputFilename")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    req.output_name = form.output_name();
     req.extra = std::mem::take(&mut form.files);
 
     // A PDF template is a form: fill it here, then run the steps on the
@@ -259,17 +256,13 @@ pub async fn batch(
         .filter(|s| !s.is_empty())
         .unwrap_or("{{ batch.index }}")
         .to_string();
-    let zip_name = form
-        .field("outputFilename")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            std::path::Path::new(&template.name)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("batch")
-                .to_string()
-        });
+    let zip_name = form.output_name().unwrap_or_else(|| {
+        std::path::Path::new(&template.name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("batch")
+            .to_string()
+    });
 
     let elements = match lookup(&data, &split_by) {
         Some(serde_json::Value::Array(items)) => items.clone(),
@@ -354,10 +347,10 @@ pub async fn batch(
             let mut req = RenderRequest::new(rendered);
             req.templating = false;
             req.steps = steps.clone();
-            req.output_name = Some(sanitize_name(&name, index + 1));
+            req.output_name = Some(safe_file_name(&name, &(index + 1).to_string()));
             outputs.push(execute(&st, req).await?);
         }
-        crate::routes::form::zip(&zip_name, &outputs)
+        crate::routes::form::zip(&zip_name, &outputs, st.config.api_timeout).await
     };
     finish_within(state, hook, request_id(&headers), limit, job).await
 }
@@ -390,24 +383,6 @@ fn replace(data: &mut serde_json::Value, path: &str, value: serde_json::Value) {
             Some(slot) => cur = slot,
             None => return,
         }
-    }
-}
-
-/// A file name from a template: no directories, no control characters,
-/// never empty.
-fn sanitize_name(name: &str, index: usize) -> String {
-    let cleaned: String = name
-        .trim()
-        .chars()
-        .filter(|c| {
-            !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
-        })
-        .collect();
-    let cleaned = cleaned.trim_matches('.').trim().to_string();
-    if cleaned.is_empty() {
-        index.to_string()
-    } else {
-        cleaned
     }
 }
 

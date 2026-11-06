@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use super::{EncryptOptions, PdfEngine, Rotation, SplitMode, page_count, pages, require_pdf};
+use super::{
+    EncryptOptions, PdfEngine, Rotation, SplitMode, page_count_off_thread, pages, require_pdf,
+};
 use crate::error::{Error, Result};
 use crate::job::Document;
 use crate::limits::{MAX_OUTPUT_BYTES, charge_output};
@@ -123,7 +125,7 @@ impl PdfEngine for QpdfEngine {
         timeout: Duration,
     ) -> Result<Vec<Document>> {
         require_pdf(doc)?;
-        let count = page_count(doc)?;
+        let count = page_count_off_thread(doc, timeout).await?;
         let dir = workdir()?;
         let input = dir.path().join("in.pdf");
         tokio::fs::write(&input, &doc.bytes).await?;
@@ -218,7 +220,7 @@ impl PdfEngine for QpdfEngine {
         let flag = if pages.trim().is_empty() {
             format!("--rotate=+{}", rotation.degrees())
         } else {
-            let ranges = pages::parse(pages, page_count(doc)?)?;
+            let ranges = pages::parse(pages, page_count_off_thread(doc, timeout).await?)?;
             format!("--rotate=+{}:{}", rotation.degrees(), pages::join(&ranges))
         };
         self.transform(doc, &[flag], timeout).await

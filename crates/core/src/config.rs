@@ -59,6 +59,13 @@ pub struct Config {
     pub render_memory: u64,
     /// Render workers that may run at once.
     pub render_workers: usize,
+    /// How long a client may take to send its request headers.
+    pub header_timeout: Duration,
+    /// Connections served at once. More wait in the listen queue.
+    pub max_connections: usize,
+    /// A proxy for webhooks and downloads, named on purpose. Pinning to the vetted
+    /// addresses no longer applies through it.
+    pub outbound_proxy: Option<String>,
     /// `/metrics` stays open when other routes need credentials.
     pub metrics_public: bool,
     /// Serve `/docs`, which loads a third-party script.
@@ -236,6 +243,9 @@ impl Default for Config {
             render_worker_bin: None,
             render_memory: 1024 * 1024 * 1024,
             render_workers: 4,
+            header_timeout: Duration::from_secs(10),
+            max_connections: 1024,
+            outbound_proxy: None,
             metrics_public: false,
             enable_docs: false,
             download_from_disabled: false,
@@ -328,6 +338,13 @@ impl Config {
         if let Some(v) = get("WEBHOOK_ATTEMPTS").and_then(|v| v.parse().ok()) {
             c.webhook_attempts = v;
         }
+        if let Some(v) = get("HEADER_TIMEOUT").and_then(|v| parse_duration(&v)) {
+            c.header_timeout = v;
+        }
+        if let Some(v) = get("MAX_CONNECTIONS").and_then(|v| v.parse().ok()) {
+            c.max_connections = v;
+        }
+        c.outbound_proxy = get("OUTBOUND_PROXY");
         if let Some(v) = get("METRICS_PUBLIC") {
             c.metrics_public = matches!(v.as_str(), "1" | "true" | "yes");
         }

@@ -8,6 +8,25 @@ use crate::convert::ConvertOptions;
 use crate::error::{Error, Result};
 use crate::pdfops;
 
+/// A file name a client gave, safe to write to a disk or a ZIP: the last path
+/// segment, without control characters or what Windows gives a meaning. `fallback`
+/// when nothing is left of it.
+pub fn safe_file_name(name: &str, fallback: &str) -> String {
+    let base: String = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect();
+    let base = base.trim();
+    if base.is_empty() || base == "." || base == ".." {
+        fallback.to_string()
+    } else {
+        base.to_string()
+    }
+}
+
 /// A file in flight: its name decides its format.
 #[derive(Debug, Clone)]
 pub struct Document {
@@ -285,7 +304,9 @@ pub struct Output {
     pub timings: Vec<(String, u128)>,
 }
 
-/// Several documents as one ZIP, deflated.
+/// Several documents as one ZIP, deflated. Entry names are made safe here, so no
+/// caller can write `../` into an archive, and kept apart when that makes two the
+/// same.
 pub fn zip_documents(name: &str, docs: &[Document]) -> Result<Document> {
     use std::io::Write as _;
     let mut buf = std::io::Cursor::new(Vec::new());
@@ -293,13 +314,36 @@ pub fn zip_documents(name: &str, docs: &[Document]) -> Result<Document> {
         let mut zw = zip::ZipWriter::new(&mut buf);
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
+        let mut taken = std::collections::HashSet::new();
         for doc in docs {
-            zw.start_file(doc.name.clone(), opts)?;
+            let safe = safe_file_name(&doc.name, "document");
+            let mut entry = safe.clone();
+            let mut next = 2;
+            while !taken.insert(entry.clone()) {
+                let (stem, ext) = match safe.rfind('.') {
+                    Some(at) if at > 0 => safe.split_at(at),
+                    _ => (safe.as_str(), ""),
+                };
+                entry = format!("{stem} ({next}){ext}");
+                next += 1;
+            }
+            zw.start_file(entry, opts)?;
             zw.write_all(&doc.bytes)?;
         }
         zw.finish()?;
     }
+    let name = safe_file_name(name, "documents");
     Ok(Document::new(format!("{name}.zip"), buf.into_inner()))
+}
+
+/// As [`zip_documents`], off the async threads and behind the blocking permits.
+pub async fn zip_off_thread(
+    name: &str,
+    docs: Vec<Document>,
+    timeout: std::time::Duration,
+) -> Result<Document> {
+    let name = name.to_string();
+    pdfops::blocking(timeout, move |_| zip_documents(&name, &docs)).await
 }
 
 impl From<zip::result::ZipError> for Error {
@@ -466,6 +510,58 @@ mod tests {
         let err = parse_steps("convert,teleport", &BTreeMap::new()).unwrap_err();
         assert!(err.is_client_error());
         assert!(err.to_string().contains("teleport"));
+    }
+
+    #[test]
+    fn file_names_lose_what_could_steer_them() {
+        assert_eq!(safe_file_name("../../etc/passwd", "x"), "passwd");
+        assert_eq!(safe_file_name("C:\\Temp\\a.pdf", "x"), "a.pdf");
+        assert_eq!(safe_file_name("C:evil", "x"), "Cevil");
+        assert_eq!(safe_file_name("a\nb\u{7}.pdf", "x"), "ab.pdf");
+        assert_eq!(safe_file_name("..", "x"), "x");
+        assert_eq!(safe_file_name(" / ", "x"), "x");
+    }
+
+    #[test]
+    fn zip_entries_are_safe_and_distinct() {
+        let docs = [
+            Document::new("../../a.pdf", b"1".to_vec()),
+            Document::new("x/a.pdf", b"2".to_vec()),
+            Document::new("/etc/cron.d/evil", b"3".to_vec()),
+        ];
+        let out = zip_documents("../../up", &docs).unwrap();
+        assert_eq!(out.name, "up.zip");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(out.bytes.to_vec())).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["a.pdf", "a (2).pdf", "evil"]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn zipping_leaves_the_async_thread_free() {
+        // On one thread, a ticker only ticks if the zip runs elsewhere.
+        let ticks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = ticks.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        let mut noise = vec![0u8; 8 << 20];
+        let mut state = 88172645463325252u64;
+        for byte in noise.iter_mut() {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *byte = state as u8;
+        }
+        let docs = vec![Document::new("a.bin", noise)];
+        zip_off_thread("z", docs, std::time::Duration::from_secs(60))
+            .await
+            .unwrap();
+        assert!(ticks.load(std::sync::atomic::Ordering::Relaxed) > 2);
     }
 
     #[test]

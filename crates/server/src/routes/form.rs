@@ -2,6 +2,7 @@
 //! `downloadFrom` URLs, and writing a document back as a download.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::Multipart;
@@ -132,7 +133,12 @@ impl Form {
         for entry in entries {
             let target = webhook::resolve(&entry.url, &state.url_policies.download).await?;
             let shown = webhook::redact(&entry.url);
-            let client = webhook::client_for(&target, config.api_timeout).map_err(|e| {
+            let client = webhook::client_for(
+                &target,
+                config.api_timeout,
+                config.outbound_proxy.as_deref(),
+            )
+            .map_err(|e| {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "io_error", e.to_string())
             })?;
             let mut req = client.get(&target.url);
@@ -144,10 +150,10 @@ impl Form {
                 }
                 req = req.header(k, v);
             }
-            let mut res = req
-                .send()
-                .await
-                .map_err(|e| ApiError::bad_request(format!("download '{shown}': {e}")))?;
+            let mut res = req.send().await.map_err(|e| {
+                let e = e.without_url();
+                ApiError::bad_request(format!("download '{shown}': {e}"))
+            })?;
             if !res.status().is_success() {
                 return Err(ApiError::bad_request(format!(
                     "download '{shown}': status {}",
@@ -175,11 +181,10 @@ impl Form {
                 })
                 .unwrap_or_else(|| "download".to_string());
             let mut bytes = Vec::new();
-            while let Some(chunk) = res
-                .chunk()
-                .await
-                .map_err(|e| ApiError::bad_request(format!("download '{shown}': {e}")))?
-            {
+            while let Some(chunk) = res.chunk().await.map_err(|e| {
+                let e = e.without_url();
+                ApiError::bad_request(format!("download '{shown}': {e}"))
+            })? {
                 if chunk.len() > budget {
                     return Err(ApiError::bad_request(format!(
                         "download '{shown}' is larger than the body limit"
@@ -198,6 +203,14 @@ impl Form {
             self.add_file(&field, Document::new(sanitize(&name), bytes));
         }
         Ok(())
+    }
+
+    /// The `outputFilename` the client asked for, as a safe base name.
+    pub fn output_name(&self) -> Option<String> {
+        self.field("outputFilename")
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(sanitize)
     }
 
     pub fn field(&self, name: &str) -> Option<&str> {
@@ -265,19 +278,7 @@ fn disposition_filename(value: &str) -> Option<String> {
 /// Keeps the base name only, without control characters, so a client cannot
 /// steer a path or a log line.
 pub fn sanitize(name: &str) -> String {
-    let base: String = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    let base = base.trim();
-    if base.is_empty() || base == "." || base == ".." {
-        "upload".to_string()
-    } else {
-        base.to_string()
-    }
+    rusticdoc_core::job::safe_file_name(name, "upload")
 }
 
 /// `attachment; filename="..."`, with the RFC 5987 form for a name a quoted
@@ -315,12 +316,16 @@ pub fn request_id(headers: &HeaderMap) -> String {
 }
 
 /// A file download with the pipeline timings in a header.
-pub fn download(out: Output) -> Response {
-    // Bytes are cheap to clone. Very large files skip the font scan.
-    let pdf_head = if out.bytes.len() <= 32 * 1024 * 1024 {
-        out.bytes.clone()
+pub async fn download(out: Output) -> Response {
+    // Bytes are cheap to clone. Very large files skip the font scan, and the rest
+    // are scanned off the async threads.
+    let fonts = if out.content_type == "application/pdf" && out.bytes.len() <= 32 * 1024 * 1024 {
+        let scanned = out.bytes.clone();
+        tokio::task::spawn_blocking(move || rusticdoc_core::fonts::pdf_font_names(&scanned))
+            .await
+            .unwrap_or_default()
     } else {
-        bytes::Bytes::new()
+        Vec::new()
     };
     let mut res = Response::new(Body::from(out.bytes));
     *res.status_mut() = StatusCode::OK;
@@ -332,14 +337,11 @@ pub fn download(out: Output) -> Response {
     if let Ok(v) = HeaderValue::from_str(&disposition(&out.name)) {
         headers.insert(header::CONTENT_DISPOSITION, v);
     }
-    if out.content_type == "application/pdf" {
-        // Font names are printable ASCII; anything else skips the header.
-        let fonts = rusticdoc_core::fonts::pdf_font_names(&pdf_head);
-        if !fonts.is_empty()
-            && let Ok(v) = HeaderValue::from_str(&fonts.join(", "))
-        {
-            headers.insert("x-fonts-used", v);
-        }
+    // Font names are printable ASCII; anything else skips the header.
+    if !fonts.is_empty()
+        && let Ok(v) = HeaderValue::from_str(&fonts.join(", "))
+    {
+        headers.insert("x-fonts-used", v);
     }
     let timings: Vec<String> = out
         .timings
@@ -353,41 +355,16 @@ pub fn download(out: Output) -> Response {
 }
 
 /// Several outputs as one ZIP, as Gotenberg returns them.
-pub fn zip(name: &str, outputs: &[Output]) -> ApiResult<Output> {
-    use std::io::Write as _;
-    let mut buf = std::io::Cursor::new(Vec::new());
-    {
-        let mut zw = zip::ZipWriter::new(&mut buf);
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        for out in outputs {
-            zw.start_file(out.name.clone(), opts).map_err(|e| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "zip_failed",
-                    e.to_string(),
-                )
-            })?;
-            zw.write_all(&out.bytes).map_err(|e| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "zip_failed",
-                    e.to_string(),
-                )
-            })?;
-        }
-        zw.finish().map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "zip_failed",
-                e.to_string(),
-            )
-        })?;
-    }
+pub async fn zip(name: &str, outputs: &[Output], timeout: Duration) -> ApiResult<Output> {
+    let docs = outputs
+        .iter()
+        .map(|out| Document::new(out.name.clone(), out.bytes.clone()))
+        .collect();
+    let archive = rusticdoc_core::job::zip_off_thread(name, docs, timeout).await?;
     Ok(Output {
-        name: format!("{name}.zip"),
+        name: archive.name,
         content_type: "application/zip",
-        bytes: buf.into_inner().into(),
+        bytes: archive.bytes,
         timings: outputs.iter().flat_map(|o| o.timings.clone()).collect(),
     })
 }

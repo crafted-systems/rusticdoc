@@ -223,7 +223,7 @@ impl Pipeline {
                         Document::new(format!("{stem}_{}.{}", i + 1, d.extension()), d.bytes)
                     })
                     .collect();
-                job::zip_documents(&stem, &parts)?
+                job::zip_off_thread(&stem, parts, timeout).await?
             }
         };
         tracing::info!(

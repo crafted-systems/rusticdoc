@@ -76,10 +76,7 @@ pub async fn convert(
         .into_iter()
         .filter(|s| !matches!(s, Step::Pdfa { .. } | Step::Pdfua))
         .collect();
-    let output_name = form
-        .field("outputFilename")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let output_name = form.output_name();
     let files = std::mem::take(&mut form.files);
     let merge = post.first() == Some(&Step::Merge);
 
@@ -166,10 +163,7 @@ pub async fn convert_pdf(
             "Invalid form data: either 'pdfa' or 'pdfua' is required",
         ));
     }
-    let output_name = form
-        .field("outputFilename")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let output_name = form.output_name();
     let files = std::mem::take(&mut form.files);
     run_each(
         state,
@@ -216,7 +210,12 @@ pub async fn run_each(
         if outputs.len() == 1 {
             Ok(outputs.remove(0))
         } else {
-            zip(output_name.as_deref().unwrap_or("converted"), &outputs)
+            zip(
+                output_name.as_deref().unwrap_or("converted"),
+                &outputs,
+                st.config.api_timeout,
+            )
+            .await
         }
     };
     finish_within(state, hook, rid, limit, job).await

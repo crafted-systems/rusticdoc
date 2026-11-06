@@ -323,7 +323,7 @@ async fn webhook_delivers_the_result_signed() {
     assert_eq!(
         headers.get(webhook::SIGNATURE).unwrap().to_str().unwrap(),
         webhook::sign(
-            "s3cret",
+            b"s3cret",
             headers
                 .get(webhook::TIMESTAMP)
                 .unwrap()
@@ -331,6 +331,8 @@ async fn webhook_delivers_the_result_signed() {
                 .unwrap()
                 .parse()
                 .unwrap(),
+            "render.completed",
+            headers.get("x-request-id").unwrap().to_str().unwrap(),
             &body
         )
     );

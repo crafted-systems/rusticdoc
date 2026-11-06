@@ -612,3 +612,374 @@ async fn engine_failures_stay_out_of_v1_responses() {
     )));
     assert!(text(res).await.contains("bad page"));
 }
+
+// ---------------------------------------------------------------- F9
+
+#[tokio::test]
+async fn each_caller_signs_with_its_own_key_and_events_are_signed() {
+    use rusticdoc_server::{auth, webhook};
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let receiver = Router::new().fallback(move |request: axum::extract::Request| {
+        let tx = tx.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let body = body.collect().await.unwrap().to_bytes();
+            tx.send((parts.uri.path().to_string(), parts.headers, body))
+                .await
+                .unwrap();
+            StatusCode::OK
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, receiver).await });
+
+    let mut c = config();
+    c.webhook_allow_private = true;
+    c.webhook_secret = Some("master".into());
+    c.api_keys = vec!["tenant-a".into(), "tenant-b".into()];
+    let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &[][..])];
+    let pdf = fixtures::pages(1);
+    let _ = parts;
+    let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
+    let request = form("/forms/pdfengines/flatten", &parts)
+        .header("x-api-key", "tenant-a")
+        .header(
+            "gotenberg-webhook-url",
+            format!("http://127.0.0.1:{port}/done"),
+        )
+        .header(
+            "gotenberg-webhook-events-url",
+            format!("http://127.0.0.1:{port}/events"),
+        )
+        .body(Body::from(body_of(&parts)))
+        .unwrap();
+    let res = service(c).oneshot(request).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let key_a = webhook::signing_key("master", &auth::key_principal("tenant-a").0);
+    let key_b = webhook::signing_key("master", &auth::key_principal("tenant-b").0);
+    for _ in 0..2 {
+        let (path, headers, body) = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let value = |name: &str| headers.get(name).unwrap().to_str().unwrap().to_string();
+        let timestamp: u64 = value(webhook::TIMESTAMP).parse().unwrap();
+        let event = value(webhook::EVENT);
+        let id = value("gotenberg-trace");
+        let signature = value(webhook::SIGNATURE);
+        assert_eq!(
+            signature,
+            webhook::sign(&key_a, timestamp, &event, &id, &body),
+            "{path}"
+        );
+        assert_ne!(
+            signature,
+            webhook::sign(&key_b, timestamp, &event, &id, &body)
+        );
+        assert_ne!(
+            signature,
+            webhook::sign(b"master", timestamp, &event, &id, &body)
+        );
+    }
+}
+
+// ---------------------------------------------------------------- F10
+
+#[tokio::test]
+async fn output_names_cannot_carry_a_path() {
+    let pdf = fixtures::pages(2);
+    let parts: [Part<'_>; 4] = [
+        ("files", Some("a.pdf"), &pdf),
+        ("splitMode", None, b"pages"),
+        ("splitSpan", None, b"1,2"),
+        ("outputFilename", None, b"../../../../tmp/evil"),
+    ];
+    let res = service(config())
+        .oneshot(post("/v1/pdf/split", &parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get("content-disposition").unwrap(),
+        "attachment; filename=\"evil.zip\""
+    );
+    let bytes = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["evil_1.pdf", "evil_2.pdf"]);
+    let parts: [Part<'_>; 2] = [
+        ("files", Some("a.pdf"), &pdf),
+        ("outputFilename", None, b"../../evil"),
+    ];
+    for path in ["/v1/pdf/flatten", "/v1/pdf/merge"] {
+        let res = service(config()).oneshot(post(path, &parts)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            res.headers().get("content-disposition").unwrap(),
+            "attachment; filename=\"evil.pdf\"",
+            "{path}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------- F11
+
+#[tokio::test]
+async fn download_failures_do_not_carry_the_query() {
+    let mut c = config();
+    c.download_from_allow_private = true;
+    let parts: [Part<'_>; 1] = [(
+        "downloadFrom",
+        None,
+        br#"[{"url":"http://127.0.0.1:1/file.pdf?token=SECRET123"}]"#,
+    )];
+    let res = service(c)
+        .oneshot(post("/v1/pdf/merge", &parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(!text(res).await.contains("SECRET123"));
+    let parts: [Part<'_>; 1] = [(
+        "downloadFrom",
+        None,
+        br#"[{"url":"http://user:pw@example.com/x"}]"#,
+    )];
+    let res = service(config())
+        .oneshot(post("/v1/pdf/merge", &parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = text(res).await;
+    assert!(!body.contains("pw"), "{body}");
+}
+
+// ---------------------------------------------------------------- F13
+
+/// Collects what is logged on this thread while `f` runs.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_max_level(tracing::Level::INFO)
+        .json()
+        .flatten_event(true)
+        .with_current_span(true)
+        .finish();
+    (
+        captured.clone(),
+        tracing::subscriber::set_default(subscriber),
+    )
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+fn from_peer(mut request: Request<Body>) -> Request<Body> {
+    let peer: std::net::SocketAddr = "203.0.113.9:4242".parse().unwrap();
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(peer));
+    request
+}
+
+#[tokio::test]
+async fn failed_authentication_logs_who_and_from_where_without_the_secret() {
+    let (logs, _guard) = capture();
+    let request = Request::get("/v1/fonts")
+        .header("x-api-key", "wrong-key-value")
+        .body(Body::empty())
+        .unwrap();
+    let res = service(guarded())
+        .oneshot(from_peer(request))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let logged = logs.text();
+    assert!(logged.contains("authentication failed"), "{logged}");
+    assert!(logged.contains("203.0.113.9:4242"), "{logged}");
+    assert!(logged.contains("key:"), "{logged}");
+    assert!(!logged.contains("wrong-key-value"), "{logged}");
+}
+
+#[tokio::test]
+async fn the_access_log_names_the_peer_and_the_caller() {
+    let (logs, _guard) = capture();
+    let request = Request::get("/v1/fonts")
+        .header("x-api-key", "secret")
+        .body(Body::empty())
+        .unwrap();
+    let res = service(guarded())
+        .oneshot(from_peer(request))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let logged = logs.text();
+    assert!(
+        logged.contains(r#""remote_addr":"203.0.113.9:4242""#),
+        "{logged}"
+    );
+    assert!(logged.contains(r#""caller":"key:"#), "{logged}");
+    assert!(!logged.contains(r#""secret""#), "{logged}");
+}
+
+#[tokio::test]
+async fn webhook_job_failures_are_logged_in_the_requests_span() {
+    let (logs, _guard) = capture();
+    let port = silent_receiver().await;
+    let mut c = config();
+    c.webhook_allow_private = true;
+    c.webhook_attempts = 1;
+    c.api_timeout = Duration::from_millis(200);
+    let parts: [Part<'_>; 1] = [("template", Some("t.txt"), b"{{ nobody.home }}")];
+    let request = form("/v1/render", &parts)
+        .header("x-request-id", "job-under-test")
+        .header(
+            "x-rusticdoc-webhook-url",
+            format!("http://127.0.0.1:{port}/d"),
+        )
+        .body(Body::from(body_of(&parts)))
+        .unwrap();
+    let res = service(c).oneshot(request).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let logged = logs.text();
+    let line = logged
+        .lines()
+        .find(|line| line.contains("template_error"))
+        .unwrap_or_else(|| panic!("the job's failure was not logged: {logged}"));
+    assert!(line.contains("job-under-test"), "{line}");
+}
+
+// ---------------------------------------------------------------- F14
+
+async fn running(
+    limits: rusticdoc_server::ConnectionLimits,
+) -> (
+    u16,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let router = service(config());
+    let task = tokio::spawn(async move {
+        rusticdoc_server::serve_on(listener, router, limits, async {
+            let _ = stopped.await;
+        })
+        .await
+        .unwrap();
+    });
+    (port, stop, task)
+}
+
+const GET_HEALTH: &[u8] = b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+
+async fn answer(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut out)).await;
+    out
+}
+
+#[tokio::test]
+async fn a_client_that_stalls_in_its_headers_is_dropped() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: Duration::from_millis(200),
+        max_connections: 8,
+    };
+    let (port, _stop, _task) = running(limits).await;
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    stream
+        .write_all(b"GET /health HTTP/1.1\r\nX-Slow: ")
+        .await
+        .unwrap();
+    let mut buf = [0u8; 64];
+    let read = tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await;
+    assert!(read.is_ok(), "the connection was left open");
+    // A client that sends its headers is served as usual.
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    stream.write_all(GET_HEALTH).await.unwrap();
+    assert!(answer(&mut stream).await.starts_with(b"HTTP/1.1 200"));
+}
+
+#[tokio::test]
+async fn connections_past_the_limit_wait() {
+    use tokio::io::AsyncWriteExt;
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: Duration::from_secs(1),
+        max_connections: 1,
+    };
+    let (port, _stop, _task) = running(limits).await;
+    let mut first = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    first
+        .write_all(b"GET /health HTTP/1.1\r\nX-Slow: ")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut second = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    second.write_all(GET_HEALTH).await.unwrap();
+    let mut peek = [0u8; 1];
+    let early = tokio::time::timeout(Duration::from_millis(300), second.peek(&mut peek)).await;
+    assert!(
+        early.is_err(),
+        "the second connection was served past the limit"
+    );
+    // The header timeout frees the place, and then it is served.
+    assert!(answer(&mut second).await.starts_with(b"HTTP/1.1 200"));
+}
+
+#[tokio::test]
+async fn shutdown_lets_requests_finish_and_then_returns() {
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: Duration::from_secs(1),
+        max_connections: 8,
+    };
+    let (port, stop, task) = running(limits).await;
+    let mut idle = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("the server did not stop")
+        .unwrap();
+    assert!(answer(&mut idle).await.is_empty());
+}

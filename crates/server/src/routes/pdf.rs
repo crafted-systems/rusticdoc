@@ -68,10 +68,7 @@ pub async fn merge(
     req.extra = files;
     req.steps = vec![Step::Merge];
     req.steps.extend(post);
-    req.output_name = form
-        .field("outputFilename")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    req.output_name = form.output_name();
     render::run(state, hook, request_id(&headers), req).await
 }
 
@@ -113,9 +110,6 @@ pub async fn encrypt(
         user_password,
         owner_password,
     }];
-    req.output_name = form
-        .field("outputFilename")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    req.output_name = form.output_name();
     render::run(state, hook, request_id(&headers), req).await
 }

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::qpdf::workdir;
 use super::{
     Bookmark, EncryptOptions, Overlay, OverlayKind, PdfEngine, Position, Rotation, SplitMode,
-    page_count, pages, require_pdf,
+    page_count_off_thread, pages, require_pdf,
 };
 use crate::error::{Error, Result};
 use crate::job::Document;
@@ -103,7 +103,7 @@ impl PdfcpuEngine {
         let mut args: Vec<String> =
             vec![command.into(), "add".into(), "--mode".into(), mode.into()];
         if !overlay.pages.trim().is_empty() {
-            let ranges = pages::parse(&overlay.pages, page_count(doc)?)?;
+            let ranges = pages::parse(&overlay.pages, page_count_off_thread(doc, timeout).await?)?;
             args.push("-p".into());
             args.push(pages::join(&ranges));
         }
@@ -287,7 +287,7 @@ impl PdfEngine for PdfcpuEngine {
         timeout: Duration,
     ) -> Result<Vec<Document>> {
         require_pdf(doc)?;
-        let count = page_count(doc)?;
+        let count = page_count_off_thread(doc, timeout).await?;
         let stem = doc.with_extension("");
         let stem = stem.trim_end_matches('.').to_string();
         let mut outputs = Vec::new();
@@ -371,7 +371,7 @@ impl PdfEngine for PdfcpuEngine {
         tokio::fs::write(&input, &doc.bytes).await?;
         let mut args: Vec<String> = vec!["rotate".into()];
         if !pages.trim().is_empty() {
-            let ranges = pages::parse(pages, page_count(doc)?)?;
+            let ranges = pages::parse(pages, page_count_off_thread(doc, timeout).await?)?;
             args.push("-p".into());
             args.push(pages::join(&ranges));
         }

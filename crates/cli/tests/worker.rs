@@ -119,3 +119,32 @@ async fn a_template_that_doubles_a_string_is_refused_and_the_service_stays_up() 
         .unwrap();
     assert!(health.status().is_success());
 }
+
+#[test]
+fn webhook_secret_prints_the_key_a_receiver_verifies_with() {
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_rusticdoc"))
+            .arg("webhook-secret")
+            .args(args)
+            .env_clear()
+            .env("RUSTICDOC_WEBHOOK_SECRET", "master")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let key = rusticdoc_server::webhook::signing_key(
+        "master",
+        &rusticdoc_server::auth::key_principal("tenant-a").0,
+    );
+    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(run(&["--api-key", "tenant-a"]), hex);
+    assert_ne!(run(&["--api-key", "tenant-b"]), hex);
+    let key = rusticdoc_server::webhook::signing_key(
+        "master",
+        &rusticdoc_server::auth::basic_principal("ada").0,
+    );
+    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(run(&["--basic-user", "ada"]), hex);
+    assert_eq!(run(&[]), "6d6173746572", "the master secret, in hex");
+}

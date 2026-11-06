@@ -299,7 +299,9 @@ pub async fn facturx(State(state): State<AppState>, req: Request) -> Response {
         };
         rusticdoc_core::compat::validate_steps(&steps).map_err(client_error)?;
         let inputs = checked(inputs)?;
-        let formats = facturx_formats(true, &formats, false, &inputs);
+        let formats = facturx_formats(true, &formats, false, &inputs, state.config.api_timeout)
+            .await
+            .map_err(client_error)?;
         done(
             engines(&state)
                 .embed(inputs, &formats, &[], &BTreeMap::new(), facturx.as_ref())

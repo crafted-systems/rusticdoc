@@ -112,9 +112,8 @@ pub async fn fill(
             .unwrap_or(true),
     };
     let name = form
-        .field("outputFilename")
-        .map(|s| format!("{}.pdf", s.trim()))
-        .filter(|s| s != ".pdf")
+        .output_name()
+        .map(|name| format!("{name}.pdf"))
         .unwrap_or_else(|| file.name.clone());
 
     let st = state.clone();
@@ -168,9 +167,8 @@ pub async fn overlay(
     rusticdoc_core::pdfops::require_pdf(&base)?;
     rusticdoc_core::pdfops::require_pdf(&over)?;
     let name = form
-        .field("outputFilename")
-        .map(|s| format!("{}.pdf", s.trim()))
-        .filter(|s| s != ".pdf")
+        .output_name()
+        .map(|name| format!("{name}.pdf"))
         .unwrap_or_else(|| base.name.clone());
     let limit = state.config.api_timeout;
     let job = async move {
@@ -215,7 +213,7 @@ where
         None => {
             let out = job.await?;
             state.metrics.record_timings(&out.timings);
-            Ok(download(out))
+            Ok(download(out).await)
         }
         Some(hook) => {
             webhook::spawn_job(state, hook, request_id.clone(), job);
