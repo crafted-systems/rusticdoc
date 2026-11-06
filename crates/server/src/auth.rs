@@ -15,7 +15,8 @@ pub async fn require(State(state): State<AppState>, req: Request<Body>, next: Ne
     let config = &state.config;
     let keys_set = !config.api_keys.is_empty();
     let basic_set = config.basic_auth.is_some();
-    if !keys_set && !basic_set {
+    let oidc_set = config.compat.oidc.is_some();
+    if !keys_set && !basic_set && !oidc_set {
         return next.run(req).await;
     }
 

@@ -6,15 +6,15 @@
 //! needs no embedded font, and anything outside Latin-1 is written as `?`.
 //! Non-Latin stamps need the pdfcpu engine, which embeds a font.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use ::lopdf::{Dictionary, Document as Pdf, Object, ObjectId, Stream, StringFormat, dictionary};
 use async_trait::async_trait;
 
 use super::{
-    Attachment, Bookmark, Deadline, FacturxProfile, Metadata, Overlay, OverlayKind, PdfEngine,
-    Rotation, SplitMode, draw, pages, require_pdf, xmp,
+    Attachment, Bookmark, Deadline, EmbedMetadata, FacturxProfile, FacturxProperties, Metadata,
+    Overlay, OverlayKind, PdfEngine, Rotation, SplitMode, draw, pages, require_pdf, xmp,
 };
 use crate::error::{Error, Result};
 use crate::job::Document;
@@ -113,6 +113,84 @@ async fn blocking<T: Send + 'static>(
 impl PdfEngine for LopdfEngine {
     fn name(&self) -> &'static str {
         ENGINE
+    }
+
+    async fn optimize_images(
+        &self,
+        doc: &Document,
+        quality: u8,
+        timeout: Duration,
+    ) -> Result<Document> {
+        self.accept(doc)?;
+        let doc = doc.clone();
+        blocking(timeout, move |deadline| {
+            let mut pdf = load(&doc)?;
+            if super::images::reencode(&mut pdf, quality, deadline)? == 0 {
+                return Ok(doc);
+            }
+            save(pdf, doc.name.clone())
+        })
+        .await
+    }
+
+    async fn read_exif(&self, doc: &Document, timeout: Duration) -> Result<Metadata> {
+        self.accept(doc)?;
+        let doc = doc.clone();
+        blocking(timeout, move |_| super::exif::read(&doc)).await
+    }
+
+    async fn write_exif(
+        &self,
+        doc: &Document,
+        metadata: &Metadata,
+        timeout: Duration,
+    ) -> Result<Document> {
+        self.accept(doc)?;
+        let plan = super::exif::Plan::build(metadata)?;
+        let doc = doc.clone();
+        blocking(timeout, move |_| {
+            if plan.is_empty() {
+                return Ok(doc);
+            }
+            let mut pdf = load(&doc)?;
+            plan.apply(&mut pdf)?;
+            save(pdf, doc.name.clone())
+        })
+        .await
+    }
+
+    async fn set_embed_metadata(
+        &self,
+        doc: &Document,
+        metadata: &BTreeMap<String, EmbedMetadata>,
+        timeout: Duration,
+    ) -> Result<Document> {
+        self.accept(doc)?;
+        let (doc, metadata) = (doc.clone(), metadata.clone());
+        blocking(timeout, move |deadline| {
+            let mut pdf = load(&doc)?;
+            set_embed_metadata(&mut pdf, &metadata, deadline)?;
+            save(pdf, doc.name.clone())
+        })
+        .await
+    }
+
+    async fn facturx_with(
+        &self,
+        doc: &Document,
+        xml: &[u8],
+        properties: &FacturxProperties,
+        timeout: Duration,
+    ) -> Result<Document> {
+        self.accept(doc)?;
+        self.accept_size(xml.len(), &properties.file_name)?;
+        let (doc, xml, properties) = (doc.clone(), xml.to_vec(), properties.clone());
+        blocking(timeout, move |deadline| {
+            let mut pdf = load(&doc)?;
+            facturx_with(&mut pdf, xml, &properties, deadline)?;
+            save(pdf, doc.name.clone())
+        })
+        .await
     }
 
     async fn merge(&self, docs: &[Document], timeout: Duration) -> Result<Document> {
@@ -1163,7 +1241,89 @@ impl From<::lopdf::Error> for Error {
     }
 }
 
+/// The file specification named `name`, when the name tree holds one.
+fn embedded_spec(pdf: &Pdf, name: &str, deadline: Deadline) -> Result<Option<ObjectId>> {
+    let mut entries = Vec::new();
+    if let Some(tree) = embedded_files_tree(pdf) {
+        name_tree_entries(pdf, &tree, &mut entries, deadline)?;
+    }
+    Ok(entries
+        .into_iter()
+        .find(|(k, _)| text(k) == name)
+        .and_then(|(_, v)| v.as_reference().ok()))
+}
+
+/// Sets the relationship and media type of embedded files.
+fn set_embed_metadata(
+    pdf: &mut Pdf,
+    metadata: &BTreeMap<String, EmbedMetadata>,
+    deadline: Deadline,
+) -> Result<()> {
+    for (name, meta) in metadata {
+        deadline.check()?;
+        let Some(spec_id) = embedded_spec(pdf, name, deadline)? else {
+            continue;
+        };
+        let stream_id = {
+            let spec = pdf.get_dictionary_mut(spec_id).map_err(engine_error)?;
+            if let Some(relationship) = &meta.relationship {
+                spec.set(
+                    "AFRelationship",
+                    Object::Name(relationship.as_bytes().to_vec()),
+                );
+            }
+            spec.get(b"EF")
+                .and_then(Object::as_dict)
+                .and_then(|ef| ef.get(b"F"))
+                .and_then(Object::as_reference)
+                .ok()
+        };
+        if let (Some(mime), Some(stream_id)) = (&meta.mime_type, stream_id)
+            && let Ok(Object::Stream(stream)) = pdf.get_object_mut(stream_id)
+        {
+            stream
+                .dict
+                .set("Subtype", Object::Name(mime.as_bytes().to_vec()));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------- Factur-X
+
+/// Embeds the invoice as the document's `Alternative` under the name the
+/// conformance level mandates, and declares it in the XMP. The input is
+/// expected to be PDF/A-3 already.
+fn facturx_with(
+    pdf: &mut Pdf,
+    xml: Vec<u8>,
+    properties: &FacturxProperties,
+    deadline: Deadline,
+) -> Result<()> {
+    embed_file(
+        pdf,
+        &Attachment {
+            name: properties.file_name.clone(),
+            bytes: xml,
+            mime: "text/xml".into(),
+        },
+        "Alternative",
+        deadline,
+    )?;
+    let mut packet = xmp_packet(pdf).unwrap_or_else(xmp::empty_packet);
+    if !packet.contains(xmp::FACTURX_NS) {
+        xmp::insert_description(&mut packet, xmp::FACTURX_SCHEMA);
+    }
+    xmp::set_text(&mut packet, "fx:DocumentType", Some(&properties.document_type));
+    xmp::set_text(&mut packet, "fx:DocumentFileName", Some(&properties.file_name));
+    xmp::set_text(&mut packet, "fx:Version", Some(&properties.version));
+    xmp::set_text(
+        &mut packet,
+        "fx:ConformanceLevel",
+        Some(&properties.conformance_level),
+    );
+    set_xmp_packet(pdf, packet)
+}
 
 /// Embeds `factur-x.xml` and writes the Factur-X XMP. The PDF/A identification
 /// is only touched when the input already declares PDF/A-3 (its conformance

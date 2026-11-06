@@ -19,12 +19,12 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
+use tower::ServiceExt;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
 
 pub use state::AppState;
 
@@ -36,7 +36,14 @@ pub fn app(state: AppState) -> Router {
     let body_limit = state.config.body_limit;
     let version = HeaderValue::from_static(rusticdoc_core::VERSION);
 
+    // Behind authentication, so it says nothing the version route would not.
+    let advertise = SetResponseHeaderLayer::overriding(
+        HeaderName::from_static("gotenberg-version"),
+        version.clone(),
+    );
+
     let api = routes::router()
+        .layer(advertise.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require,
@@ -47,25 +54,43 @@ pub fn app(state: AppState) -> Router {
             timeout,
         ));
 
+    // Gotenberg's paths: the same authentication and limits, with its errors.
+    let forms = routes::compat::forms(&state.config)
+        .merge(routes::compat::service::routes(&state.config))
+        .layer(advertise)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require,
+        ))
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::SERVICE_UNAVAILABLE,
+            timeout,
+        ))
+        .layer(axum::middleware::from_fn(routes::compat::plain_errors));
+
     let router = Router::new()
         .merge(routes::public())
         .merge(api)
+        .merge(forms)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             metrics::observe,
         ))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(telemetry::make_span)
-                .on_response(telemetry::on_response),
-        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            telemetry::access,
+        ))
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("x-rusticdoc-version"),
             version,
         ))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID))
         .layer(SetRequestIdLayer::new(REQUEST_ID, MakeRequestUuid))
-        .layer(axum::middleware::from_fn(gotenberg_headers))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            gotenberg_headers,
+        ))
         .layer(cors(&state.config))
         .layer(CatchPanicLayer::new())
         .with_state(state.clone());
@@ -75,34 +100,48 @@ pub fn app(state: AppState) -> Router {
     if root.is_empty() {
         router
     } else {
-        Router::new().nest(root, router)
+        // `/foo/` is the root route as well as `/foo`.
+        let with_slash = router.clone().map_request(|mut req: axum::extract::Request| {
+            *req.uri_mut() = axum::http::Uri::from_static("/");
+            req
+        });
+        Router::new()
+            .nest(root, router)
+            .route_service(&format!("{root}/"), with_slash)
     }
 }
 
-/// Gotenberg's request conventions: `Gotenberg-Trace` becomes the request
-/// id and is echoed back, and `Gotenberg-Output-Filename` renames the file
-/// in the response, keeping the extension the route produced.
+/// Gotenberg's request conventions: its trace header, cleaned up, becomes the
+/// request id and is echoed back, and `Gotenberg-Output-Filename` renames the
+/// file in the response on the service's own routes, keeping the extension the
+/// route produced. Its own routes apply that name themselves.
 async fn gotenberg_headers(
+    axum::extract::State(state): axum::extract::State<AppState>,
     mut req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    if let Some(trace) = req.headers().get("gotenberg-trace").cloned()
-        && trace
-            .to_str()
-            .map(|t| !t.trim().is_empty())
-            .unwrap_or(false)
+    let trace_header = state.config.compat.trace_header.as_str();
+    if let Some(trace) = req
+        .headers()
+        .get(trace_header)
+        .and_then(|v| v.to_str().ok())
+        .and_then(telemetry::sanitize_correlation_id)
+        .and_then(|t| HeaderValue::from_str(&t).ok())
     {
         req.headers_mut().insert(REQUEST_ID, trace);
     }
+    let on_v1 = req.uri().path().contains("/v1/");
     let wanted = req
         .headers()
         .get("gotenberg-output-filename")
         .and_then(|v| v.to_str().ok())
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+        .filter(|v| on_v1 && !v.is_empty());
     let mut res = next.run(req).await;
-    if let Some(id) = res.headers().get(REQUEST_ID).cloned() {
-        res.headers_mut().insert("gotenberg-trace", id);
+    if let Some(id) = res.headers().get(REQUEST_ID).cloned()
+        && let Ok(name) = HeaderName::from_bytes(trace_header.as_bytes())
+    {
+        res.headers_mut().insert(name, id);
     }
     if let Some(name) = wanted
         && let Some(current) = res

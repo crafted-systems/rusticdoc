@@ -5,6 +5,7 @@
 //! steps: conversion with LibreOffice, then PDF operations with the
 //! configured engines. The CLI and the server both drive this crate.
 
+pub mod compat;
 pub mod config;
 pub mod convert;
 pub mod error;

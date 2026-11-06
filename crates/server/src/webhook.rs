@@ -66,6 +66,16 @@ pub struct Webhook {
     pub error_target: Option<Target>,
     pub method: Method,
     pub extra_headers: HeaderMap,
+    /// Where events about the delivery go, as Gotenberg's clients ask for.
+    pub events_target: Option<Target>,
+    /// The method for the error URL, when it differs.
+    pub error_method: Option<Method>,
+    /// Failures only go to the error URL, as Gotenberg sends them, never to
+    /// the result URL.
+    pub errors_to_error_url_only: bool,
+    /// A valid W3C trace context from the request, so a trace continues across
+    /// the delivery.
+    pub traceparent: Option<HeaderValue>,
 }
 
 impl Webhook {
@@ -142,8 +152,81 @@ impl Webhook {
             error_target,
             method,
             extra_headers,
+            events_target: None,
+            error_method: None,
+            errors_to_error_url_only: false,
+            traceparent: None,
         }))
     }
+
+    /// Reads Gotenberg's webhook headers: a result URL needs an error URL or an
+    /// events URL beside it. Every URL goes through the same vetting as any
+    /// other delivery, and the extra headers through the same reservations.
+    pub async fn from_gotenberg_headers(
+        headers: &HeaderMap,
+        allow_private: bool,
+    ) -> Result<Option<Self>, ApiError> {
+        let get = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        if get("gotenberg-webhook-url").is_none() {
+            return Ok(None);
+        }
+        let events_url = get("gotenberg-webhook-events-url");
+        let error_url = get("gotenberg-webhook-error-url");
+        if error_url.is_none() && events_url.is_none() {
+            return Err(ApiError::bad_request(
+                "At least one of 'Gotenberg-Webhook-Error-Url' or 'Gotenberg-Webhook-Events-Url' headers is required",
+            ));
+        }
+        let method_of = |header: &str, name: &str| -> Result<Method, ApiError> {
+            let Some(value) = get(name) else {
+                return Ok(Method::POST);
+            };
+            match value.to_ascii_uppercase().as_str() {
+                "POST" => Ok(Method::POST),
+                "PATCH" => Ok(Method::PATCH),
+                "PUT" => Ok(Method::PUT),
+                other => Err(ApiError::bad_request(format!(
+                    "Invalid '{header}' header value: expected 'POST', 'PATCH' or 'PUT', but got '{other}'"
+                ))),
+            }
+        };
+        let method = method_of("Gotenberg-Webhook-Method", "gotenberg-webhook-method")?;
+        let error_method = method_of(
+            "Gotenberg-Webhook-Error-Method",
+            "gotenberg-webhook-error-method",
+        )?;
+        let Some(mut hook) = Self::from_headers(headers, allow_private).await? else {
+            return Ok(None);
+        };
+        hook.method = method;
+        hook.error_method = Some(error_method);
+        hook.errors_to_error_url_only = true;
+        if let Some(events_url) = events_url {
+            hook.events_target = Some(resolve(&events_url, allow_private).await?);
+        }
+        hook.traceparent = headers
+            .get("traceparent")
+            .filter(|v| v.to_str().is_ok_and(valid_traceparent))
+            .cloned();
+        Ok(Some(hook))
+    }
+}
+
+/// `00-<32 hex>-<16 hex>-<2 hex>`, the only form that is forwarded.
+fn valid_traceparent(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+    let hex = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit());
+    parts.len() == 4
+        && hex(parts[0], 2)
+        && hex(parts[1], 32)
+        && hex(parts[2], 16)
+        && hex(parts[3], 2)
 }
 
 /// Checks the URL's shape, resolves its host, and refuses any address that
@@ -328,16 +411,34 @@ pub async fn deliver(
     request_id: String,
     result: Result<Output, ApiError>,
 ) {
+    let outcome = match &result {
+        Ok(_) => serde_json::json!({
+            "event": "webhook.success",
+            "correlationId": request_id,
+            "timestamp": rfc3339(unix_now()),
+        }),
+        Err(e) => serde_json::json!({
+            "event": "webhook.error",
+            "correlationId": request_id,
+            "timestamp": rfc3339(unix_now()),
+            "error": { "status": e.status.as_u16(), "message": e.body.message },
+        }),
+    };
+    if result.is_err() && hook.errors_to_error_url_only && hook.error_target.is_none() {
+        send_event(&state, &hook, &request_id, &outcome).await;
+        return;
+    }
+    let method = match (&result, &hook.error_method) {
+        (Err(_), Some(method)) => method.clone(),
+        _ => hook.method.clone(),
+    };
     let (target, event, body, content_type, disposition) = match &result {
         Ok(out) => (
             hook.target.clone(),
             "render.completed",
             out.bytes.to_vec(),
             out.content_type.to_string(),
-            Some(format!(
-                "attachment; filename=\"{}\"",
-                out.name.replace('"', "")
-            )),
+            Some(crate::routes::form::disposition(&out.name)),
         ),
         Err(e) => (
             hook.error_target
@@ -362,18 +463,22 @@ pub async fn deliver(
         Err(e) => {
             tracing::error!(url = %shown, error = %e, "webhook client could not be built");
             count(&state, "gave_up");
+            send_event(&state, &hook, &request_id, &outcome).await;
             return;
         }
     };
+    let trace_header = &state.config.compat.trace_header;
 
     let attempts = state.config.webhook_attempts.max(1);
     for attempt in 1..=attempts {
         let timestamp = unix_now();
         let mut req = client
-            .request(hook.method.clone(), &url)
+            .request(method.clone(), &url)
             .header("content-type", &content_type)
             .header(EVENT, event)
             .header("x-request-id", &request_id)
+            .header(trace_header.as_str(), &request_id)
+            .header("gotenberg-version", rusticdoc_core::VERSION)
             .header(TIMESTAMP, timestamp.to_string())
             .header("x-rusticdoc-attempt", attempt.to_string());
         if let Some(d) = &disposition {
@@ -382,13 +487,24 @@ pub async fn deliver(
         if let Some(secret) = &state.config.webhook_secret {
             req = req.header(SIGNATURE, sign(secret, timestamp, &body));
         }
+        if let Some(traceparent) = &hook.traceparent {
+            req = req.header("traceparent", traceparent);
+        }
         for (k, v) in hook.extra_headers.iter() {
+            // Set by the service above, so an extra header cannot misreport them.
+            if k.as_str() == "gotenberg-version"
+                || k.as_str().eq_ignore_ascii_case(trace_header)
+                || k.as_str() == "traceparent"
+            {
+                continue;
+            }
             req = req.header(k, v);
         }
         match req.body(body.clone()).send().await {
             Ok(res) if res.status().is_success() => {
                 tracing::info!(url = %shown, event, attempt, status = res.status().as_u16(), "webhook delivered");
                 count(&state, "delivered");
+                send_event(&state, &hook, &request_id, &outcome).await;
                 return;
             }
             Ok(res) => {
@@ -405,6 +521,37 @@ pub async fn deliver(
     }
     tracing::error!(url = %shown, event, attempts, "webhook gave up");
     count(&state, "gave_up");
+    send_event(&state, &hook, &request_id, &outcome).await;
+}
+
+/// Tells the events URL how the delivery went. One attempt: an event that does
+/// not arrive changes nothing about the result.
+async fn send_event(state: &AppState, hook: &Webhook, request_id: &str, event: &serde_json::Value) {
+    let Some(target) = &hook.events_target else {
+        return;
+    };
+    let shown = redact(&target.url);
+    let client = match client_for(target, state.config.api_timeout) {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!(url = %shown, error = %e, "webhook events client could not be built");
+            return;
+        }
+    };
+    let mut req = client
+        .post(&target.url)
+        .header("content-type", "application/json")
+        .header(
+            state.config.compat.trace_header.as_str(),
+            request_id,
+        )
+        .header("gotenberg-version", rusticdoc_core::VERSION);
+    if let Some(traceparent) = &hook.traceparent {
+        req = req.header("traceparent", traceparent);
+    }
+    if let Err(e) = req.body(event.to_string()).send().await {
+        tracing::warn!(url = %shown, error = %e, "webhook event was not delivered");
+    }
 }
 
 fn count(state: &AppState, outcome: &str) {
@@ -427,6 +574,28 @@ pub fn accepted(request_id: &str) -> axum::response::Response {
     res
 }
 
+/// A Unix time in UTC as `2026-11-06T08:39:00Z`.
+fn rfc3339(secs: u64) -> String {
+    // Days to civil date, after Howard Hinnant's algorithm.
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60
+    )
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -440,6 +609,17 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn timestamps_and_trace_contexts() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(1_709_210_096), "2024-02-29T12:34:56Z");
+        assert!(valid_traceparent(
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        ));
+        assert!(!valid_traceparent("00-short-b7ad6b7169203331-01"));
+        assert!(!valid_traceparent("not a trace"));
     }
 
     #[test]

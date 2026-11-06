@@ -48,6 +48,10 @@ impl From<Error> for ApiError {
             Error::Engine { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "engine_failed"),
             Error::Timeout(_) => (StatusCode::SERVICE_UNAVAILABLE, "timeout"),
             Error::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "io_error"),
+            Error::Status(code, _) => (
+                StatusCode::from_u16(*code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                "reported",
+            ),
         };
         Self::new(status, kind, e.to_string())
     }
@@ -66,8 +70,22 @@ impl IntoResponse for ApiError {
         } else {
             tracing::warn!(error = self.body.error, message = %self.body.message, "request rejected");
         }
-        (self.status, Json(self.body)).into_response()
+        let text = ErrorText {
+            kind: self.body.error,
+            message: self.body.message.clone(),
+        };
+        let mut res = (self.status, Json(self.body)).into_response();
+        res.extensions_mut().insert(text);
+        res
     }
+}
+
+/// An error's kind and text, on its response, for the routes that do not answer
+/// in JSON.
+#[derive(Debug, Clone)]
+pub struct ErrorText {
+    pub kind: &'static str,
+    pub message: String,
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;

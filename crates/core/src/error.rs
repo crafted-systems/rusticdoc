@@ -34,6 +34,10 @@ pub enum Error {
     #[error("timed out after {0:?}")]
     Timeout(Duration),
 
+    /// A failure with the exact status and text the client should see.
+    #[error("{1}")]
+    Status(u16, String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
