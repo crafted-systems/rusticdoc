@@ -7,10 +7,12 @@
 //! Non-Latin stamps need the pdfcpu engine, which embeds a font.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Read;
 use std::time::Duration;
 
 use ::lopdf::{Dictionary, Document as Pdf, Object, ObjectId, Stream, StringFormat, dictionary};
 use async_trait::async_trait;
+use flate2::read::ZlibDecoder;
 
 use super::{
     Attachment, Bookmark, Deadline, EmbedMetadata, FacturxProfile, FacturxProperties, Metadata,
@@ -26,6 +28,10 @@ pub const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 /// Most parts one split request may produce.
 pub const MAX_SPLIT_PARTS: usize = 1_000;
+
+/// Largest XMP packet read, once inflated. Compression lets a small file claim
+/// anything, and nothing legitimate comes close.
+pub(super) const MAX_XMP_PACKET: usize = 16 << 20;
 
 /// Most name-tree nodes or entries one walk visits.
 const TREE_LIMIT: usize = 10_000;
@@ -809,10 +815,59 @@ pub(super) fn xmp_packet(pdf: &Pdf) -> Option<String> {
         .as_reference()
         .ok()?;
     let stream = pdf.get_object(id).ok()?.as_stream().ok()?;
-    let bytes = stream
-        .decompressed_content()
-        .unwrap_or_else(|_| stream.content.clone());
+    let bytes = if stream.dict.has(b"Filter") {
+        if only_filter(stream)? != b"FlateDecode" || stream.dict.has(b"DecodeParms") {
+            return None;
+        }
+        inflate_capped(&stream.content, MAX_XMP_PACKET)?
+    } else if stream.content.len() <= MAX_XMP_PACKET {
+        stream.content.clone()
+    } else {
+        return None;
+    };
     Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The name of a stream's only filter, when it has exactly one.
+pub(super) fn only_filter(stream: &Stream) -> Option<&[u8]> {
+    match stream.dict.get(b"Filter").ok()? {
+        Object::Name(name) => Some(name),
+        Object::Array(list) => match list.as_slice() {
+            [Object::Name(name)] => Some(name),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Inflates zlib data, reading no more than `cap` bytes and one over it, so a
+/// small stream cannot claim more memory than its caller allows. `None` for data
+/// past the cap or that does not inflate.
+pub(super) fn inflate_capped(data: &[u8], cap: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    ZlibDecoder::new(data)
+        .take(cap as u64 + 1)
+        .read_to_end(&mut out)
+        .ok()?;
+    (out.len() <= cap).then_some(out)
+}
+
+/// A page's content, charged against `budget`, the bytes of decoded content one
+/// import may still produce. A document that inflates past it is refused.
+pub(crate) fn page_content_capped(
+    pdf: &Pdf,
+    page_id: ObjectId,
+    budget: &mut usize,
+) -> Result<Vec<u8>> {
+    let content = pdf
+        .get_page_content_with_limit(page_id, *budget)
+        .map_err(|_| {
+            Error::InvalidRequest(format!(
+                "the PDF's page content inflates past {DEFAULT_MAX_BYTES} bytes"
+            ))
+        })?;
+    *budget = budget.saturating_sub(content.len());
+    Ok(content)
 }
 
 /// Replaces (or creates) the `/Metadata` stream. It stays unfiltered, as

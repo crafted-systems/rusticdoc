@@ -19,9 +19,6 @@ use super::{Metadata, xmp};
 use crate::error::{Error, Result};
 use crate::job::Document;
 
-/// A decoded XMP packet larger than this is ignored, since compression lets a
-/// small file inflate to anything.
-const MAX_PACKET: usize = 16 << 20;
 /// XMP deeper than this is not metadata anyone wrote by hand.
 const MAX_DEPTH: usize = 128;
 /// Most elements read from one packet.
@@ -149,7 +146,7 @@ pub fn read(doc: &Document) -> Result<Metadata> {
             }
         }
     }
-    if let Some(packet) = xmp_packet(&pdf).filter(|p| p.len() <= MAX_PACKET) {
+    if let Some(packet) = xmp_packet(&pdf) {
         match parse_packet(&packet) {
             Ok(props) => overlay(&mut out, props),
             Err(e) => tracing::warn!(error = %e, "ignoring invalid XMP metadata"),
@@ -966,6 +963,7 @@ pub fn write_bytes(doc: &Document, plan: &Plan) -> Result<Document> {
 mod tests {
     use super::*;
     use crate::pdfops::fixtures;
+    use ::lopdf::dictionary;
 
     fn metadata(raw: &str) -> Metadata {
         serde_json::from_str(raw).unwrap()
@@ -1015,6 +1013,45 @@ mod tests {
         .unwrap();
         assert!(plan.is_empty());
         assert!(Plan::build(&metadata(r#"{"XMP:j":"fine"}"#)).is_ok());
+    }
+
+    /// A document whose XMP stream is `packet`, deflated.
+    fn with_deflated_xmp(packet: &[u8]) -> Document {
+        let mut pdf = load(&Document::new("a.pdf", fixtures::pages(1))).unwrap();
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, packet).unwrap();
+        let mut stream = ::lopdf::Stream::new(
+            dictionary! {
+                "Type" => "Metadata",
+                "Subtype" => "XML",
+                "Filter" => "FlateDecode",
+            },
+            encoder.finish().unwrap(),
+        );
+        stream.allows_compression = false;
+        let id = pdf.add_object(stream);
+        pdf.catalog_mut().unwrap().set("Metadata", id);
+        crate::pdfops::lopdf::save(pdf, "a.pdf".into()).unwrap()
+    }
+
+    #[test]
+    fn a_packet_that_inflates_past_the_cap_is_not_read() {
+        let bomb = vec![b' '; crate::pdfops::lopdf::MAX_XMP_PACKET + 1];
+        let doc = with_deflated_xmp(&bomb);
+        assert!(
+            doc.bytes.len() < bomb.len() / 100,
+            "the stream has to be small"
+        );
+        let pdf = load(&doc).unwrap();
+        assert!(xmp_packet(&pdf).is_none());
+        let out = read(&doc).unwrap();
+        assert_eq!(out["FileType"], "PDF");
+
+        // At the cap, and under it, a deflated packet still reads.
+        let packet = xmp::empty_packet();
+        let doc = with_deflated_xmp(packet.as_bytes());
+        assert_eq!(xmp_packet(&load(&doc).unwrap()).unwrap(), packet);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 
 use ::lopdf::{Dictionary, Document as Pdf, Object, ObjectId, Stream, dictionary};
 
-use super::lopdf::{engine_error, inherited, load};
+use super::lopdf::{DEFAULT_MAX_BYTES, engine_error, inherited, load, page_content_capped};
 use super::{Deadline, Overlay, OverlayKind, Placement, Position, pages};
 use crate::error::{Error, Result};
 use crate::job::Document;
@@ -513,6 +513,7 @@ fn import_pages(pdf: &mut Pdf, source: &Document, deadline: Deadline) -> Result<
     let mut src = load(source)?;
     src.renumber_objects_with(pdf.max_id + 1);
     let mut forms = Vec::new();
+    let mut budget = DEFAULT_MAX_BYTES;
     for page_id in src.page_iter().collect::<Vec<_>>() {
         deadline.check()?;
         let bbox = page_box(&src, page_id);
@@ -527,7 +528,7 @@ fn import_pages(pdf: &mut Pdf, source: &Document, deadline: Deadline) -> Result<
                 "BBox" => bbox.iter().map(|v| Object::Real(*v)).collect::<Vec<_>>(),
                 "Resources" => resources,
             },
-            src.get_page_content(page_id),
+            page_content_capped(&src, page_id, &mut budget)?,
         );
         let _ = form.compress();
         forms.push(form);

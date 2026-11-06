@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1.92"
 bytes = "1.12.1"
+flate2 = "1.1.10"
 fontdb = { version = "0.24.0", default-features = false, features = ["fs", "fontconfig"] }
 hex = "0.4.3"
 image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
