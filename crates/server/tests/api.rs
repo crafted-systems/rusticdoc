@@ -81,7 +81,7 @@ async fn health_version_metrics_and_openapi_are_open() {
 
     let res = router
         .clone()
-        .oneshot(Request::get("/version").body(Body::empty()).unwrap())
+        .oneshot(Request::get("/v1/version").body(Body::empty()).unwrap())
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
@@ -192,10 +192,7 @@ async fn errors_are_json_with_a_kind() {
 
     // A convert with no LibreOffice configured is a 503, not a crash.
     let res = router
-        .oneshot(post_form(
-            "/forms/libreoffice/convert",
-            &[("files", Some("a.docx"), "PK")],
-        ))
+        .oneshot(post_form("/v1/convert", &[("files", Some("a.docx"), "PK")]))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -689,7 +686,7 @@ async fn pdf_operations_run_on_the_pure_rust_engine() {
     let res = router
         .clone()
         .oneshot(post_binary(
-            "/forms/pdfengines/split",
+            "/v1/pdf/split",
             &[
                 ("files", Some("in.pdf"), three.clone()),
                 ("splitMode", None, b"pages".to_vec()),
@@ -821,7 +818,7 @@ async fn pdf_operations_run_on_the_pure_rust_engine() {
             "/forms/pdfengines/embed",
             &[
                 ("files", Some("in.pdf"), three.clone()),
-                ("files", Some("note.txt"), b"hello".to_vec()),
+                ("embeds", Some("note.txt"), b"hello".to_vec()),
             ],
         ))
         .await

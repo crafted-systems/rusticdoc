@@ -39,6 +39,7 @@ pub(super) struct Request<'a> {
     pub filter_options: &'a Map<String, Value>,
     pub password: Option<&'a str>,
     pub landscape: bool,
+    pub update_indexes: bool,
 }
 
 /// The bridge's answer to a request.

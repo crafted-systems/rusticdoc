@@ -187,6 +187,16 @@
               }
             }
           },
+          "429": {
+            "description": "Reloaded moments ago",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "503": {
             "description": "A worker could not restart",
             "content": {
@@ -1544,7 +1554,7 @@
         ]
       }
     },
-    "/version": {
+    "/v1/version": {
       "get": {
         "tags": [
           "service"
@@ -2005,9 +2015,14 @@
         "type": "object",
         "required": [
           "families",
-          "faces"
+          "faces",
+          "changed"
         ],
         "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "False when the directory has not changed, so no worker restarted."
+          },
           "faces": {
             "type": "integer",
             "minimum": 0

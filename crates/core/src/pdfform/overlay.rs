@@ -4,6 +4,7 @@ use lopdf::{Dictionary, Document, Object, ObjectId, Stream, dictionary};
 
 use super::{add_page_resource, get_i64, isolate_page_content, malformed};
 use crate::error::Result;
+use crate::pdfops::lopdf::{DEFAULT_MAX_BYTES, page_content_capped};
 
 /// What an overlay page brings along once its objects live in the base.
 struct Imported {
@@ -25,13 +26,14 @@ pub(super) fn overlay(mut base: Document, mut over: Document) -> Result<Document
         .max(base.max_id);
     over.renumber_objects_with(base_max + 1);
 
+    let mut budget = DEFAULT_MAX_BYTES;
     let imports = over
         .page_iter()
         .map(|id| {
             let page = over.get_dictionary(id).map_err(malformed)?;
             Ok(Imported {
                 id,
-                content: over.get_page_content(id),
+                content: page_content_capped(&over, id, &mut budget)?,
                 resources: inherited(&over, page, b"Resources")
                     .unwrap_or_else(|| Dictionary::new().into()),
                 media_box: inherited(&over, page, b"MediaBox")

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use super::{PdfEngine, Rotation, SplitMode, page_count, pages, require_pdf};
+use super::{EncryptOptions, PdfEngine, Rotation, SplitMode, page_count, pages, require_pdf};
 use crate::error::{Error, Result};
 use crate::job::Document;
 use crate::process;
@@ -244,7 +244,33 @@ impl PdfEngine for QpdfEngine {
         owner_password: &str,
         timeout: Duration,
     ) -> Result<Document> {
+        self.encrypt_with(
+            doc,
+            &EncryptOptions {
+                user_password: user_password.to_string(),
+                owner_password: owner_password.to_string(),
+                ..EncryptOptions::default()
+            },
+            timeout,
+        )
+        .await
+    }
+
+    /// As `encrypt`, with restrictions. An absent owner password takes the
+    /// user password's value.
+    async fn encrypt_with(
+        &self,
+        doc: &Document,
+        options: &EncryptOptions,
+        timeout: Duration,
+    ) -> Result<Document> {
         require_pdf(doc)?;
+        let user_password = options.user_password.as_str();
+        let owner_password = if options.owner_password.is_empty() {
+            user_password
+        } else {
+            options.owner_password.as_str()
+        };
         if owner_password.is_empty() {
             return Err(Error::InvalidRequest(
                 "encrypt needs an owner password".into(),
@@ -264,9 +290,23 @@ impl PdfEngine for QpdfEngine {
         }
         let dir = workdir()?;
         let argfile = dir.path().join("args");
-        let contents = format!(
-            "--encrypt\n--user-password={user_password}\n--owner-password={owner_password}\n--bits=256\n--\n"
+        let mut contents = format!(
+            "--encrypt\n--user-password={user_password}\n--owner-password={owner_password}\n--bits=256\n"
         );
+        let permissions = &options.permissions;
+        if permissions.restricted() {
+            let yes_no = |allowed: bool| if allowed { "y" } else { "n" };
+            contents.push_str(&format!(
+                "--print={}\n--extract={}\n--modify-other={}\n--annotate={}\n--form={}\n--assemble={}\n",
+                if permissions.printing { "full" } else { "none" },
+                yes_no(permissions.copying),
+                yes_no(permissions.modifying),
+                yes_no(permissions.annotating),
+                yes_no(permissions.filling_forms),
+                yes_no(permissions.assembling),
+            ));
+        }
+        contents.push_str("--\n");
         write_private(&argfile, contents.as_bytes()).await?;
         let input = dir.path().join("in.pdf");
         let out = dir.path().join("out.pdf");

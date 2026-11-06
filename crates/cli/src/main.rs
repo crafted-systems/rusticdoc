@@ -125,6 +125,9 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Serve { bind } => {
+            if let Err(problem) = config.check() {
+                bail!("cannot start: {problem}");
+            }
             if let Some(b) = bind {
                 config.bind = b;
             }

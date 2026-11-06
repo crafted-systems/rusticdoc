@@ -18,6 +18,8 @@ pub fn namespace(prefix: &str) -> &'static str {
         "pdf" => "http://ns.adobe.com/pdf/1.3/",
         "pdfaid" => "http://www.aiim.org/pdfa/ns/id/",
         "fx" => FACTURX_NS,
+        "tiff" => "http://ns.adobe.com/tiff/1.0/",
+        "xmpRights" => "http://ns.adobe.com/xap/1.0/rights/",
         _ => "",
     }
 }

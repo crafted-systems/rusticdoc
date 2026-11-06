@@ -19,6 +19,8 @@ pub struct Engines {
     /// PDF operations, tried in order: lopdf, then qpdf and pdfcpu when
     /// configured.
     pub pdf: MultiEngine,
+    /// PDF operations for Gotenberg's routes, in the order they use.
+    pub forms: MultiEngine,
 }
 
 impl Engines {
@@ -27,7 +29,17 @@ impl Engines {
             libreoffice: config.libreoffice_bin.clone().map(|bin| {
                 LibreOffice::new(bin, config.workers).with_fonts_dir(config.fonts_dir.clone())
             }),
-            pdf: MultiEngine::standard(config.qpdf_bin.clone(), config.pdfcpu_bin.clone()),
+            pdf: MultiEngine::standard(config.qpdf_bin.clone(), config.pdfcpu_bin.clone())
+                .with_lists(
+                    config.qpdf_bin.clone(),
+                    config.pdfcpu_bin.clone(),
+                    &config.compat.engine_orders,
+                ),
+            forms: MultiEngine::for_forms(
+                config.qpdf_bin.clone(),
+                config.pdfcpu_bin.clone(),
+                &config.compat.engine_orders,
+            ),
         }
     }
 
