@@ -9,10 +9,14 @@ use serde_json::Value;
 use super::fields::{self, FF_COMBO, FF_EDIT, FF_MULTILINE, Field, Kind};
 use super::text::{self, num};
 use super::{
-    FillOptions, Rect, acroform, add_helvetica, add_page_resource, deref, get, get_dict, get_i64,
-    get_name, malformed, object_text, page_annots, set_page_annots,
+    FillLimits, FillOptions, Rect, acroform, add_helvetica, add_page_resource, deref, get,
+    get_dict, get_i64, get_name, malformed, object_text, page_annots, set_page_annots,
 };
 use crate::error::{Error, Result};
+use crate::limits::MAX_FILL_TAGS;
+use crate::pdfops::Deadline;
+use crate::template;
+use rusticdoc_template::limit::{self, RenderFailure};
 
 /// Fills every field, applies annotation tags, marks the form for
 /// regeneration and flattens it when asked.
@@ -21,15 +25,21 @@ pub(super) fn fill(
     data: &Value,
     env: &minijinja::Environment<'static>,
     options: &FillOptions,
+    limits: FillLimits,
 ) -> Result<Document> {
     let fields = fields::collect(&doc)?;
     let mut filler = Filler {
         doc,
         data,
-        env,
+        env: env.clone(),
         helvetica: None,
+        fuel: template::TEMPLATE_FUEL,
+        bytes_left: limits.max_render_bytes,
+        tags: 0,
+        limits,
     };
     for field in &fields {
+        limits.deadline.check()?;
         let value = match lookup(data, &field.name) {
             Some(value) => Some(value.clone()),
             None => filler.template_value(field)?.map(Value::String),
@@ -42,7 +52,7 @@ pub(super) fn fill(
     filler.mark_need_appearances()?;
     let mut doc = filler.doc;
     if options.flatten {
-        flatten(&mut doc)?;
+        flatten(&mut doc, limits.deadline)?;
     }
     Ok(doc)
 }
@@ -140,22 +150,54 @@ fn parse_tag(contents: &str) -> Option<Tag> {
 struct Filler<'a> {
     doc: Document,
     data: &'a Value,
-    env: &'a minijinja::Environment<'static>,
+    env: minijinja::Environment<'static>,
     helvetica: Option<ObjectId>,
+    /// Instructions left for every tag together: a budget per tag would let a
+    /// form with many tags spend without end.
+    fuel: u64,
+    /// Bytes left for every tag together.
+    bytes_left: usize,
+    tags: usize,
+    limits: FillLimits,
 }
 
 impl Filler<'_> {
-    fn render(&self, source: &str, what: &str) -> Result<String> {
-        self.env
-            .render_str(
-                source,
-                minijinja::Value::from(minijinja::value::Serde(self.data)),
-            )
-            .map_err(|e| Error::Template(format!("{what}: {e}")))
+    fn render(&mut self, source: &str, what: &str) -> Result<String> {
+        self.limits.deadline.check()?;
+        self.tags += 1;
+        if self.tags > MAX_FILL_TAGS {
+            return Err(Error::InvalidRequest(format!(
+                "the PDF has more than {MAX_FILL_TAGS} template tags"
+            )));
+        }
+        if self.fuel == 0 {
+            return Err(Error::Template(format!(
+                "{what}: the tags of this PDF ran out of fuel"
+            )));
+        }
+        self.env.set_fuel(Some(self.fuel));
+        let template = self
+            .env
+            .template_from_str(source)
+            .map_err(|e| Error::Template(format!("{what}: {e}")))?;
+        let ctx = minijinja::Value::from(minijinja::value::Serde(self.data));
+        match limit::render(&template, ctx, self.bytes_left) {
+            Ok((output, captured)) => {
+                let used = captured.state().fuel_levels().map_or(0, |(used, _)| used);
+                drop(captured);
+                self.fuel = self.fuel.saturating_sub(used);
+                self.bytes_left = self.bytes_left.saturating_sub(output.len());
+                Ok(output)
+            }
+            Err(RenderFailure::TooLarge(_)) => {
+                Err(template::too_large(self.limits.max_render_bytes))
+            }
+            Err(RenderFailure::Template(e)) => Err(Error::Template(format!("{what}: {e}"))),
+        }
     }
 
     /// The rendered value of a field whose `/V` or `/DV` is a template.
-    fn template_value(&self, field: &Field) -> Result<Option<String>> {
+    fn template_value(&mut self, field: &Field) -> Result<Option<String>> {
         for candidate in [&field.value, &field.default] {
             if let Some(Object::String(bytes, _)) = candidate {
                 let source = text::decode_text_string(bytes);
@@ -401,6 +443,7 @@ impl Filler<'_> {
             let mut kept = Vec::with_capacity(entries.len());
             let mut stripped = false;
             for entry in entries {
+                self.limits.deadline.check()?;
                 let dict = match &entry {
                     Object::Reference(id) => self.doc.get_dictionary(*id).ok().cloned(),
                     Object::Dictionary(dict) => Some(dict.clone()),
@@ -529,10 +572,11 @@ fn form_geometry(doc: &Document, stream_id: ObjectId) -> Option<(Rect, [f32; 6])
 
 /// Draws every widget's normal appearance into its page and removes the
 /// widgets and the AcroForm, so the values can no longer change.
-fn flatten(doc: &mut Document) -> Result<()> {
+fn flatten(doc: &mut Document, deadline: Deadline) -> Result<()> {
     let pages: Vec<ObjectId> = doc.page_iter().collect();
     let mut counter = 0u32;
     for page_id in pages {
+        deadline.check()?;
         let entries = page_annots(doc, page_id);
         if entries.is_empty() {
             continue;
@@ -621,6 +665,81 @@ fn flatten(doc: &mut Document) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-page PDF with `count` annotations that each hold `tag`.
+    fn tagged(count: usize, tag: &str) -> Vec<u8> {
+        let mut pdf = Document::load_mem(&crate::pdfops::fixtures::pages(1)).unwrap();
+        let page = *pdf.get_pages().get(&1).unwrap();
+        let annots: Vec<Object> = (0..count)
+            .map(|_| {
+                dictionary! {
+                    "Type" => "Annot", "Subtype" => "Text",
+                    "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+                    "Contents" => Object::string_literal(tag),
+                }
+                .into()
+            })
+            .collect();
+        pdf.get_dictionary_mut(page).unwrap().set("Annots", annots);
+        let mut bytes = Vec::new();
+        pdf.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn fill_it(pdf: &[u8], limits: FillLimits) -> Result<Vec<u8>> {
+        super::super::fill_within(
+            pdf,
+            &serde_json::json!({}),
+            &template::environment(),
+            &FillOptions {
+                flatten: false,
+                strip_tag_annotations: true,
+            },
+            limits,
+        )
+    }
+
+    #[test]
+    fn every_tag_of_a_form_shares_one_fuel_budget() {
+        // Each tag alone fits the budget; with one budget per tag, these two
+        // hundred would run for many seconds.
+        let tag = "{% for i in range(100000) %}{% for j in range(10) %}{% endfor %}{% endfor %}x";
+        let started = std::time::Instant::now();
+        let err = fill_it(&tagged(200, tag), FillLimits::default()).unwrap_err();
+        assert!(matches!(err, Error::Template(_)), "{err}");
+        let single = fill_it(&tagged(1, tag), FillLimits::default());
+        assert!(single.is_ok(), "{:?}", single.err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_form_may_hold_at_most_so_many_tags() {
+        let err =
+            fill_it(&tagged(MAX_FILL_TAGS + 1, "{{ 1 }}"), FillLimits::default()).unwrap_err();
+        assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
+        assert!(fill_it(&tagged(MAX_FILL_TAGS, "{{ 1 }}"), FillLimits::default()).is_ok());
+    }
+
+    #[test]
+    fn the_output_of_every_tag_counts_against_one_limit() {
+        let tag = r#"{{ "a" * 1000 }}"#;
+        let limits = FillLimits {
+            max_render_bytes: 5_000,
+            ..FillLimits::default()
+        };
+        let err = fill_it(&tagged(10, tag), limits).unwrap_err();
+        assert!(err.to_string().contains("byte limit"), "{err}");
+    }
+
+    #[test]
+    fn a_form_stops_at_its_deadline() {
+        let limits = FillLimits {
+            deadline: Deadline::new(std::time::Duration::ZERO),
+            ..FillLimits::default()
+        };
+        let err = fill_it(&tagged(1, "{{ 1 }}"), limits).unwrap_err();
+        assert!(matches!(err, Error::Timeout(_)), "{err}");
+    }
 
     #[test]
     fn lookup_walks_objects_and_arrays() {

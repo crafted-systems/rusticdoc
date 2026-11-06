@@ -16,15 +16,22 @@
 //! with the timestamp in `X-Rusticdoc-Timestamp`. Receivers verify the
 //! signature and reject timestamps outside their freshness window.
 
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use hmac::{Hmac, KeyInit, Mac};
 use rusticdoc_core::Output;
 use sha2::Sha256;
+use tracing::Instrument;
 
+use crate::auth::Principal;
 use crate::error::ApiError;
+use crate::jobs::JobPermit;
 use crate::metrics::OutcomeLabels;
 use crate::state::AppState;
 
@@ -75,6 +82,62 @@ pub struct Webhook {
     /// A valid W3C trace context from the request, so a trace continues across
     /// the delivery.
     pub traceparent: Option<HeaderValue>,
+    /// This job's place among the running ones, held through its delivery.
+    pub permit: Option<Arc<JobPermit>>,
+}
+
+/// The webhook a `/v1/*` request asks for, with its place among the running
+/// jobs, or nothing when it runs synchronously. As an extractor it refuses before
+/// the body is read.
+pub struct Hook(pub Option<Webhook>);
+
+impl FromRequestParts<AppState> for Hook {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let caller = parts
+            .extensions
+            .get::<Principal>()
+            .map(|p| p.0.as_str())
+            .unwrap_or("public");
+        let Some(mut hook) =
+            Webhook::from_headers(&parts.headers, state.config.webhook_allow_private).await?
+        else {
+            return Ok(Self(None));
+        };
+        hook.permit = Some(Arc::new(state.jobs.try_acquire(caller)?));
+        Ok(Self(Some(hook)))
+    }
+}
+
+/// Runs `job` to `limit`, as one timeout over everything in it.
+pub async fn within<F, T>(limit: Duration, job: F) -> Result<T, ApiError>
+where
+    F: Future<Output = Result<T, ApiError>>,
+{
+    match tokio::time::timeout(limit, job).await {
+        Ok(result) => result,
+        Err(_) => Err(rusticdoc_core::Error::Timeout(limit).into()),
+    }
+}
+
+/// Runs `job` in the background and delivers what it gives, inside the request's
+/// span. The hook's permit is released when the delivery is over.
+pub fn spawn_job<F>(state: AppState, hook: Webhook, request_id: String, job: F)
+where
+    F: Future<Output = Result<Output, ApiError>> + Send + 'static,
+{
+    let span = tracing::Span::current();
+    tokio::spawn(
+        async move {
+            let result = job.await;
+            deliver(state, hook, request_id, result).await;
+        }
+        .instrument(span),
+    );
 }
 
 impl Webhook {
@@ -155,6 +218,7 @@ impl Webhook {
             error_method: None,
             errors_to_error_url_only: false,
             traceparent: None,
+            permit: None,
         }))
     }
 

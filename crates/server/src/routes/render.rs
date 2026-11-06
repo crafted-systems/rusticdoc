@@ -3,6 +3,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::{Extension, Json};
 use rusticdoc_core::job::parse_steps;
+use rusticdoc_core::render::MAX_BATCH_NAME_BYTES;
 use rusticdoc_core::{RenderRequest, Step, template};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -10,10 +11,11 @@ use utoipa::ToSchema;
 use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::metrics::StageLabels;
-use crate::routes::form::{Form, download, request_id};
+use crate::routes::form::{Form, request_id};
+use crate::routes::forms::{finish, finish_within};
 use crate::routes::gotenberg;
 use crate::state::AppState;
-use crate::webhook::{self, Webhook};
+use crate::webhook::{self, Hook, Webhook};
 
 /// The multipart form `/v1/render` accepts. Documented here; parsed by hand.
 #[derive(ToSchema)]
@@ -70,10 +72,10 @@ pub struct RenderForm {
 pub async fn render(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let template = match form
         .files
@@ -134,19 +136,17 @@ pub async fn render(
                 .map(|v| v != "false")
                 .unwrap_or(true),
         };
-        let template = req.template.clone();
-        let filled = tokio::task::spawn_blocking(move || {
-            let env = rusticdoc_core::template::environment();
-            rusticdoc_core::pdfform::fill(&template.bytes, &data, &env, &options)
-        })
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "io_error",
-                e.to_string(),
+        let filled = state
+            .pipeline
+            .renderer()
+            .fill(
+                &req.template.bytes,
+                &data,
+                &options,
+                state.config.max_render_bytes,
+                state.config.api_timeout,
             )
-        })??;
+            .await?;
         req.template = rusticdoc_core::Document::new(req.template.name.clone(), filled);
         req.templating = false;
     }
@@ -192,18 +192,14 @@ pub async fn run(
     request_id: String,
     req: RenderRequest,
 ) -> ApiResult<Response> {
-    match hook {
-        None => Ok(download(execute(&state, req).await?)),
-        Some(hook) => {
-            let st = state.clone();
-            let rid = request_id.clone();
-            tokio::spawn(async move {
-                let result = execute(&st, req).await;
-                webhook::deliver(st, hook, rid, result).await;
-            });
-            Ok(webhook::accepted(&request_id))
-        }
-    }
+    let st = state.clone();
+    finish(
+        state,
+        hook,
+        request_id,
+        async move { execute(&st, req).await },
+    )
+    .await
 }
 
 /// Renders the template once per element of an array in the data and
@@ -229,11 +225,13 @@ pub async fn run(
 )]
 pub async fn batch(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
-    let mut form = Form::read(multipart, &state).await?;
+    // The route's time limit is the batch's; reading the form gets the usual one.
+    let read = Form::read(multipart, &state);
+    let mut form = webhook::within(state.config.api_timeout, read).await?;
     let template = match form
         .files
         .iter()
@@ -307,14 +305,16 @@ pub async fn batch(
     }
 
     let count = elements.len();
-    let total_timeout = state
-        .config
-        .api_timeout
-        .saturating_mul(u32::try_from(count).unwrap_or(u32::MAX));
-    let rid = request_id(&headers);
+    let limit = state.config.batch_timeout;
+    let max_render = state.config.max_render_bytes;
     let st = state.clone();
     let job = async move {
-        let env = rusticdoc_core::template::environment();
+        let renderer = st.pipeline.renderer().clone();
+        let started = std::time::Instant::now();
+        // One worker for the job while nothing else runs between renders. With
+        // steps, a conversion can take far longer than a render, so the place
+        // among the workers is not held through it.
+        let mut session = None;
         let mut outputs = Vec::with_capacity(count);
         for (index, element) in elements.into_iter().enumerate() {
             // Built just before it runs and dropped after, never all at once.
@@ -331,45 +331,35 @@ pub async fn batch(
                     serde_json::json!({ "index": index + 1, "count": count }),
                 );
             }
-            let name = env
-                .render_str(
-                    &name_template,
-                    minijinja::Value::from(minijinja::value::Serde(&one)),
-                )
-                .map_err(|e| {
-                    ApiError::new(
-                        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-                        "template_error",
-                        format!("batchName: {e}"),
-                    )
+            let current = match &mut session {
+                Some(current) => current,
+                empty => {
+                    let left = limit.saturating_sub(started.elapsed());
+                    empty.insert(renderer.session(left).await?)
+                }
+            };
+            let name = current
+                .text(&name_template, &one, MAX_BATCH_NAME_BYTES)
+                .await
+                .map_err(|e| match e {
+                    rusticdoc_core::Error::Template(m) => {
+                        rusticdoc_core::Error::Template(format!("batchName: {m}"))
+                    }
+                    other => other,
                 })?;
-            let mut req = RenderRequest::new(template.clone());
-            req.data = one;
-            req.ctx = ctx.clone();
+            let rendered = current.render(&template, &one, &ctx, max_render).await?;
+            if !steps.is_empty() {
+                session = None;
+            }
+            let mut req = RenderRequest::new(rendered);
+            req.templating = false;
             req.steps = steps.clone();
             req.output_name = Some(sanitize_name(&name, index + 1));
             outputs.push(execute(&st, req).await?);
         }
         crate::routes::form::zip(&zip_name, &outputs)
     };
-    let job = async move {
-        match tokio::time::timeout(total_timeout, job).await {
-            Ok(result) => result,
-            Err(_) => Err(rusticdoc_core::Error::Timeout(total_timeout).into()),
-        }
-    };
-    match hook {
-        None => Ok(download(job.await?)),
-        Some(hook) => {
-            let st = state.clone();
-            let rid2 = rid.clone();
-            tokio::spawn(async move {
-                let result = job.await;
-                webhook::deliver(st, hook, rid2, result).await;
-            });
-            Ok(webhook::accepted(&rid))
-        }
-    }
+    finish_within(state, hook, request_id(&headers), limit, job).await
 }
 
 fn lookup<'a>(data: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
@@ -421,7 +411,7 @@ fn sanitize_name(name: &str, index: usize) -> String {
     }
 }
 
-async fn execute(state: &AppState, req: RenderRequest) -> ApiResult<rusticdoc_core::Output> {
+pub async fn execute(state: &AppState, req: RenderRequest) -> ApiResult<rusticdoc_core::Output> {
     let gauge = state
         .metrics
         .inflight
@@ -482,17 +472,17 @@ pub async fn validate(
         "none"
     };
     let hash = template::template_hash(&template.bytes);
-    let limit = state.config.max_render_bytes;
-    let diagnostics =
-        tokio::task::spawn_blocking(move || template::validate(&template, &data, &ctx, limit))
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    "io_error",
-                    e.to_string(),
-                )
-            })?;
+    let diagnostics = state
+        .pipeline
+        .renderer()
+        .validate(
+            &template,
+            &data,
+            &ctx,
+            state.config.max_render_bytes,
+            state.config.api_timeout,
+        )
+        .await?;
     let error = diagnostics
         .iter()
         .find(|d| matches!(d.severity, rusticdoc_template::Severity::Error))

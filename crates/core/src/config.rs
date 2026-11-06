@@ -43,6 +43,22 @@ pub struct Config {
     pub max_render_bytes: usize,
     /// Most file parts one form may hold.
     pub max_form_parts: usize,
+    /// Webhook jobs that may run at once across the service.
+    pub max_async_jobs: usize,
+    /// Webhook jobs that may run at once for one caller.
+    pub max_async_jobs_per_caller: usize,
+    /// Time limit for a batch render or a multi-file conversion.
+    pub batch_timeout: Duration,
+    /// Where template code runs. `serve` chooses `Isolated` unless told otherwise.
+    pub render_mode: RenderMode,
+    /// Whether `RUSTICDOC_RENDER_MODE` chose the mode.
+    pub render_mode_set: bool,
+    /// The binary with the worker in it. The running one, when unset.
+    pub render_worker_bin: Option<PathBuf>,
+    /// Address space of one render worker, in bytes.
+    pub render_memory: u64,
+    /// Render workers that may run at once.
+    pub render_workers: usize,
     /// Refuse the `downloadFrom` form field entirely.
     pub download_from_disabled: bool,
     /// Most URLs one request may fetch through `downloadFrom`.
@@ -56,6 +72,17 @@ pub struct Config {
     pub log_level: String,
     /// Gotenberg's settings, read from its variable names.
     pub compat: CompatConfig,
+    /// What the environment got wrong, for [`Config::check`] to refuse.
+    pub problems: Vec<String>,
+}
+
+/// Where a service evaluates client template code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    /// In this process. For a library, tests, or an operator's explicit choice.
+    InProcess,
+    /// In a `__render-worker` child with its own limits.
+    Isolated,
 }
 
 /// One operation's engine list, from a `PDFENGINES_*_ENGINES` variable.
@@ -178,12 +205,21 @@ impl Default for Config {
             batch_limit: 100,
             max_render_bytes: crate::limits::DEFAULT_MAX_RENDER_BYTES,
             max_form_parts: crate::limits::DEFAULT_MAX_FORM_PARTS,
+            max_async_jobs: 32,
+            max_async_jobs_per_caller: 8,
+            batch_timeout: Duration::from_secs(300),
+            render_mode: RenderMode::InProcess,
+            render_mode_set: false,
+            render_worker_bin: None,
+            render_memory: 1024 * 1024 * 1024,
+            render_workers: 4,
             download_from_disabled: false,
             download_from_max_entries: 10,
             download_from_allow_private: false,
             log_format: "json".into(),
             log_level: "info".into(),
             compat: CompatConfig::default(),
+            problems: Vec::new(),
         }
     }
 }
@@ -269,6 +305,37 @@ impl Config {
         }
         if let Some(v) = get("MAX_RENDER_BYTES").and_then(|v| parse_bytes(&v)) {
             c.max_render_bytes = v;
+        }
+        if let Some(v) = get("RENDER_MODE") {
+            c.render_mode_set = true;
+            c.render_mode = match v.as_str() {
+                "isolated" => RenderMode::Isolated,
+                "in-process" => RenderMode::InProcess,
+                other => {
+                    c.problems.push(format!(
+                        "RUSTICDOC_RENDER_MODE is '{other}', not 'isolated' or 'in-process'"
+                    ));
+                    RenderMode::Isolated
+                }
+            };
+        }
+        if let Some(v) = get("RENDER_WORKER_BIN") {
+            c.render_worker_bin = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("RENDER_MEMORY").and_then(|v| parse_bytes(&v)) {
+            c.render_memory = v as u64;
+        }
+        if let Some(v) = get("RENDER_WORKERS").and_then(|v| v.parse().ok()) {
+            c.render_workers = v;
+        }
+        if let Some(v) = get("MAX_ASYNC_JOBS").and_then(|v| v.parse().ok()) {
+            c.max_async_jobs = v;
+        }
+        if let Some(v) = get("MAX_ASYNC_JOBS_PER_CALLER").and_then(|v| v.parse().ok()) {
+            c.max_async_jobs_per_caller = v;
+        }
+        if let Some(v) = get("BATCH_TIMEOUT").and_then(|v| parse_duration(&v)) {
+            c.batch_timeout = v;
         }
         if let Some(v) = get("MAX_FORM_PARTS").and_then(|v| v.parse().ok()) {
             c.max_form_parts = v;
@@ -453,6 +520,9 @@ impl Config {
     /// Settings the service refuses to start with. PDFtk and ExifTool are
     /// not part of this build, so a list that names them cannot be honoured.
     pub fn check(&self) -> Result<(), String> {
+        if let Some(problem) = self.problems.first() {
+            return Err(problem.clone());
+        }
         for (variable, engines) in &self.compat.engine_orders {
             for engine in engines {
                 match engine.as_str() {

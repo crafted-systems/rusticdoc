@@ -90,7 +90,7 @@ impl LopdfEngine {
 /// Runs CPU-bound PDF work off the async threads, under the step timeout.
 /// The work checks the deadline itself; a task that still overruns is
 /// abandoned, not killed, and ends on its own.
-async fn blocking<T: Send + 'static>(
+pub async fn blocking<T: Send + 'static>(
     timeout: Duration,
     f: impl FnOnce(Deadline) -> Result<T> + Send + 'static,
 ) -> Result<T> {

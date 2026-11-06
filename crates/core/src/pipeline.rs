@@ -10,6 +10,7 @@ use crate::job;
 use crate::job::{Document, Format, Output, RenderRequest, Step};
 use crate::limits;
 use crate::pdfops::MultiEngine;
+use crate::render::Renderer;
 use crate::template;
 
 /// The engines the service found at start. Absent engines make their steps
@@ -73,6 +74,8 @@ pub struct Pipeline {
     timeout: Duration,
     /// Most bytes a text template may write.
     max_output: usize,
+    /// Where template code runs.
+    renderer: Renderer,
 }
 
 impl Pipeline {
@@ -81,12 +84,22 @@ impl Pipeline {
             engines,
             timeout,
             max_output: crate::limits::DEFAULT_MAX_RENDER_BYTES,
+            renderer: Renderer::in_process(),
         }
     }
 
     pub fn with_max_output(mut self, bytes: usize) -> Self {
         self.max_output = bytes;
         self
+    }
+
+    pub fn with_renderer(mut self, renderer: Renderer) -> Self {
+        self.renderer = renderer;
+        self
+    }
+
+    pub fn renderer(&self) -> &Renderer {
+        &self.renderer
     }
 
     pub fn engines(&self) -> &Engines {
@@ -113,17 +126,17 @@ impl Pipeline {
         let has_data = !is_empty_object(&req.data);
         let ext = req.template.extension();
         let first = if req.templating && (has_data || template::is_text_template(&ext)) {
-            // Rendering is CPU work: it runs off the async threads so the
-            // caller's timeout still fires, and its output is capped as it is
-            // written.
-            let (t, d, c) = (req.template.clone(), req.data.clone(), req.ctx.clone());
-            let limit = self.max_output;
-            tokio::task::spawn_blocking(move || template::render(&t, &d, &c, limit))
-                .await
-                .map_err(|e| Error::Engine {
-                    engine: "template",
-                    message: e.to_string(),
-                })??
+            // Rendering is CPU work on client code: it runs in a worker or off
+            // the async threads, and its output is capped as it is written.
+            self.renderer
+                .render(
+                    &req.template,
+                    &req.data,
+                    &req.ctx,
+                    self.max_output,
+                    self.timeout,
+                )
+                .await?
         } else {
             req.template.clone()
         };

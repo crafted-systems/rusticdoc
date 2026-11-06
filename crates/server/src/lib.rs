@@ -7,6 +7,7 @@
 
 pub mod auth;
 pub mod error;
+pub mod jobs;
 pub mod metrics;
 pub mod oidc;
 pub mod openapi;
@@ -43,17 +44,24 @@ pub fn app(state: AppState) -> Router {
         version.clone(),
     );
 
-    let api = routes::router()
-        .layer(advertise.clone())
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth::require,
-        ))
-        .layer(DefaultBodyLimit::max(body_limit))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::SERVICE_UNAVAILABLE,
-            timeout,
-        ));
+    let guarded = |group: Router<AppState>, limit: Duration| {
+        group
+            .layer(advertise.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require,
+            ))
+            .layer(DefaultBodyLimit::max(body_limit))
+            .layer(TimeoutLayer::with_status_code(
+                StatusCode::SERVICE_UNAVAILABLE,
+                limit,
+            ))
+    };
+    let api = guarded(routes::router(), timeout);
+    let long = guarded(
+        routes::long_router(),
+        state.config.batch_timeout + Duration::from_secs(5),
+    );
 
     // Gotenberg's paths: the same authentication and limits, with its errors.
     let forms = routes::compat::forms(&state.config)
@@ -73,6 +81,7 @@ pub fn app(state: AppState) -> Router {
     let router = Router::new()
         .merge(routes::public())
         .merge(api)
+        .merge(long)
         .merge(forms)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -213,6 +222,12 @@ fn cors(config: &rusticdoc_core::Config) -> CorsLayer {
 
 /// Binds, serves, and stops cleanly on SIGINT or SIGTERM.
 pub async fn serve(state: AppState) -> std::io::Result<()> {
+    state
+        .pipeline
+        .renderer()
+        .check()
+        .await
+        .map_err(|e| std::io::Error::other(format!("the render worker cannot start: {e}")))?;
     let bind = state.config.bind.clone();
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(%bind, version = rusticdoc_core::VERSION, engines = %state.engines.describe(), "rusticdoc listening");

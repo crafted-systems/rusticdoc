@@ -20,7 +20,7 @@ use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, request_id, zip};
 use crate::routes::forms::finish;
 use crate::state::AppState;
-use crate::webhook::Webhook;
+use crate::webhook::Hook;
 
 #[derive(ToSchema)]
 #[allow(dead_code)]
@@ -197,10 +197,10 @@ fn pdf_output(name: String, doc: Document, stage: &str) -> Output {
 )]
 pub async fn split(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let span = form
@@ -270,10 +270,10 @@ pub async fn split(
 )]
 pub async fn flatten(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let name = output_name(&form, &doc, "");
@@ -297,10 +297,10 @@ pub async fn flatten(
 )]
 pub async fn rotate(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let rotation = Rotation::parse(form.field("rotation").unwrap_or("90"))?;
@@ -329,10 +329,10 @@ pub async fn rotate(
 )]
 pub async fn optimize(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let name = output_name(&form, &doc, "");
@@ -384,10 +384,10 @@ pub async fn metadata_read(
 )]
 pub async fn metadata_write(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let metadata: Metadata = match form.json("metadata")? {
@@ -450,10 +450,10 @@ pub async fn bookmarks_read(
 )]
 pub async fn bookmarks_write(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let bookmarks: Vec<Bookmark> =
@@ -486,10 +486,10 @@ pub async fn bookmarks_write(
 )]
 pub async fn embed(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     if form.files.is_empty() {
@@ -601,10 +601,10 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
 )]
 pub async fn watermark(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let overlay = overlay_from(&mut form)?;
@@ -632,10 +632,10 @@ pub async fn watermark(
 )]
 pub async fn stamp(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let overlay = overlay_from(&mut form)?;
@@ -668,10 +668,10 @@ pub async fn stamp(
 )]
 pub async fn sign(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let mut form = Form::read(multipart, &state).await?;
     let doc = one_pdf(&mut form)?;
     let images = std::mem::take(&mut form.files);
@@ -769,10 +769,10 @@ pub async fn sign(
 )]
 pub async fn facturx(
     State(state): State<AppState>,
+    Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
     let form = Form::read(multipart, &state).await?;
     let (pdf_pos, xml_pos) = {
         let pdfs: Vec<usize> = form

@@ -228,13 +228,16 @@ impl<T> Cache<T> {
     }
 }
 
+/// Evaluation steps one render may take.
+pub const TEMPLATE_FUEL: u64 = 5_000_000;
+
 /// The expression environment: strict about undefined names, with the
 /// document filters added.
 pub fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     // A budget of evaluation steps, so a template cannot loop for ever.
-    env.set_fuel(Some(5_000_000));
+    env.set_fuel(Some(TEMPLATE_FUEL));
     env.add_filter("currency", currency);
     env
 }

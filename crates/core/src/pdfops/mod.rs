@@ -29,7 +29,7 @@ pub mod qpdf;
 mod tests;
 pub mod xmp;
 
-pub use lopdf::LopdfEngine;
+pub use lopdf::{LopdfEngine, blocking};
 pub use pdfcpu::PdfcpuEngine;
 pub use qpdf::QpdfEngine;
 

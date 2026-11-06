@@ -16,6 +16,7 @@ pub mod pdfform;
 pub mod pdfops;
 pub mod pipeline;
 pub mod process;
+pub mod render;
 pub mod template;
 
 pub use config::Config;

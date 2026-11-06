@@ -22,9 +22,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/render", post(render::render))
-        .route("/v1/render/batch", post(render::batch))
         .route("/v1/templates/validate", post(render::validate))
-        .route("/v1/convert", post(convert::convert))
         .route("/v1/pdf/merge", post(pdf::merge))
         .route("/v1/pdf/encrypt", post(pdf::encrypt))
         .route("/v1/fonts", get(fonts::list))
@@ -48,6 +46,14 @@ pub fn router() -> Router<AppState> {
         .route("/v1/pdf/forms/fields", post(forms::fields))
         .route("/v1/pdf/forms/fill", post(forms::fill))
         .route("/v1/pdf/overlay", post(forms::overlay))
+}
+
+/// The routes that can run many documents, under the batch time limit. Each job
+/// inside still has its own, shorter limit when it is a single document.
+pub fn long_router() -> Router<AppState> {
+    Router::new()
+        .route("/v1/render/batch", post(render::batch))
+        .route("/v1/convert", post(convert::convert))
 }
 
 /// Routes that stay open: liveness, readiness, version, metrics and the API
