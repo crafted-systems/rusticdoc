@@ -19,6 +19,8 @@ pub struct AppState {
     pub url_policies: crate::webhook::UrlPolicies,
     /// Places for webhook jobs.
     pub jobs: crate::jobs::JobLimiter,
+    /// Room for request bodies held in memory.
+    pub admission: crate::admission::Admission,
     /// Verifies bearer tokens when OpenID Connect is on.
     pub oidc: Option<Arc<crate::oidc::Verifier>>,
     /// The loaded fonts, scanned on first use and on reload.
@@ -56,6 +58,7 @@ impl AppState {
                 config.max_async_jobs,
                 config.max_async_jobs_per_caller,
             ),
+            admission: crate::admission::Admission::new(config.max_inflight_bytes),
             oidc,
             config: Arc::new(config),
             engines,

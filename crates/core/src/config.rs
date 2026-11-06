@@ -14,6 +14,8 @@ pub struct Config {
     pub api_timeout: Duration,
     /// Largest request body accepted, in bytes.
     pub body_limit: usize,
+    /// Request bodies held in memory at once, in bytes. Past it, requests wait.
+    pub max_inflight_bytes: usize,
     /// LibreOffice conversions that may run at once.
     pub workers: usize,
     /// Path to `soffice` or `soffice.bin`. `None` disables conversion.
@@ -215,6 +217,7 @@ impl Default for Config {
             root_path: "/".into(),
             api_timeout: Duration::from_secs(30),
             body_limit: 64 * 1024 * 1024,
+            max_inflight_bytes: 2 * 1024 * 1024 * 1024,
             workers: 2,
             libreoffice_bin: first_existing(&[
                 "/usr/lib/libreoffice/program/soffice.bin",
@@ -291,6 +294,9 @@ impl Config {
         }
         if let Some(v) = get("BODY_LIMIT").and_then(|v| parse_bytes(&v)) {
             c.body_limit = v;
+        }
+        if let Some(v) = get("MAX_INFLIGHT_BYTES").and_then(|v| parse_bytes(&v)) {
+            c.max_inflight_bytes = v;
         }
         if let Some(v) = get("WORKERS").and_then(|v| v.parse().ok()) {
             c.workers = v;

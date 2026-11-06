@@ -397,6 +397,13 @@ fn every_start_warns_about_what_is_open() {
     let mut c = config();
     c.api_keys = vec!["k".into()];
     c.webhook_secret = Some("s".into());
+    assert!(
+        rusticdoc_server::startup_warnings(&c)
+            .iter()
+            .any(|w| w.contains("RUSTICDOC_RENDER_MODE")),
+        "evaluating client templates in this process is worth saying at every start"
+    );
+    c.render_mode = rusticdoc_core::config::RenderMode::Isolated;
     assert!(rusticdoc_server::startup_warnings(&c).is_empty());
     let mut c = config();
     c.compat.webhook_disabled = true;
@@ -1438,4 +1445,119 @@ async fn a_keep_alive_client_is_not_affected() {
         }
         assert!(seen.starts_with(b"HTTP/1.1 200"), "request {i}");
     }
+}
+
+/// One request declaring all of the budget, sent over a socket and left unfinished.
+fn declaring(length: usize) -> Vec<u8> {
+    format!(
+        "POST /forms/pdfengines/flatten HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: {length}\r\n\r\n--{BOUNDARY}"
+    )
+    .into_bytes()
+}
+
+#[tokio::test]
+async fn request_bodies_wait_for_room_in_the_budget() {
+    use tokio::io::AsyncWriteExt;
+    const MIB: usize = 1024 * 1024;
+    let mut c = config();
+    c.max_inflight_bytes = 2 * MIB;
+    c.body_limit = 8 * MIB;
+    c.api_timeout = Duration::from_millis(600);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = service(c);
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: Duration::from_secs(5),
+        max_connections: 16,
+        max_connections_per_peer: 0,
+        stall_timeout: Duration::from_secs(30),
+        write_timeout: Duration::from_secs(30),
+        body_timeout: Duration::from_secs(30),
+    };
+    let task = tokio::spawn(rusticdoc_server::serve_on(
+        listener,
+        router,
+        limits,
+        std::future::pending::<()>(),
+    ));
+
+    // The first takes the whole budget and never finishes its body.
+    let mut first = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    first.write_all(&declaring(2 * MIB)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // The second waits, and is told so at the timeout, with its body unread.
+    let started = std::time::Instant::now();
+    let mut second = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    second.write_all(&declaring(2 * MIB)).await.unwrap();
+    let answer = read_head(&mut second).await;
+    assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
+    assert!(
+        answer.to_ascii_lowercase().contains("retry-after: 5"),
+        "{answer}"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(400),
+        "it did not wait"
+    );
+
+    // Routes without a body are not charged, whatever the budget says.
+    let mut health = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    health
+        .write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let answer = read_head(&mut health).await;
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+    // With the first gone, there is room again.
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let mut third = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    third.write_all(&declaring(1)).await.unwrap();
+    third.write_all(b"\r\n").await.unwrap();
+    let answer = read_head(&mut third).await;
+    assert!(!answer.starts_with("HTTP/1.1 503"), "{answer}");
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_caller_without_credentials_does_not_join_the_queue() {
+    const MIB: usize = 1024 * 1024;
+    let mut c = config();
+    c.api_keys = vec!["secret".to_string()];
+    c.max_inflight_bytes = MIB;
+    let state = AppState::new(c);
+    // All of the budget is taken, so only the check before it can answer.
+    let held = state.admission.clone();
+    let _held = held.hold_all_for_test();
+    let router = app(state);
+    let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), b"%PDF")];
+    let started = std::time::Instant::now();
+    let res = router
+        .oneshot(post("/forms/pdfengines/flatten", &parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+async fn read_head(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut buffer = vec![0u8; 4096];
+    let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buffer))
+        .await
+        .expect("no answer in time")
+        .unwrap_or(0);
+    String::from_utf8_lossy(&buffer[..read]).into_owned()
 }

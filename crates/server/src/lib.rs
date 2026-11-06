@@ -5,6 +5,7 @@
 //! `x-request-id`; webhooks deliver results asynchronously with an HMAC
 //! signature; `/openapi.json` describes the API for SDK generation.
 
+pub mod admission;
 pub mod auth;
 pub mod error;
 pub mod jobs;
@@ -55,6 +56,10 @@ pub fn app(state: AppState) -> Router {
 
     let guarded = |group: Router<AppState>, limit: Duration| {
         group
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                admission::admit,
+            ))
             .layer(advertise.clone())
             .layer(own_version.clone())
             .layer(axum::middleware::from_fn_with_state(
@@ -76,6 +81,10 @@ pub fn app(state: AppState) -> Router {
     // Gotenberg's paths: the same authentication and limits, with its errors.
     let forms = routes::compat::forms(&state.config)
         .merge(routes::compat::service::routes(&state.config))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            admission::admit,
+        ))
         .layer(advertise)
         .layer(own_version.clone())
         .layer(axum::middleware::from_fn_with_state(
@@ -254,6 +263,12 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
     if config.outbound_proxy.is_some() {
         warnings.push(
             "RUSTICDOC_OUTBOUND_PROXY is set, so DNS pinning no longer applies: the proxy resolves names itself and must enforce its own egress policy, including blocking private ranges"
+                .to_string(),
+        );
+    }
+    if config.render_mode == rusticdoc_core::config::RenderMode::InProcess {
+        warnings.push(
+            "RUSTICDOC_RENDER_MODE is in-process, so a client's template can exhaust this service's memory; use isolated unless every template is trusted"
                 .to_string(),
         );
     }
