@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::extract::Multipart;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
+use rusticdoc_core::limits::MAX_TEXT_PARTS;
 use rusticdoc_core::{Document, Output};
 use serde::Deserialize;
 
@@ -55,14 +56,28 @@ struct DownloadFrom {
 impl Form {
     pub async fn read(mut multipart: Multipart, state: &AppState) -> ApiResult<Self> {
         let mut form = Form::default();
+        let max_files = state.config.max_form_parts;
+        let (mut files, mut texts) = (0usize, 0usize);
         while let Some(field) = multipart.next_field().await? {
             let name = field.name().unwrap_or("").to_string();
             match field.file_name().map(|f| f.to_string()) {
                 Some(file_name) if !file_name.is_empty() => {
+                    files += 1;
+                    if files > max_files {
+                        return Err(ApiError::bad_request(format!(
+                            "the form has more than {max_files} files"
+                        )));
+                    }
                     let bytes = field.bytes().await?;
                     form.add_file(&name, Document::new(sanitize(&file_name), bytes));
                 }
                 _ => {
+                    texts += 1;
+                    if texts > MAX_TEXT_PARTS {
+                        return Err(ApiError::bad_request(format!(
+                            "the form has more than {MAX_TEXT_PARTS} fields"
+                        )));
+                    }
                     let text = field.text().await?;
                     form.multi
                         .entry(name.clone())

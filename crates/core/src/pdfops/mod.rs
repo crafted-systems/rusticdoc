@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::job::Document;
+use crate::limits::MAX_OVERLAY_TEXT;
 
 mod draw;
 pub mod exif;
@@ -160,6 +161,20 @@ pub struct Overlay {
     /// lands on the line drawn for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<Placement>,
+}
+
+impl Overlay {
+    /// Refuses what no engine should be given.
+    pub fn validate(&self) -> Result<()> {
+        if let OverlayKind::Text { text, .. } = &self.kind
+            && text.len() > MAX_OVERLAY_TEXT
+        {
+            return Err(Error::InvalidRequest(format!(
+                "stamp or watermark text is longer than {MAX_OVERLAY_TEXT} bytes"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// The lower-left corner of a mark in points from the page's lower-left
@@ -753,9 +768,11 @@ impl MultiEngine {
         fallback!(self, Op::Embed, embed, doc, files, t)
     }
     pub async fn watermark(&self, doc: &Document, o: &Overlay, t: Duration) -> Result<Document> {
+        o.validate()?;
         fallback!(self, Op::Watermark, watermark, doc, o, t)
     }
     pub async fn stamp(&self, doc: &Document, o: &Overlay, t: Duration) -> Result<Document> {
+        o.validate()?;
         fallback!(self, Op::Stamp, stamp, doc, o, t)
     }
     pub async fn facturx(

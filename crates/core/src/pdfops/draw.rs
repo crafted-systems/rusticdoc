@@ -13,6 +13,7 @@ use super::lopdf::{DEFAULT_MAX_BYTES, engine_error, inherited, load, page_conten
 use super::{Deadline, Overlay, OverlayKind, Placement, Position, pages};
 use crate::error::{Error, Result};
 use crate::job::Document;
+use crate::limits::{MAX_OUTPUT_BYTES, charge_output};
 
 /// Distance from the page edge for anchored stamps, in points.
 const MARGIN: f32 = 20.0;
@@ -315,6 +316,20 @@ pub(super) fn overlay(
     over: bool,
     deadline: Deadline,
 ) -> Result<()> {
+    overlay_within(pdf, overlay, over, deadline, MAX_OUTPUT_BYTES)
+}
+
+/// As [`overlay`], drawing at most `budget` bytes of content in all: the text is
+/// written once per page.
+pub(super) fn overlay_within(
+    pdf: &mut Pdf,
+    overlay: &Overlay,
+    over: bool,
+    deadline: Deadline,
+    budget: usize,
+) -> Result<()> {
+    overlay.validate()?;
+    let mut drawn = 0;
     let page_ids = pdf.get_pages();
     let selected = pages::select(&overlay.pages, page_ids.len() as u32)?;
     let opacity = overlay.opacity.clamp(0.0, 1.0);
@@ -405,6 +420,7 @@ pub(super) fn overlay(
                     bytes.push(b);
                 }
                 bytes.extend_from_slice(b") Tj ET Q\n");
+                charge_output(&mut drawn, bytes.len(), budget)?;
                 place(pdf, page_id, bytes, over)?;
                 continue;
             }
@@ -554,5 +570,26 @@ mod tests {
         assert!(parse_colour("red").is_err());
         assert_eq!(num(1.0), "1");
         assert_eq!(num(-0.5), "-0.5");
+    }
+
+    #[test]
+    fn stamped_text_stops_at_the_output_budget() {
+        let mut pdf = Pdf::load_mem(&crate::pdfops::fixtures::pages(100)).unwrap();
+        let mark = Overlay {
+            placement: None,
+            kind: OverlayKind::Text {
+                text: "x".repeat(64 * 1024),
+                font_size: 24.0,
+                colour: "#000000".into(),
+            },
+            position: Position::Center,
+            opacity: 1.0,
+            rotation: 0.0,
+            scale: 0.5,
+            pages: String::new(),
+        };
+        let deadline = crate::pdfops::fixtures::far();
+        let err = overlay_within(&mut pdf, &mark, true, deadline, 1 << 20).unwrap_err();
+        assert!(err.to_string().contains("limit"), "{err}");
     }
 }

@@ -8,6 +8,7 @@ use crate::convert::{ConvertOptions, LibreOffice};
 use crate::error::{Error, Result};
 use crate::job;
 use crate::job::{Document, Format, Output, RenderRequest, Step};
+use crate::limits;
 use crate::pdfops::MultiEngine;
 use crate::template;
 
@@ -144,9 +145,18 @@ impl Pipeline {
                     }
                 }
                 Step::Split { mode } => {
-                    let mut out = Vec::new();
+                    let mut out: Vec<Document> = Vec::new();
+                    let mut produced = 0;
                     for doc in &current {
-                        out.extend(self.engines.pdf.split(doc, mode, timeout).await?);
+                        let parts = self.engines.pdf.split(doc, mode, timeout).await?;
+                        for part in &parts {
+                            limits::charge_output(
+                                &mut produced,
+                                part.bytes.len(),
+                                limits::MAX_OUTPUT_BYTES,
+                            )?;
+                        }
+                        out.extend(parts);
                         if out.len() > MAX_DOCUMENTS {
                             return Err(Error::InvalidRequest(format!(
                                 "splitting would leave more than {MAX_DOCUMENTS} documents in flight"

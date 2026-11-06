@@ -16,6 +16,8 @@ use crate::convert::ConvertOptions;
 use crate::convert::protection::{self, Protection};
 use crate::error::{Error, Result};
 use crate::job::{Document, Format, PdfaLevel};
+use crate::limits;
+use crate::pdfops::lopdf::MAX_SPLIT_PARTS;
 use crate::pdfops::{
     self, Attachment, Bookmark, EmbedMetadata, EncryptOptions, FacturxProperties, Metadata,
     Overlay, Rotation, SplitMode, pages,
@@ -223,10 +225,14 @@ impl Compat<'_> {
     /// from zero; a unified part keeps the stem alone.
     pub async fn split_stub(&self, split: &Split, docs: &[Document]) -> Result<Vec<Document>> {
         let mut out = Vec::new();
+        let mut produced = 0;
         for doc in docs {
             let stem = stem_of(&doc.name);
             let mode = split_mode(split, doc)?;
             let parts = self.forms().split(doc, &mode, self.timeout).await?;
+            for part in &parts {
+                limits::charge_output(&mut produced, part.bytes.len(), limits::MAX_OUTPUT_BYTES)?;
+            }
             if split.unify && split.mode == "pages" {
                 let first = parts
                     .into_iter()
@@ -755,9 +761,18 @@ fn split_mode(split: &Split, doc: &Document) -> Result<SplitMode> {
                     unify: true,
                 })
             } else {
+                // Counted before anything is expanded. As Gotenberg's engines
+                // do, a page selected twice is one part.
+                if pages::distinct(&parsed) > MAX_SPLIT_PARTS as u64 {
+                    return Err(bad(format!(
+                        "split would produce more than {MAX_SPLIT_PARTS} parts"
+                    )));
+                }
+                let mut seen = std::collections::BTreeSet::new();
                 let each: Vec<String> = parsed
                     .iter()
                     .flat_map(pages::PageRange::pages)
+                    .filter(|p| seen.insert(*p))
                     .map(|p| p.to_string())
                     .collect();
                 Ok(SplitMode::Pages {
@@ -788,7 +803,7 @@ pub fn selection(span: &str, count: u32) -> Option<String> {
     let mut out = Vec::new();
     for item in span.split(',') {
         let item = item.trim();
-        if item.is_empty() {
+        if item.is_empty() || out.len() >= pages::MAX_RANGES {
             return None;
         }
         out.push(match item.split_once('-') {
