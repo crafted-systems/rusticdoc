@@ -229,11 +229,21 @@ impl Object for Token {
 /// Prints a rich value.
 pub fn write_token(out: &mut minijinja::Output, token: &Token, mode: Mode) -> Result<(), Error> {
     if matches!(mode, Mode::Render(_)) {
-        token.table.consumed.fetch_add(1, Ordering::Relaxed);
+        // A value kept with `{% set %}` and printed in a loop counts per
+        // print, because each print places a picture or a chart.
+        if token.table.consumed.fetch_add(1, Ordering::Relaxed) >= MAX_PLACEMENTS {
+            return Err(Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                format!("rich values were printed more than {MAX_PLACEMENTS} times"),
+            ));
+        }
         out.write_str(&marker(token.id)).map_err(Error::from)?;
     }
     Ok(())
 }
+
+/// Most rich values one render may print.
+const MAX_PLACEMENTS: usize = 10_000;
 
 fn marker(id: usize) -> String {
     let mut s = String::new();

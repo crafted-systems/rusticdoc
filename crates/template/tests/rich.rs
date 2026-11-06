@@ -1370,6 +1370,21 @@ fn charts_refuse_bad_values() {
     ));
     let err = render_err(Format::Docx, &doc, json!({}));
     assert!(err.contains("finite"), "{err}");
+    // Long labels repeated once per series pass the generated-size budget.
+    let label = "x".repeat(400 * 1024);
+    let wide = docx(&p(&format!(
+        "{{{{ rows | chart(type=\"bar\", x=\"m\", y=[{}]) }}}}",
+        (0..50)
+            .map(|i| format!("\"s{i}\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    )));
+    let row: serde_json::Map<String, Value> = std::iter::once(("m".to_string(), json!(label)))
+        .chain((0..50).map(|i| (format!("s{i}"), json!(1))))
+        .collect();
+    let err = render_err(Format::Docx, &wide, json!({"rows": [row]}));
+    assert!(err.contains("repeated"), "{err}");
+
     // 1,000 points is the limit, not an error.
     let points: Vec<Value> = (0..1000).map(|i| json!({"m": "a", "v": i})).collect();
     let out = render(Format::Docx, &tag(good), rows(json!(points)));
