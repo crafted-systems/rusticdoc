@@ -2,6 +2,7 @@
 import os, sys
 status = 0
 found = {}
+zombies = 0
 for pid in filter(str.isdigit, os.listdir('/proc')):
     try:
         cmd = open(f'/proc/{pid}/cmdline', 'rb').read().replace(b'\0', b' ').decode(errors='replace')
@@ -28,6 +29,14 @@ for pid in filter(str.isdigit, os.listdir('/proc')):
     leaked = b'marker' in env
     print(f'{"FAIL" if leaked else "ok"}: {label} {pid}: {len(env.split(bytes(1)))} variables, secrets {"PRESENT" if leaked else "absent"}')
     status |= leaked
+for pid in filter(str.isdigit, os.listdir('/proc')):
+    try:
+        if open(f'/proc/{pid}/stat').read().rsplit(')', 1)[1].split()[0] == 'Z':
+            zombies += 1
+    except OSError:
+        pass
+print(f'zombies: {zombies}')
+status |= zombies > 0
 print('processes:', sorted(set(c.split(" ")[0].rsplit("/", 1)[-1] for c in found.values())))
 if not any('soffice' in c for c in found.values()):
     print('FAIL: no soffice ran, so this proves nothing')

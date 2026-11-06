@@ -7,6 +7,8 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand};
 
+#[cfg(target_os = "linux")]
+mod init;
 mod pdf;
 use rusticdoc_core::config::RenderMode;
 use rusticdoc_core::job::parse_steps;
@@ -128,17 +130,22 @@ struct ConvertArgs {
     output: Option<PathBuf>,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<std::process::ExitCode> {
     let cli = Cli::parse();
     // The worker reads no settings and starts no threads.
     if matches!(cli.command, Command::RenderWorker) {
         std::process::exit(rusticdoc_core::render::worker_main());
     }
+    #[cfg(target_os = "linux")]
+    if matches!(cli.command, Command::Serve { .. }) && std::process::id() == 1 {
+        return init::run();
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("start the runtime")?
-        .block_on(run(cli))
+        .block_on(run(cli))?;
+    Ok(std::process::ExitCode::SUCCESS)
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
