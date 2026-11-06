@@ -11,6 +11,7 @@ use image::ExtendedColorType;
 use image::codecs::jpeg::JpegEncoder;
 
 use super::Deadline;
+use super::lopdf::{inflate_capped, only_filter};
 use crate::error::Result;
 
 /// Smaller images are not worth a lossy pass.
@@ -57,18 +58,6 @@ fn is_image(stream: &Stream) -> bool {
         .get(b"Subtype")
         .and_then(Object::as_name)
         .is_ok_and(|s| s == b"Image")
-}
-
-/// The name of the only filter, when there is exactly one.
-fn only_filter(stream: &Stream) -> Option<&[u8]> {
-    match stream.dict.get(b"Filter").ok()? {
-        Object::Name(name) => Some(name),
-        Object::Array(list) => match list.as_slice() {
-            [Object::Name(name)] => Some(name),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 /// Components per pixel of a colour space JPEG can carry unchanged.
@@ -126,9 +115,18 @@ fn jpeg_of(pdf: &Pdf, stream: &Stream, quality: u8) -> Option<Vec<u8>> {
     if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {
         return None;
     }
-    let pixels = stream.decompressed_content().ok()?;
-    let expected = u64::from(width) * u64::from(height) * u64::from(n);
-    if pixels.len() as u64 != expected {
+    // The size is known from the dictionary, so inflating stops as soon as the
+    // stream gives more than it says it holds.
+    let expected = (u64::from(width) * u64::from(height) * u64::from(n)) as usize;
+    let pixels = if dict.has(b"DecodeParms") {
+        // A PNG predictor adds a byte to each row, on top of the pixels. Having
+        // checked that much, the predictor can be undone under the same bound.
+        inflate_capped(&stream.content, expected + height as usize)?;
+        stream.decompressed_content_with_limit(expected).ok()?
+    } else {
+        inflate_capped(&stream.content, expected)?
+    };
+    if pixels.len() != expected {
         return None;
     }
     let color = if n == 1 {
@@ -198,6 +196,41 @@ mod tests {
         assert!(stream.content.starts_with(&[0xff, 0xd8]));
         // A second pass finds nothing left to do.
         assert_eq!(reencode(&mut pdf, 40, deadline).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_stream_that_inflates_past_its_size_is_left_alone() {
+        // 40 MiB of zeros deflate to some 40 KiB, enough to qualify by size,
+        // for a dictionary that claims 120 KB.
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &vec![0u8; 40 << 20]).unwrap();
+        let deflated = encoder.finish().unwrap();
+        assert!(deflated.len() >= MIN_BYTES);
+        assert!(inflate_capped(&deflated, 40 << 20).is_some());
+        assert!(inflate_capped(&deflated, (40 << 20) - 1).is_none());
+        assert!(inflate_capped(b"not zlib", 100).is_none());
+
+        for extra in [None, Some(dictionary! { "Predictor" => 15 })] {
+            let mut dict = dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 200,
+                "Height" => 200,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+                "Filter" => "FlateDecode",
+            };
+            if let Some(params) = extra {
+                dict.set("DecodeParms", params);
+            }
+            let mut stream = Stream::new(dict, deflated.clone());
+            stream.allows_compression = false;
+            let mut pdf = Pdf::with_version("1.7");
+            pdf.add_object(stream);
+            let deadline = Deadline::new(Duration::from_secs(30));
+            assert_eq!(reencode(&mut pdf, 40, deadline).unwrap(), 0);
+        }
     }
 
     #[test]

@@ -2354,6 +2354,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "flate2",
  "fontdb",
  "hex",
  "image",

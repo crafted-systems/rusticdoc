@@ -27,11 +27,22 @@ exercised by `tests/pdfops-container.sh`, which runs the exact flags and
 description strings against the real binaries, and by the engine tests when
 a binary exists on the machine.
 
+Gotenberg's routes use their own order (`MultiEngine::for_forms`): qpdf first
+for merge, flatten and encrypt, lopdf first otherwise. There an engine that
+fails hands over to the next one, and `PDFENGINES_*_ENGINES` can set the order
+per operation. They also use `read_exif` and `write_exif` (ExifTool's key names
+and value shapes, in `exif.rs`), `optimize_images` (`images.rs`),
+`encrypt_with`, `set_embed_metadata` and `facturx_with`.
+
 ## Limits
 
 - Documents must be unencrypted PDFs no larger than 256 MB
   (`LopdfEngine::with_max_bytes`); overlay images, overlay PDFs and
   attachments count against the same limit.
+- Compressed streams are bounded before they are decoded: XMP packets at
+  16 MiB (a larger packet counts as no packet), image data at what its dictionary
+  says it holds, the page content of an imported or overlaid PDF at 256 MiB in
+  all, and object streams at lopdf's own 256 MiB per stream.
 - Each step runs under its timeout: the lopdf engine checks a deadline in
   every loop over pages, outline items, name-tree nodes and split parts, at
   most four lopdf jobs run at once, a split may produce at most 1,000 parts,
