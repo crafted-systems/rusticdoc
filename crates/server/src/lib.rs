@@ -12,6 +12,7 @@ pub mod metrics;
 pub mod oidc;
 pub mod openapi;
 pub mod routes;
+pub mod stall;
 pub mod state;
 pub mod telemetry;
 pub mod webhook;
@@ -250,6 +251,12 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
                 .to_string(),
         );
     }
+    if config.outbound_proxy.is_some() {
+        warnings.push(
+            "RUSTICDOC_OUTBOUND_PROXY is set, so DNS pinning no longer applies: the proxy resolves names itself and must enforce its own egress policy, including blocking private ranges"
+                .to_string(),
+        );
+    }
     let encrypt_order = config
         .compat
         .engine_orders
@@ -294,10 +301,7 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
             }
         });
     }
-    let limits = ConnectionLimits {
-        header_timeout: state.config.header_timeout,
-        max_connections: state.config.max_connections,
-    };
+    let limits = ConnectionLimits::from_config(&state.config);
     serve_on(listener, app(state), limits, shutdown_signal()).await
 }
 
@@ -325,6 +329,62 @@ pub struct ConnectionLimits {
     pub header_timeout: Duration,
     /// Connections served at once.
     pub max_connections: usize,
+    /// Connections served at once from one address; 0 is no limit. Behind a load
+    /// balancer every connection has the same peer, so it is off by default.
+    pub max_connections_per_peer: usize,
+    /// How long a connection may stay blocked on its client: a write that does not
+    /// finish, or a body a handler waits for that does not arrive.
+    pub stall_timeout: Duration,
+    /// How long reading one request's body may take, even while it moves.
+    pub body_timeout: Duration,
+}
+
+impl ConnectionLimits {
+    pub fn from_config(config: &rusticdoc_core::Config) -> Self {
+        Self {
+            header_timeout: config.header_timeout,
+            max_connections: config.max_connections,
+            max_connections_per_peer: config.max_connections_per_peer,
+            stall_timeout: config.stall_timeout,
+            body_timeout: config.api_timeout,
+        }
+    }
+}
+
+/// One address's connections, for the per-peer limit.
+#[derive(Clone, Default)]
+struct PeerCounts(Arc<std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>>);
+
+struct PeerPlace {
+    counts: PeerCounts,
+    ip: std::net::IpAddr,
+}
+
+impl PeerCounts {
+    fn take(&self, ip: std::net::IpAddr, limit: usize) -> Option<PeerPlace> {
+        let mut counts = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let count = counts.entry(ip).or_insert(0);
+        if *count >= limit {
+            return None;
+        }
+        *count += 1;
+        Some(PeerPlace {
+            counts: self.clone(),
+            ip,
+        })
+    }
+}
+
+impl Drop for PeerPlace {
+    fn drop(&mut self) {
+        let mut counts = self.counts.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(&self.ip) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
 }
 
 /// Serves until `shutdown`, then lets the connections in flight finish.
@@ -339,6 +399,7 @@ pub async fn serve_on(
     shutdown: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
     let places = Arc::new(Semaphore::new(limits.max_connections.max(1)));
+    let peers = PeerCounts::default();
     let (closing, closed) = tokio::sync::watch::channel(false);
     let mut shutdown = std::pin::pin!(shutdown);
     loop {
@@ -358,16 +419,35 @@ pub async fn serve_on(
             },
             _ = &mut shutdown => break,
         };
+        let peer_place = if limits.max_connections_per_peer > 0 {
+            match peers.take(peer.ip(), limits.max_connections_per_peer) {
+                Some(taken) => Some(taken),
+                None => {
+                    tracing::warn!(remote_addr = %peer, "too many connections from one address");
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         let _ = stream.set_nodelay(true);
         let service = TowerToHyperService::new(router.clone().map_request(
-            move |mut req: axum::http::Request<hyper::body::Incoming>| {
+            move |req: axum::http::Request<hyper::body::Incoming>| {
+                let mut req = req.map(|body| {
+                    axum::body::Body::new(stall::GuardedBody::new(
+                        body,
+                        limits.stall_timeout,
+                        limits.body_timeout,
+                    ))
+                });
                 req.extensions_mut().insert(ConnectInfo(peer));
                 req
             },
         ));
         let mut closed = closed.clone();
         tokio::spawn(async move {
-            let _place = place;
+            let _places = (place, peer_place);
+            let stream = stall::StallGuard::new(stream, limits.stall_timeout);
             let conn = hyper::server::conn::http1::Builder::new()
                 .timer(TokioTimer::new())
                 .header_read_timeout(limits.header_timeout)

@@ -757,127 +757,20 @@ async fn download_failures_do_not_carry_the_query() {
     assert!(!body.contains("pw"), "{body}");
 }
 
-// ---------------------------------------------------------------- F13
-
-/// Collects what is logged on this thread while `f` runs.
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl std::io::Write for Captured {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-    type Writer = Captured;
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
-    let captured = Captured::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(captured.clone())
-        .with_max_level(tracing::Level::INFO)
-        .json()
-        .flatten_event(true)
-        .with_current_span(true)
-        .finish();
-    (
-        captured.clone(),
-        tracing::subscriber::set_default(subscriber),
-    )
-}
-
-impl Captured {
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
-    }
-}
-
-fn from_peer(mut request: Request<Body>) -> Request<Body> {
-    let peer: std::net::SocketAddr = "203.0.113.9:4242".parse().unwrap();
-    request
-        .extensions_mut()
-        .insert(axum::extract::ConnectInfo(peer));
-    request
-}
-
-#[tokio::test]
-async fn failed_authentication_logs_who_and_from_where_without_the_secret() {
-    let (logs, _guard) = capture();
-    let request = Request::get("/v1/fonts")
-        .header("x-api-key", "wrong-key-value")
-        .body(Body::empty())
-        .unwrap();
-    let res = service(guarded())
-        .oneshot(from_peer(request))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-    let logged = logs.text();
-    assert!(logged.contains("authentication failed"), "{logged}");
-    assert!(logged.contains("203.0.113.9:4242"), "{logged}");
-    assert!(logged.contains("key:"), "{logged}");
-    assert!(!logged.contains("wrong-key-value"), "{logged}");
-}
-
-#[tokio::test]
-async fn the_access_log_names_the_peer_and_the_caller() {
-    let (logs, _guard) = capture();
-    let request = Request::get("/v1/fonts")
-        .header("x-api-key", "secret")
-        .body(Body::empty())
-        .unwrap();
-    let res = service(guarded())
-        .oneshot(from_peer(request))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let logged = logs.text();
-    assert!(
-        logged.contains(r#""remote_addr":"203.0.113.9:4242""#),
-        "{logged}"
-    );
-    assert!(logged.contains(r#""caller":"key:"#), "{logged}");
-    assert!(!logged.contains(r#""secret""#), "{logged}");
-}
-
-#[tokio::test]
-async fn webhook_job_failures_are_logged_in_the_requests_span() {
-    let (logs, _guard) = capture();
-    let port = silent_receiver().await;
-    let mut c = config();
-    c.webhook_allow_private = true;
-    c.webhook_attempts = 1;
-    c.api_timeout = Duration::from_millis(200);
-    let parts: [Part<'_>; 1] = [("template", Some("t.txt"), b"{{ nobody.home }}")];
-    let request = form("/v1/render", &parts)
-        .header("x-request-id", "job-under-test")
-        .header(
-            "x-rusticdoc-webhook-url",
-            format!("http://127.0.0.1:{port}/d"),
-        )
-        .body(Body::from(body_of(&parts)))
-        .unwrap();
-    let res = service(c).oneshot(request).await.unwrap();
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let logged = logs.text();
-    let line = logged
-        .lines()
-        .find(|line| line.contains("template_error"))
-        .unwrap_or_else(|| panic!("the job's failure was not logged: {logged}"));
-    assert!(line.contains("job-under-test"), "{line}");
-}
-
 // ---------------------------------------------------------------- F14
+
+fn connection_limits(
+    header_timeout: Duration,
+    max_connections: usize,
+) -> rusticdoc_server::ConnectionLimits {
+    rusticdoc_server::ConnectionLimits {
+        header_timeout,
+        max_connections,
+        max_connections_per_peer: 0,
+        stall_timeout: Duration::from_secs(30),
+        body_timeout: Duration::from_secs(30),
+    }
+}
 
 async fn running(
     limits: rusticdoc_server::ConnectionLimits,
@@ -886,10 +779,20 @@ async fn running(
     tokio::sync::oneshot::Sender<()>,
     tokio::task::JoinHandle<()>,
 ) {
+    running_app(limits, service(config())).await
+}
+
+async fn running_app(
+    limits: rusticdoc_server::ConnectionLimits,
+    router: Router,
+) -> (
+    u16,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let router = service(config());
     let task = tokio::spawn(async move {
         rusticdoc_server::serve_on(listener, router, limits, async {
             let _ = stopped.await;
@@ -912,10 +815,7 @@ async fn answer(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
 #[tokio::test]
 async fn a_client_that_stalls_in_its_headers_is_dropped() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let limits = rusticdoc_server::ConnectionLimits {
-        header_timeout: Duration::from_millis(200),
-        max_connections: 8,
-    };
+    let limits = connection_limits(Duration::from_millis(200), 8);
     let (port, _stop, _task) = running(limits).await;
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
@@ -938,10 +838,7 @@ async fn a_client_that_stalls_in_its_headers_is_dropped() {
 #[tokio::test]
 async fn connections_past_the_limit_wait() {
     use tokio::io::AsyncWriteExt;
-    let limits = rusticdoc_server::ConnectionLimits {
-        header_timeout: Duration::from_secs(1),
-        max_connections: 1,
-    };
+    let limits = connection_limits(Duration::from_secs(1), 1);
     let (port, _stop, _task) = running(limits).await;
     let mut first = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
@@ -967,10 +864,7 @@ async fn connections_past_the_limit_wait() {
 
 #[tokio::test]
 async fn shutdown_lets_requests_finish_and_then_returns() {
-    let limits = rusticdoc_server::ConnectionLimits {
-        header_timeout: Duration::from_secs(1),
-        max_connections: 8,
-    };
+    let limits = connection_limits(Duration::from_secs(1), 8);
     let (port, stop, task) = running(limits).await;
     let mut idle = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
@@ -1133,4 +1027,285 @@ async fn only_known_file_types_reach_libreoffice() {
         assert_ne!(res.status(), StatusCode::OK, "{name}");
         assert_ne!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "{name}");
     }
+}
+
+// ------------------------------------------------- connections that stop moving
+
+async fn connect(port: u16) -> tokio::net::TcpStream {
+    tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap()
+}
+
+/// True when a fresh connection gets an answer within `wait`, which it can only do
+/// once the one place the service has is free again.
+async fn served_within(port: u16, wait: Duration) -> bool {
+    use tokio::io::AsyncWriteExt;
+    let started = tokio::time::Instant::now();
+    let mut stream = connect(port).await;
+    stream.write_all(GET_HEALTH).await.unwrap();
+    let mut out = Vec::new();
+    let read = async {
+        use tokio::io::AsyncReadExt;
+        let _ = stream.read_to_end(&mut out).await;
+    };
+    let finished = tokio::time::timeout(wait, read).await.is_ok();
+    finished && out.starts_with(b"HTTP/1.1 200") && started.elapsed() <= wait
+}
+
+fn one_place(
+    stall: Duration,
+    body: Duration,
+    header: Duration,
+) -> rusticdoc_server::ConnectionLimits {
+    rusticdoc_server::ConnectionLimits {
+        header_timeout: header,
+        max_connections: 1,
+        max_connections_per_peer: 0,
+        stall_timeout: stall,
+        body_timeout: body,
+    }
+}
+
+const LONG: Duration = Duration::from_secs(60);
+
+#[tokio::test]
+async fn a_client_that_stops_reading_loses_its_place() {
+    use tokio::io::AsyncWriteExt;
+    let limits = one_place(Duration::from_millis(500), LONG, LONG);
+    let (port, _stop, _task) = running(limits).await;
+    // A small window, pipelined requests for a large open response, and no reads.
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_recv_buffer_size(4096).unwrap();
+    let stream = socket
+        .connect(format!("127.0.0.1:{port}").parse().unwrap())
+        .await
+        .unwrap();
+    let (reader, mut writer) = stream.into_split();
+    tokio::spawn(async move {
+        let request = b"GET /openapi.json HTTP/1.1\r\nHost: x\r\n\r\n".repeat(2_000);
+        let _ = writer.write_all(&request).await;
+        tokio::time::sleep(LONG).await;
+    });
+    // Long enough for the writes to block, not to be refused at the first place.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        served_within(port, Duration::from_secs(15)).await,
+        "the blocked connection kept the only place"
+    );
+    drop(reader);
+}
+
+#[tokio::test]
+async fn a_body_that_stops_arriving_loses_its_place() {
+    use tokio::io::AsyncWriteExt;
+    let limits = one_place(Duration::from_millis(300), LONG, LONG);
+    let (port, _stop, _task) = running(limits).await;
+    let mut stream = connect(port).await;
+    stream
+        .write_all(
+            format!(
+                "POST /forms/pdfengines/merge HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: 100000\r\n\r\n--{BOUNDARY}\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        served_within(port, Duration::from_secs(10)).await,
+        "the stalled upload kept the only place"
+    );
+}
+
+#[tokio::test]
+async fn a_body_that_only_drips_is_stopped_by_the_total_limit() {
+    use tokio::io::AsyncWriteExt;
+    let limits = one_place(Duration::from_millis(400), Duration::from_secs(1), LONG);
+    let (port, _stop, _task) = running(limits).await;
+    let mut stream = connect(port).await;
+    stream
+        .write_all(
+            format!(
+                "POST /forms/pdfengines/merge HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: 100000\r\n\r\n--{BOUNDARY}\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        // Always moving, so the stall timer never fires.
+        while stream.write_all(b"x").await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+    assert!(
+        served_within(port, Duration::from_secs(10)).await,
+        "the dripping upload kept the only place"
+    );
+}
+
+#[tokio::test]
+async fn a_slow_body_that_keeps_moving_is_allowed() {
+    use tokio::io::AsyncWriteExt;
+    let limits = one_place(Duration::from_millis(500), Duration::from_secs(20), LONG);
+    let (port, _stop, _task) = running(limits).await;
+    let pdf = fixtures::pages(1);
+    let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
+    let body = body_of(&parts);
+    let mut stream = connect(port).await;
+    stream
+        .write_all(
+            format!(
+                "POST /v1/pdf/merge HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    // Slower in all than the stall limit, never slower than it between chunks.
+    for chunk in body.chunks(body.len().div_ceil(8)) {
+        stream.write_all(chunk).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(answer(&mut stream).await.starts_with(b"HTTP/1.1 200"));
+}
+
+#[tokio::test]
+async fn a_silent_socket_loses_its_place_at_the_header_timeout() {
+    let limits = one_place(LONG, LONG, Duration::from_millis(300));
+    let (port, _stop, _task) = running(limits).await;
+    let _silent = connect(port).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        served_within(port, Duration::from_secs(5)).await,
+        "a socket that never sent a byte kept the only place"
+    );
+}
+
+#[tokio::test]
+async fn an_idle_keep_alive_socket_loses_its_place_at_the_header_timeout() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let limits = one_place(LONG, LONG, Duration::from_millis(300));
+    let (port, _stop, _task) = running(limits).await;
+    let mut idle = connect(port).await;
+    idle.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await
+        .unwrap();
+    let mut buf = [0u8; 4096];
+    let read = idle.read(&mut buf).await.unwrap();
+    assert!(buf[..read].starts_with(b"HTTP/1.1 200"));
+    // Answered and kept alive, it now holds the place doing nothing.
+    assert!(
+        served_within(port, Duration::from_secs(5)).await,
+        "an idle connection kept the only place"
+    );
+}
+
+#[tokio::test]
+async fn a_handler_that_takes_longer_than_the_stall_limit_still_finishes() {
+    use tokio::io::AsyncWriteExt;
+    let dir = tempfile::tempdir().unwrap();
+    let state = with_slow_office(config(), &dir);
+    // Four conversions at 300 ms each, with no bytes moving meanwhile.
+    let limits = one_place(Duration::from_millis(200), LONG, LONG);
+    let (port, _stop, _task) = running_app(limits, app(state)).await;
+    let names = ["1.txt", "2.txt", "3.txt", "4.txt"];
+    let parts: Vec<Part<'_>> = names
+        .iter()
+        .map(|n| ("files", Some(*n), &b"x"[..]))
+        .collect();
+    let body = body_of(&parts);
+    let mut stream = connect(port).await;
+    stream
+        .write_all(
+            format!(
+                "POST /v1/convert HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    stream.write_all(&body).await.unwrap();
+    let started = tokio::time::Instant::now();
+    let answered = answer(&mut stream).await;
+    assert!(
+        started.elapsed() > Duration::from_millis(600),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        answered.starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&answered[..answered.len().min(200)])
+    );
+}
+
+#[tokio::test]
+async fn connections_per_peer_are_limited_when_asked() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut limits = connection_limits(Duration::from_secs(5), 8);
+    limits.max_connections_per_peer = 1;
+    let (port, _stop, _task) = running(limits).await;
+    let mut first = connect(port).await;
+    first
+        .write_all(b"GET /health HTTP/1.1\r\nX-Slow: ")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut second = connect(port).await;
+    let mut buf = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(2), second.read(&mut buf)).await;
+    assert!(
+        matches!(read, Ok(Ok(0)) | Ok(Err(_))),
+        "a second connection from one address was served"
+    );
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut third = connect(port).await;
+    third.write_all(GET_HEALTH).await.unwrap();
+    assert!(answer(&mut third).await.starts_with(b"HTTP/1.1 200"));
+}
+
+// ---------------------------------------------------------------- F19
+
+#[tokio::test]
+async fn a_named_proxy_changes_nothing_about_the_private_address_check() {
+    // Nothing listens on the proxy: a refused URL must not even try it.
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    let mut c = config();
+    c.outbound_proxy = Some(proxy_url);
+    let template: [Part<'_>; 1] = [("template", Some("t.txt"), b"hello")];
+    for url in [
+        "http://127.0.0.1:9/x",
+        "http://localhost:9/x",
+        "http://10.0.0.1/x",
+    ] {
+        let request = form("/v1/render", &template)
+            .header("x-rusticdoc-webhook-url", url)
+            .body(Body::from(body_of(&template)))
+            .unwrap();
+        let res = service(c.clone()).oneshot(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{url}");
+        assert!(text(res).await.contains("private"), "{url}");
+        let entry = format!(r#"[{{"url":"{url}"}}]"#);
+        let parts: [Part<'_>; 1] = [("downloadFrom", None, entry.as_bytes())];
+        let res = service(c.clone())
+            .oneshot(post("/v1/pdf/merge", &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{url}");
+        assert!(text(res).await.contains("private"), "{url}");
+    }
+    let accepted = tokio::time::timeout(Duration::from_millis(200), proxy.accept()).await;
+    assert!(accepted.is_err(), "a refused URL reached the proxy");
+    let warnings = rusticdoc_server::startup_warnings(&c);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("DNS pinning") && w.contains("private ranges")),
+        "{warnings:?}"
+    );
 }

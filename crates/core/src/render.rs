@@ -286,7 +286,7 @@ fn address_space_limit() -> Option<u64> {
         // SAFETY: getrlimit fills in the struct it is handed.
         let status = unsafe { libc::getrlimit(libc::RLIMIT_AS as _, &mut limit) };
         if status == 0 && limit.rlim_cur != libc::RLIM_INFINITY {
-            return Some(limit.rlim_cur as u64);
+            return Some(limit.rlim_cur);
         }
     }
     None
