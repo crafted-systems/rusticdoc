@@ -416,6 +416,9 @@ pub(super) fn load(doc: &Document) -> Result<Pdf> {
 pub(super) fn save(mut pdf: Pdf, name: String) -> Result<Document> {
     let mut bytes = Vec::new();
     pdf.save_to(&mut bytes).map_err(engine_error)?;
+    // A growing buffer can hold twice what it wrote, for as long as the document
+    // lives, and a split keeps many of them.
+    bytes.shrink_to_fit();
     Ok(Document::new(name, bytes))
 }
 
