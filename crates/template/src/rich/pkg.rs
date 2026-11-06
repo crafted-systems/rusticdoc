@@ -128,6 +128,9 @@ impl<'a> Pkg<'a> {
         data: String,
         content_type: &str,
     ) -> Result<String, TemplateError> {
+        // Charged before it is stored, so repeated placements of one chart
+        // cannot pass the package limit unseen.
+        self.charge(data.len())?;
         let name = self.free_name(dir, stem, "xml");
         package::set(self.entries, &name, data.into_bytes());
         self.override_type(&name, content_type)?;

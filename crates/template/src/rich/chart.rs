@@ -12,7 +12,9 @@ use crate::sheet::num_to_col;
 /// The most values one chart may hold.
 pub const MAX_POINTS: usize = 1000;
 /// The most bytes of category labels one chart may hold.
-const MAX_LABEL_BYTES: usize = 16 * 1024 * 1024;
+const MAX_LABEL_BYTES: usize = 1024 * 1024;
+/// Labels are repeated once per series in the chart part.
+const MAX_GENERATED_LABEL_BYTES: usize = 16 * 1024 * 1024;
 
 const DEFAULT_WIDTH_PT: f64 = 450.0;
 const DEFAULT_HEIGHT_PT: f64 = 270.0;
@@ -163,6 +165,12 @@ impl Chart {
             if label_bytes > MAX_LABEL_BYTES {
                 return Err(format!(
                     "the category labels are longer than {MAX_LABEL_BYTES} bytes"
+                ));
+            }
+            if label_bytes.saturating_mul(series.len().max(1)) > MAX_GENERATED_LABEL_BYTES {
+                return Err(format!(
+                    "the category labels repeated for {} series would pass {MAX_GENERATED_LABEL_BYTES} bytes",
+                    series.len()
                 ));
             }
             categories.push(label);
