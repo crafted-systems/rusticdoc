@@ -46,7 +46,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Entry>, TemplateError> {
         if file.is_dir() {
             continue;
         }
-        let name = file.name().to_string();
+        let name = file
+            .name()
+            .map_err(|e| TemplateError::new(format!("the file is not a valid package: {e}")))?
+            .to_string();
         let allowed = MAX_PART_BYTES.min(MAX_TOTAL_BYTES - total);
         let mut data = Vec::new();
         file.by_ref()
