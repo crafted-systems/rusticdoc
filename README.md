@@ -209,10 +209,13 @@ A compromised LibreOffice still runs as the service's user, in the service's con
 - Generated DOCX, XLSX and PPTX files have been opened in LibreOffice, not in Word, Excel or PowerPoint, so a repair prompt there has not been ruled out.
 - Barcodes have not been scanned with a reader.
 - Filled PDF forms have not been viewed in Chrome, Acrobat or Preview.
+- Text the service draws into a PDF, meaning field appearances and annotation values, is Latin only, in Helvetica. Other characters draw as `?`. Field values are stored in full, so a viewer that redraws the field still shows them.
+- A template that uses a font the service lacks is not reported. Check `GET /v1/fonts` and the `x-fonts-used` header.
+- Macros and OLE objects in a template are not stripped. LibreOffice will not run or fetch them when converting, but a request with no conversion step returns them in its output.
 - There is no golden-PDF corpus: output is checked by content, not compared byte for byte across architectures.
-- Repeating a whole sheet in XLSX or ODS is not supported, only rows within one. Charts are not supported in ODF templates.
+- Repeating a whole sheet in XLSX or ODS is not supported, only rows within one, and neither is a row loop nested in another row block of the same sheet. ODS formulas are not re-based. Charts are not supported in ODF templates.
 - `data` counts against the render memory limit once parsed. At the default limit, a list of 8 million small numbers rendered and one of 16 million got `413`, so raise `RUSTICDOC_RENDER_MEMORY` for data that size.
 
 ## Licence
 
-Not chosen yet. Dependencies are MIT, Apache-2.0 or BSD; LibreOffice is MPL and runs as a separate process.
+[Apache-2.0](LICENSE). Rust dependencies use permissive licences such as MIT, Apache-2.0, BSD, ISC, Zlib and Unicode-3.0. The image also carries LibreOffice under MPL-2.0, and qpdf and pdfcpu under Apache-2.0, which run as separate processes.

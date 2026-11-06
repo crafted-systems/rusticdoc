@@ -9,7 +9,7 @@ All six phases are built. Each phase has a gate, and only phase 0's has been met
 | 0 | Service, CLI, webhooks, OpenAPI, metrics, auth, image, LibreOffice conversion, Gotenberg's routes | Built | The office replay matches the official image on the same 310 of 326 scenarios | **Yes**, see below |
 | 1 | DOCX and ODT templates: tags across split runs, loops on rows and paragraphs, filters, translations, validation | Built | A corpus renders byte-identical to its golden PDFs on amd64 and arm64 | No: the corpus does not exist |
 | 2 | XLSX, PPTX, ODS, ODP templates and batch rendering to ZIP | Built, except repeating a whole sheet | Carbone's published XLSX and PPTX examples reproduce with the new syntax | Not run |
-| 3 | PDF templates: form fields, tags in annotations, overlay on a base PDF | Built | Filled forms show their values in Chrome, Acrobat Reader and Preview | Not run |
+| 3 | PDF templates: form fields, tags in annotations, overlay on a base PDF | Built, with Latin text only where the service draws it | Filled forms show their values in Chrome, Acrobat Reader and Preview | Not run |
 | 4 | Images, barcodes, native charts, data-bound colours, signature images, an HTML subset | Built, except charts in ODF | Word and LibreOffice open every output without a repair prompt | LibreOffice only; Word not run, and barcodes never scanned |
 | 5 | Fewer external engines | Built in part: `lopdf` is the first engine for most PDF operations. The in-process DOCX path is declined | Per engine, the parity suite | `lopdf` yes; see below for DOCX |
 
@@ -58,7 +58,8 @@ An OWASP review found 20 issues, 6 of them High, and all are fixed. Automated re
 2. View filled forms in Chrome, Acrobat Reader and Preview, and scan the barcodes with a reader.
 3. Build the golden-PDF corpus, and reproduce Carbone's published examples.
 4. Repeat whole sheets in XLSX and ODS, and add charts to ODF.
-5. Choose a licence.
+5. Embed fonts for text drawn into PDFs, so Arabic and CJK values show.
+6. Report fonts a template uses that the service lacks, and strip macros and OLE objects from templates.
 
 ## Conventions
 

@@ -77,6 +77,7 @@ RUN rm -f /usr/lib/libreoffice/program/libucpdav1.so /usr/lib/libreoffice/progra
 COPY deploy/fonts.conf /etc/fonts/conf.d/100-rusticdoc.conf
 COPY --from=pdfcpu /out/pdfcpu /usr/bin/pdfcpu
 COPY --from=build /rusticdoc /usr/bin/rusticdoc
+COPY LICENSE /usr/share/doc/rusticdoc/LICENSE
 
 ENV RUSTICDOC_BIND=0.0.0.0:3000 \
     RUSTICDOC_LIBREOFFICE_BIN=/usr/lib/libreoffice/program/soffice.bin \
