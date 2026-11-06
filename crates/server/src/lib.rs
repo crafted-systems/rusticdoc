@@ -250,11 +250,26 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
                 .to_string(),
         );
     }
+    let encrypt_order = config
+        .compat
+        .engine_orders
+        .get("PDFENGINES_ENCRYPT_ENGINES");
+    let pdfcpu_encrypts = match encrypt_order {
+        Some(names) => names.iter().any(|name| name == "pdfcpu"),
+        None => config.qpdf_bin.is_none() && config.pdfcpu_bin.is_some(),
+    };
+    if pdfcpu_encrypts {
+        warnings.push(
+            "pdfcpu may encrypt here, and it takes passwords as arguments that this user's other processes can read; use qpdf"
+                .to_string(),
+        );
+    }
     warnings
 }
 
 /// Binds, serves, and stops cleanly on SIGINT or SIGTERM.
 pub async fn serve(state: AppState) -> std::io::Result<()> {
+    make_undumpable()?;
     state
         .pipeline
         .renderer()
@@ -284,6 +299,23 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
         max_connections: state.config.max_connections,
     };
     serve_on(listener, app(state), limits, shutdown_signal()).await
+}
+
+/// Closes `/proc/<pid>/environ` and `/proc/<pid>/mem` of this process to its
+/// children, which run as the same user and work on documents from clients. They
+/// get their own setting back when they exec.
+#[cfg(target_os = "linux")]
+fn make_undumpable() -> std::io::Result<()> {
+    // SAFETY: prctl with these arguments only sets a flag on this process.
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn make_undumpable() -> std::io::Result<()> {
+    Ok(())
 }
 
 /// What one connection may cost.

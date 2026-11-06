@@ -60,6 +60,29 @@ const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </oor:items>
 "#;
 
+/// What LibreOffice is sent, with the dot. Its loaders take far more than documents,
+/// so anything else stays away from it.
+pub const ALLOWED_EXTENSIONS: &[&str] = &[
+    ".123", ".602", ".abw", ".bib", ".bmp", ".cdr", ".cgm", ".cmx", ".csv", ".cwk", ".dbf", ".dif",
+    ".doc", ".docm", ".docx", ".dot", ".dotm", ".dotx", ".dxf", ".emf", ".eps", ".epub", ".fodg",
+    ".fodp", ".fods", ".fodt", ".fopd", ".gif", ".htm", ".html", ".hwp", ".jpeg", ".jpg", ".key",
+    ".ltx", ".lwp", ".mcw", ".met", ".mml", ".mw", ".numbers", ".odd", ".odg", ".odm", ".odp",
+    ".ods", ".odt", ".otg", ".oth", ".otp", ".ots", ".ott", ".pages", ".pbm", ".pcd", ".pct",
+    ".pcx", ".pdb", ".pdf", ".pgm", ".png", ".pot", ".potm", ".potx", ".ppm", ".pps", ".ppsm",
+    ".ppsx", ".ppt", ".pptm", ".pptx", ".psd", ".psw", ".pub", ".pwp", ".pxl", ".ras", ".rtf",
+    ".sda", ".sdc", ".sdd", ".sdp", ".sdw", ".sgl", ".slk", ".smf", ".stc", ".std", ".sti", ".stw",
+    ".svg", ".svm", ".swf", ".sxc", ".sxd", ".sxg", ".sxi", ".sxm", ".sxw", ".tga", ".tif",
+    ".tiff", ".txt", ".uof", ".uop", ".uos", ".uot", ".vdx", ".vor", ".vsd", ".vsdm", ".vsdx",
+    ".wb2", ".wk1", ".wks", ".wmf", ".wpd", ".wpg", ".wps", ".xbm", ".xhtml", ".xls", ".xlsb",
+    ".xlsm", ".xlsx", ".xlt", ".xltm", ".xltx", ".xlw", ".xml", ".xpm", ".zabw",
+];
+
+/// True when LibreOffice may be sent a file named like `doc`.
+pub fn accepts(doc: &Document) -> bool {
+    let ext = format!(".{}", doc.extension());
+    ALLOWED_EXTENSIONS.contains(&ext.as_str())
+}
+
 /// A pool of warm LibreOffice workers. Cheap to clone; clones share the
 /// pool.
 #[derive(Clone)]

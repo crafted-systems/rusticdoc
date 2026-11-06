@@ -214,9 +214,10 @@ impl PdfEngine for PdfcpuEngine {
     /// `pdfcpu encrypt --mode aes --upw U --opw O --perm all|none in out`.
     ///
     /// pdfcpu only takes passwords as arguments, so they are visible to this
-    /// user's other processes while it runs. qpdf comes first in the order
-    /// unless a deployment names pdfcpu for encryption on its own. Arguments
-    /// are not logged either way (see [`process::run`]).
+    /// user's other processes while it runs. It only gets here when a deployment
+    /// names it in `PDFENGINES_ENCRYPT_ENGINES` or has no qpdf: encryption does not
+    /// fall through to it after a qpdf failure. Arguments are not logged either
+    /// way (see [`process::run`]).
     async fn encrypt_with(
         &self,
         doc: &Document,

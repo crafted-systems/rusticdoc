@@ -509,10 +509,11 @@ fn anchor(position: Position, bx: [f32; 4], w: f32, h: f32) -> (f32, f32) {
     (x, y)
 }
 
-fn parse_colour(hex: &str) -> Result<[f32; 3]> {
-    let digits = hex.trim().trim_start_matches('#');
+pub(super) fn parse_colour(hex: &str) -> Result<[f32; 3]> {
+    let trimmed = hex.trim();
+    let digits = trimmed.strip_prefix('#').unwrap_or(trimmed);
     let bad = || Error::InvalidRequest(format!("colour '{hex}' is not #rrggbb"));
-    if digits.len() != 6 {
+    if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(bad());
     }
     let mut rgb = [0.0; 3];
@@ -568,6 +569,9 @@ mod tests {
         assert_eq!(m, [2.0, 0.0, 0.0, 2.0, 50.0, 700.0]);
         assert_eq!(parse_colour("#ff0000").unwrap(), [1.0, 0.0, 0.0]);
         assert!(parse_colour("red").is_err());
+        assert!(parse_colour("aé123").is_err(), "a split character");
+        assert!(parse_colour("##ff0000").is_err());
+        assert!(parse_colour("#ff0000, url:example.com").is_err());
         assert_eq!(num(1.0), "1");
         assert_eq!(num(-0.5), "-0.5");
     }

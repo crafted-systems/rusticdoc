@@ -247,12 +247,14 @@ impl Pipeline {
         let pdf = &self.engines.pdf;
         Ok(match step {
             Step::Convert { to } => {
+                check_convertible(doc)?;
                 self.engines
                     .libreoffice()?
                     .convert_with(doc, *to, options, t)
                     .await?
             }
             Step::Pdfa { level } => {
+                check_convertible(doc)?;
                 let mut o = options.clone();
                 o.pdfa = Some(*level);
                 self.engines
@@ -261,6 +263,7 @@ impl Pipeline {
                     .await?
             }
             Step::Pdfua => {
+                check_convertible(doc)?;
                 let mut o = options.clone();
                 o.pdfua = true;
                 self.engines
@@ -284,6 +287,18 @@ impl Pipeline {
             Step::Merge | Step::Split { .. } => unreachable!("handled by run"),
         })
     }
+}
+
+/// A step may send LibreOffice what `/forms/*` would, or a text template it has
+/// just filled.
+fn check_convertible(doc: &Document) -> Result<()> {
+    if crate::convert::accepts(doc) || template::is_text_template(&doc.extension()) {
+        return Ok(());
+    }
+    Err(Error::InvalidRequest(format!(
+        "'{}' is not a file type this service converts",
+        doc.name
+    )))
 }
 
 fn is_empty_object(v: &serde_json::Value) -> bool {

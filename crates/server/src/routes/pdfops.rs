@@ -575,7 +575,7 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
     if !(0.0..=1.0).contains(&opacity) {
         return Err(ApiError::bad_request("'opacity' must be between 0 and 1"));
     }
-    Ok(Overlay {
+    let overlay = Overlay {
         placement: None,
         kind,
         position,
@@ -583,7 +583,9 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
         rotation: num("rotation", 0.0),
         scale: num("scale", 0.5).clamp(0.01, 1.0),
         pages: form.field("pages").unwrap_or("").trim().to_string(),
-    })
+    };
+    overlay.validate()?;
+    Ok(overlay)
 }
 
 /// Puts text, an image or a PDF under the content of each page.

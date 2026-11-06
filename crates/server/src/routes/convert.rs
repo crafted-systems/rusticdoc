@@ -1,7 +1,7 @@
 use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use rusticdoc_core::convert::ConvertOptions;
+use rusticdoc_core::convert::{self, ConvertOptions};
 use rusticdoc_core::{Document, Format, Output, RenderRequest, Step};
 use utoipa::ToSchema;
 
@@ -67,6 +67,12 @@ pub async fn convert(
         return Err(ApiError::bad_request(
             "no file in the form; send one or more as 'files'",
         ));
+    }
+    if let Some(doc) = form.files.iter().find(|doc| !convert::accepts(doc)) {
+        return Err(ApiError::bad_request(format!(
+            "'{}' is not a file type this service converts",
+            doc.name
+        )));
     }
     let to = Format::parse(form.field("to").unwrap_or("pdf"))?;
     let options = gotenberg::convert_options(&form)?;
