@@ -331,7 +331,7 @@ impl Docx<'_, '_> {
         in_link: bool,
     ) -> Result<Node, TemplateError> {
         let base = rpr_with(rpr, Vec::new());
-        Ok(Node::Raw(match item {
+        let markup = match item {
             Rich::Picture(picture) => format!(
                 "<w:r>{base}<w:drawing>{}</w:drawing></w:r>",
                 self.picture(picture)?
@@ -378,7 +378,11 @@ impl Docx<'_, '_> {
             Rich::Html(_) => {
                 return Err(self.fail("html must sit directly in a paragraph"));
             }
-        }))
+        };
+        // Charged as written: escaping and line breaks make this larger
+        // than the value it came from.
+        self.pkg.charge(markup.len())?;
+        Ok(Node::Raw(markup))
     }
 
     fn doc_pr(&mut self) -> u64 {
