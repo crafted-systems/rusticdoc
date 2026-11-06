@@ -63,6 +63,10 @@ pub struct Config {
     pub header_timeout: Duration,
     /// Connections served at once. More wait in the listen queue.
     pub max_connections: usize,
+    /// Connections served at once from one address. 0 is no limit.
+    pub max_connections_per_peer: usize,
+    /// How long a connection may stay blocked on its client.
+    pub stall_timeout: Duration,
     /// A proxy for webhooks and downloads, named on purpose. Pinning to the vetted
     /// addresses no longer applies through it.
     pub outbound_proxy: Option<String>,
@@ -245,6 +249,8 @@ impl Default for Config {
             render_workers: 4,
             header_timeout: Duration::from_secs(10),
             max_connections: 1024,
+            max_connections_per_peer: 0,
+            stall_timeout: Duration::from_secs(30),
             outbound_proxy: None,
             metrics_public: false,
             enable_docs: false,
@@ -343,6 +349,12 @@ impl Config {
         }
         if let Some(v) = get("MAX_CONNECTIONS").and_then(|v| v.parse().ok()) {
             c.max_connections = v;
+        }
+        if let Some(v) = get("MAX_CONNECTIONS_PER_PEER").and_then(|v| v.parse().ok()) {
+            c.max_connections_per_peer = v;
+        }
+        if let Some(v) = get("STALL_TIMEOUT").and_then(|v| parse_duration(&v)) {
+            c.stall_timeout = v;
         }
         c.outbound_proxy = get("OUTBOUND_PROXY");
         if let Some(v) = get("METRICS_PUBLIC") {
