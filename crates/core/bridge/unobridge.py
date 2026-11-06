@@ -7,7 +7,8 @@ it launches soffice with a private profile, connects over a named pipe,
 prints {"ready": true, "soffice_pid": N}, then serves one JSON request per
 stdin line
     {"id": 1, "input": "/w/in.docx", "output": "/w/out.pdf", "filter": "pdf",
-     "filter_options": {"SelectPdfVersion": 2}, "password": null, "landscape": false}
+     "filter_options": {"SelectPdfVersion": 2}, "password": null, "landscape": false,
+     "update_indexes": false}
 answering one JSON line each on stdout
     {"id": 1, "ok": true, "pages": 3, "ms": 412}  or  {"id": 1, "ok": false, "error": "..."}
 `filter` is an export filter name, or a bare target extension (pdf, docx, ...)
@@ -131,8 +132,8 @@ class Office:
                 "MacroExecutionMode": 0}
         if req.get("password"):
             load["Password"] = req["password"]
-        if req.get("landscape"):
-            load["ReadOnly"] = False  # page styles are edited before export
+        if req.get("landscape") or req.get("update_indexes"):
+            load["ReadOnly"] = False  # the document is edited before export
         url = uno.systemPathToFileUrl(os.path.abspath(req["input"]))
         doc = self.desktop.loadComponentFromURL(url, "_blank", 0, props(load))
         if doc is None:
@@ -147,6 +148,8 @@ class Office:
                 target = name
             if req.get("landscape"):
                 set_landscape(doc, app)
+            if req.get("update_indexes"):
+                update_indexes(doc)
             store = {"FilterName": target, "Overwrite": True}
             options = req.get("filter_options") or {}
             if options:
@@ -183,6 +186,19 @@ def set_landscape(doc, app):
             style.IsLandscape = True
     except Exception:
         pass
+
+
+def update_indexes(doc):
+    """Best effort: refresh tables of contents and other indexes, twice, since
+    the first pass can move what the second one lists."""
+    for _ in range(2):
+        try:
+            doc.refresh()
+            indexes = doc.getDocumentIndexes()
+            for i in range(indexes.getCount()):
+                indexes.getByIndex(i).update()
+        except Exception:  # not a document with indexes
+            return
 
 
 def page_count(doc, app):

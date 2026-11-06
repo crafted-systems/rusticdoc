@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -49,6 +50,95 @@ pub struct Config {
     pub log_format: String,
     /// A `tracing` filter such as `info` or `rusticdoc=debug`.
     pub log_level: String,
+    /// Gotenberg's settings, read from its variable names.
+    pub compat: CompatConfig,
+}
+
+/// One operation's engine list, from a `PDFENGINES_*_ENGINES` variable.
+pub const ENGINE_VARIABLES: &[&str] = &[
+    "PDFENGINES_MERGE_ENGINES",
+    "PDFENGINES_SPLIT_ENGINES",
+    "PDFENGINES_FLATTEN_ENGINES",
+    "PDFENGINES_CONVERT_ENGINES",
+    "PDFENGINES_OPTIMIZE_IMAGES_ENGINES",
+    "PDFENGINES_READ_METADATA_ENGINES",
+    "PDFENGINES_WRITE_METADATA_ENGINES",
+    "PDFENGINES_ENCRYPT_ENGINES",
+    "PDFENGINES_EMBED_ENGINES",
+    "PDFENGINES_EMBED_METADATA_ENGINES",
+    "PDFENGINES_READ_BOOKMARKS_ENGINES",
+    "PDFENGINES_WRITE_BOOKMARKS_ENGINES",
+    "PDFENGINES_WATERMARK_ENGINES",
+    "PDFENGINES_STAMP_ENGINES",
+    "PDFENGINES_ROTATE_ENGINES",
+    "PDFENGINES_FACTUR_X_ENGINES",
+];
+
+/// The behaviour of Gotenberg's routes and of the service around them.
+#[derive(Debug, Clone)]
+pub struct CompatConfig {
+    /// `LIBREOFFICE_DISABLE_ROUTES`: `/forms/libreoffice/*` answers 404.
+    pub libreoffice_disable_routes: bool,
+    /// `PDFENGINES_DISABLE_ROUTES`: `/forms/pdfengines/*` answers 404.
+    pub pdfengines_disable_routes: bool,
+    /// `API_ENABLE_DEBUG_ROUTE`: serve `/debug`.
+    pub enable_debug_route: bool,
+    /// `GOTENBERG_BUILD_DEBUG_DATA`: fill `/debug` in.
+    pub build_debug_data: bool,
+    /// The header that carries a request's correlation id.
+    pub trace_header: String,
+    /// Routes left out of the access log.
+    pub health_telemetry_off: bool,
+    pub root_telemetry_off: bool,
+    pub debug_telemetry_off: bool,
+    pub version_telemetry_off: bool,
+    pub prometheus_telemetry_off: bool,
+    /// `PROMETHEUS_DISABLE_COLLECT`: no Gotenberg metrics route at all.
+    pub prometheus_disabled: bool,
+    pub prometheus_namespace: String,
+    /// `/prometheus/metrics` by default.
+    pub prometheus_path: String,
+    /// `WEBHOOK_ENABLE_SYNC_MODE`: answer only after the delivery.
+    pub webhook_sync: bool,
+    /// `WEBHOOK_DISABLE`: `/forms/*` ignores the webhook headers.
+    pub webhook_disabled: bool,
+    /// `API_ENABLE_OIDC_AUTH` and friends.
+    pub oidc: Option<OidcConfig>,
+    /// Engine lists by variable name, as set. Unset lists use the defaults.
+    pub engine_orders: BTreeMap<String, Vec<String>>,
+}
+
+impl Default for CompatConfig {
+    fn default() -> Self {
+        Self {
+            libreoffice_disable_routes: false,
+            pdfengines_disable_routes: false,
+            enable_debug_route: false,
+            build_debug_data: true,
+            trace_header: "Gotenberg-Trace".into(),
+            health_telemetry_off: true,
+            root_telemetry_off: true,
+            debug_telemetry_off: true,
+            version_telemetry_off: true,
+            prometheus_telemetry_off: true,
+            prometheus_disabled: false,
+            prometheus_namespace: "gotenberg".into(),
+            prometheus_path: "/prometheus/metrics".into(),
+            webhook_sync: false,
+            webhook_disabled: false,
+            oidc: None,
+            engine_orders: BTreeMap::new(),
+        }
+    }
+}
+
+/// Bearer tokens accepted on the protected routes.
+#[derive(Debug, Clone, Default)]
+pub struct OidcConfig {
+    pub issuer: String,
+    pub audience: String,
+    /// Where the signing keys live. Discovered from the issuer when empty.
+    pub jwks_url: String,
 }
 
 impl Default for Config {
@@ -87,6 +177,7 @@ impl Default for Config {
             download_from_allow_private: false,
             log_format: "json".into(),
             log_level: "info".into(),
+            compat: CompatConfig::default(),
         }
     }
 }
@@ -246,6 +337,148 @@ impl Config {
         if let Some(v) = get("API_DOWNLOAD_FROM_MAX_ENTRIES").and_then(|v| v.parse().ok()) {
             self.download_from_max_entries = v;
         }
+        self.apply_compat_names();
+    }
+
+    fn apply_compat_names(&mut self) {
+        let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let on = |k: &str| get(k).and_then(|v| parse_go_bool(&v));
+        let compat = &mut self.compat;
+        if let Some(v) = on("LIBREOFFICE_DISABLE_ROUTES") {
+            compat.libreoffice_disable_routes = v;
+        }
+        if let Some(v) = on("PDFENGINES_DISABLE_ROUTES") {
+            compat.pdfengines_disable_routes = v;
+        }
+        if let Some(v) = on("API_ENABLE_DEBUG_ROUTE") {
+            compat.enable_debug_route = v;
+        }
+        if let Some(v) = on("GOTENBERG_BUILD_DEBUG_DATA") {
+            compat.build_debug_data = v;
+        }
+        if let Some(v) = get("API_TRACE_HEADER").or_else(|| get("API_CORRELATION_ID_HEADER")) {
+            compat.trace_header = v;
+        }
+        // The older `*_LOGGING` names still work; the newer ones win.
+        for (slot, names) in [
+            (
+                &mut compat.health_telemetry_off,
+                [
+                    "API_DISABLE_HEALTH_CHECK_LOGGING",
+                    "API_DISABLE_HEALTH_CHECK_ROUTE_TELEMETRY",
+                ],
+            ),
+            (
+                &mut compat.root_telemetry_off,
+                [
+                    "API_DISABLE_ROOT_ROUTE_LOGGING",
+                    "API_DISABLE_ROOT_ROUTE_TELEMETRY",
+                ],
+            ),
+            (
+                &mut compat.debug_telemetry_off,
+                [
+                    "API_DISABLE_DEBUG_ROUTE_LOGGING",
+                    "API_DISABLE_DEBUG_ROUTE_TELEMETRY",
+                ],
+            ),
+            (
+                &mut compat.version_telemetry_off,
+                [
+                    "API_DISABLE_VERSION_ROUTE_LOGGING",
+                    "API_DISABLE_VERSION_ROUTE_TELEMETRY",
+                ],
+            ),
+            (
+                &mut compat.prometheus_telemetry_off,
+                [
+                    "PROMETHEUS_DISABLE_ROUTE_LOGGING",
+                    "PROMETHEUS_DISABLE_ROUTE_TELEMETRY",
+                ],
+            ),
+        ] {
+            for name in names {
+                if let Some(v) = on(name) {
+                    *slot = v;
+                }
+            }
+        }
+        if let Some(v) = on("PROMETHEUS_DISABLE_COLLECT") {
+            compat.prometheus_disabled = v;
+        }
+        if let Some(v) = get("PROMETHEUS_NAMESPACE") {
+            compat.prometheus_namespace = v;
+        }
+        if let Some(v) = get("PROMETHEUS_METRICS_PATH") {
+            compat.prometheus_path = format!("/{}", v.trim_matches('/'));
+        }
+        if let Some(v) = on("WEBHOOK_ENABLE_SYNC_MODE") {
+            compat.webhook_sync = v;
+        }
+        if let Some(v) = on("WEBHOOK_DISABLE") {
+            compat.webhook_disabled = v;
+        }
+        if on("API_ENABLE_OIDC_AUTH") == Some(true) {
+            compat.oidc = Some(OidcConfig {
+                issuer: get("API_OIDC_ISSUER").unwrap_or_default(),
+                audience: get("API_OIDC_AUDIENCE").unwrap_or_default(),
+                jwks_url: get("API_OIDC_JWKS_URL").unwrap_or_default(),
+            });
+        }
+        for name in ENGINE_VARIABLES.iter().chain(["PDFENGINES_ENGINES"].iter()) {
+            if let Some(list) = get(name) {
+                compat.engine_orders.insert(
+                    (*name).to_string(),
+                    list.split(',')
+                        .map(|e| e.trim().to_string())
+                        .filter(|e| !e.is_empty())
+                        .collect(),
+                );
+            }
+        }
+    }
+
+    /// Settings the service refuses to start with. PDFtk and ExifTool are
+    /// not part of this build, so a list that names them cannot be honoured.
+    pub fn check(&self) -> Result<(), String> {
+        for (variable, engines) in &self.compat.engine_orders {
+            for engine in engines {
+                match engine.as_str() {
+                    "qpdf" | "pdfcpu" | "lopdf" | "qpdf-metadata" | "libreoffice-pdfengine" => {}
+                    "pdftk" | "exiftool" => {
+                        return Err(format!(
+                            "{variable} names '{engine}', which this build does not include; use qpdf, pdfcpu, lopdf or qpdf-metadata"
+                        ));
+                    }
+                    other => {
+                        return Err(format!("{variable} names an unknown engine '{other}'"));
+                    }
+                }
+            }
+        }
+        let trace_header = &self.compat.trace_header;
+        if trace_header.is_empty()
+            || !trace_header
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(format!("'{trace_header}' cannot be a header name"));
+        }
+        if let Some(oidc) = &self.compat.oidc
+            && (oidc.issuer.is_empty() || oidc.audience.is_empty())
+        {
+            return Err("API_ENABLE_OIDC_AUTH needs API_OIDC_ISSUER and API_OIDC_AUDIENCE".into());
+        }
+        Ok(())
+    }
+}
+
+/// Go's `strconv.ParseBool`, which Gotenberg's flags go through.
+pub fn parse_go_bool(s: &str) -> Option<bool> {
+    match s {
+        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
+        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
+        _ => None,
     }
 }
 
@@ -321,6 +554,38 @@ mod tests {
         assert_eq!(normalise_root("/"), "/");
         assert_eq!(normalise_root("foo"), "/foo/");
         assert_eq!(normalise_root("/foo/bar/"), "/foo/bar/");
+    }
+
+    #[test]
+    fn removed_engines_stop_the_service() {
+        let mut config = Config::default();
+        assert!(config.check().is_ok());
+        config
+            .compat
+            .engine_orders
+            .insert("PDFENGINES_MERGE_ENGINES".into(), vec!["qpdf".into()]);
+        assert!(config.check().is_ok());
+        for bad in ["pdftk", "exiftool", "nonsense"] {
+            config
+                .compat
+                .engine_orders
+                .insert("PDFENGINES_STAMP_ENGINES".into(), vec![bad.into()]);
+            assert!(config.check().unwrap_err().contains(bad));
+        }
+    }
+
+    #[test]
+    fn trace_headers_must_be_header_names() {
+        let mut config = Config::default();
+        config.compat.trace_header = "bad header".into();
+        assert!(config.check().is_err());
+    }
+
+    #[test]
+    fn go_booleans() {
+        assert_eq!(parse_go_bool("True"), Some(true));
+        assert_eq!(parse_go_bool("0"), Some(false));
+        assert_eq!(parse_go_bool("yes"), None);
     }
 
     #[test]

@@ -69,6 +69,52 @@ pub struct ConvertOptions {
     /// Fonts for this conversion alone, as (name, bytes). The job runs on
     /// a dedicated worker that is discarded afterwards, so it is slower.
     pub fonts: Vec<(String, Vec<u8>)>,
+    /// `UseTaggedPDF`, implied by `pdfua`.
+    pub generate_tagged_pdf: bool,
+    /// Refresh indexes and tables of contents before exporting.
+    pub update_indexes: bool,
+    /// `InitialView`: 0 page only, 1 bookmarks, 2 thumbnails.
+    pub initial_view: i32,
+    /// `InitialPage`, from 1.
+    pub initial_page: i32,
+    /// `Magnification`: 0 default, 1 fit page, 2 fit width, 3 fit visible, 4 zoom.
+    pub magnification: i32,
+    /// `Zoom`, in percent, with magnification 4.
+    pub zoom: i32,
+    /// `PageLayout`: 0 default, 1 single, 2 one column, 3 two columns.
+    pub page_layout: i32,
+    /// `FirstPageOnLeft`.
+    pub first_page_on_left: bool,
+    /// `ResizeWindowToInitialPage`.
+    pub resize_window_to_initial_page: bool,
+    /// `CenterWindow`.
+    pub center_window: bool,
+    /// `OpenInFullScreenMode`.
+    pub open_in_full_screen_mode: bool,
+    /// `DisplayPDFDocumentTitle`, on by default.
+    pub display_pdf_document_title: bool,
+    /// `HideViewerMenubar`.
+    pub hide_viewer_menubar: bool,
+    /// `HideViewerToolbar`.
+    pub hide_viewer_toolbar: bool,
+    /// `HideViewerWindowControls`.
+    pub hide_viewer_window_controls: bool,
+    /// `UseTransitionEffects`, on by default.
+    pub use_transition_effects: bool,
+    /// `OpenBookmarkLevels`: -1 for all, or 1 to 10.
+    pub open_bookmark_levels: i32,
+    /// `Watermark`: LibreOffice's own text watermark.
+    pub native_watermark_text: Option<String>,
+    /// `WatermarkColor`, an RGB integer, with `Watermark`.
+    pub native_watermark_color: Option<i32>,
+    /// `WatermarkFontHeight`, with `Watermark`.
+    pub native_watermark_font_height: Option<i32>,
+    /// `WatermarkRotateAngle`, in tenths of a degree, with `Watermark`.
+    pub native_watermark_rotate_angle: Option<i32>,
+    /// `WatermarkFontName`, with `Watermark`.
+    pub native_watermark_font_name: Option<String>,
+    /// `TiledWatermark`.
+    pub native_tiled_watermark_text: Option<String>,
 }
 
 impl Default for ConvertOptions {
@@ -99,6 +145,29 @@ impl Default for ConvertOptions {
             max_image_resolution: 300,
             password: None,
             fonts: Vec::new(),
+            generate_tagged_pdf: false,
+            update_indexes: false,
+            initial_view: 0,
+            initial_page: 1,
+            magnification: 0,
+            zoom: 100,
+            page_layout: 0,
+            first_page_on_left: false,
+            resize_window_to_initial_page: false,
+            center_window: false,
+            open_in_full_screen_mode: false,
+            display_pdf_document_title: true,
+            hide_viewer_menubar: false,
+            hide_viewer_toolbar: false,
+            hide_viewer_window_controls: false,
+            use_transition_effects: true,
+            open_bookmark_levels: -1,
+            native_watermark_text: None,
+            native_watermark_color: None,
+            native_watermark_font_height: None,
+            native_watermark_rotate_angle: None,
+            native_watermark_font_name: None,
+            native_tiled_watermark_text: None,
         }
     }
 }
@@ -149,6 +218,21 @@ impl ConvertOptions {
             m.insert(name.to_string(), Value::Bool(value));
         };
         flag("PDFUACompliance", self.pdfua);
+        flag("UseTaggedPDF", self.pdfua || self.generate_tagged_pdf);
+        flag("EnableTextAccessForAccessibilityTools", self.pdfua);
+        flag("EmbedStandardFonts", self.pdfua || self.pdfa.is_some());
+        flag("FirstPageOnLeft", self.first_page_on_left);
+        flag(
+            "ResizeWindowToInitialPage",
+            self.resize_window_to_initial_page,
+        );
+        flag("CenterWindow", self.center_window);
+        flag("OpenInFullScreenMode", self.open_in_full_screen_mode);
+        flag("DisplayPDFDocumentTitle", self.display_pdf_document_title);
+        flag("HideViewerMenubar", self.hide_viewer_menubar);
+        flag("HideViewerToolbar", self.hide_viewer_toolbar);
+        flag("HideViewerWindowControls", self.hide_viewer_window_controls);
+        flag("UseTransitionEffects", self.use_transition_effects);
         flag("ExportFormFields", self.export_form_fields);
         flag("AllowDuplicateFieldNames", self.allow_duplicate_field_names);
         flag("ExportBookmarks", self.export_bookmarks);
@@ -177,6 +261,33 @@ impl ConvertOptions {
             "MaxImageResolution".into(),
             Value::from(self.max_image_resolution),
         );
+        m.insert("InitialView".into(), Value::from(self.initial_view));
+        m.insert("InitialPage".into(), Value::from(self.initial_page));
+        m.insert("Magnification".into(), Value::from(self.magnification));
+        m.insert("Zoom".into(), Value::from(self.zoom));
+        m.insert("PageLayout".into(), Value::from(self.page_layout));
+        m.insert(
+            "OpenBookmarkLevels".into(),
+            Value::from(self.open_bookmark_levels),
+        );
+        if let Some(text) = &self.native_watermark_text {
+            m.insert("Watermark".into(), Value::from(text.as_str()));
+        }
+        if let Some(color) = self.native_watermark_color {
+            m.insert("WatermarkColor".into(), Value::from(color));
+        }
+        if let Some(height) = self.native_watermark_font_height {
+            m.insert("WatermarkFontHeight".into(), Value::from(height));
+        }
+        if let Some(angle) = self.native_watermark_rotate_angle {
+            m.insert("WatermarkRotateAngle".into(), Value::from(angle));
+        }
+        if let Some(name) = &self.native_watermark_font_name {
+            m.insert("WatermarkFontName".into(), Value::from(name.as_str()));
+        }
+        if let Some(text) = &self.native_tiled_watermark_text {
+            m.insert("TiledWatermark".into(), Value::from(text.as_str()));
+        }
         if let Some(level) = self.pdfa {
             m.insert(
                 "SelectPdfVersion".into(),

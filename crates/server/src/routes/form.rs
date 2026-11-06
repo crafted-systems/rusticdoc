@@ -122,7 +122,7 @@ impl Form {
             })?;
             let mut req = client.get(&target.url);
             for (k, v) in &entry.extra_http_headers {
-                if webhook::is_reserved_header(k) {
+                if webhook::is_reserved_header(k) || k.eq_ignore_ascii_case("content-disposition") {
                     return Err(ApiError::bad_request(format!(
                         "'downloadFrom' header '{k}' cannot be set"
                     )));
@@ -247,14 +247,47 @@ fn disposition_filename(value: &str) -> Option<String> {
     })
 }
 
-/// Keeps the base name only, so a client cannot steer a path.
-fn sanitize(name: &str) -> String {
-    let base = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+/// Keeps the base name only, without control characters, so a client cannot
+/// steer a path or a log line.
+pub fn sanitize(name: &str) -> String {
+    let base: String = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    let base = base.trim();
     if base.is_empty() || base == "." || base == ".." {
         "upload".to_string()
     } else {
         base.to_string()
     }
+}
+
+/// `attachment; filename="..."`, with the RFC 5987 form for a name a quoted
+/// string cannot carry.
+pub fn disposition(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
+        .collect();
+    if clean.is_ascii() {
+        return format!("attachment; filename=\"{clean}\"");
+    }
+    let plain: String = clean
+        .chars()
+        .map(|c| if c.is_ascii() { c } else { '_' })
+        .collect();
+    let mut encoded = String::new();
+    for byte in clean.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{encoded}")
 }
 
 /// The request id the middleware assigned.
@@ -281,10 +314,7 @@ pub fn download(out: Output) -> Response {
         header::CONTENT_TYPE,
         HeaderValue::from_static(out.content_type),
     );
-    if let Ok(v) = HeaderValue::from_str(&format!(
-        "attachment; filename=\"{}\"",
-        out.name.replace('"', "")
-    )) {
+    if let Ok(v) = HeaderValue::from_str(&disposition(&out.name)) {
         headers.insert(header::CONTENT_DISPOSITION, v);
     }
     if out.content_type == "application/pdf" {
@@ -356,6 +386,22 @@ mod tests {
         assert_eq!(sanitize("../../etc/passwd"), "passwd");
         assert_eq!(sanitize("C:\\Users\\x\\report.docx"), "report.docx");
         assert_eq!(sanitize(".."), "upload");
+    }
+
+    #[test]
+    fn control_characters_go_from_names() {
+        assert_eq!(sanitize("a\u{7}b\n.pdf"), "ab.pdf");
+        assert_eq!(sanitize("\u{1b}"), "upload");
+    }
+
+    #[test]
+    fn dispositions_carry_any_name() {
+        assert_eq!(disposition("a b.pdf"), "attachment; filename=\"a b.pdf\"");
+        assert_eq!(disposition("a\"b\n.pdf"), "attachment; filename=\"ab.pdf\"");
+        let unicode = disposition("ß.pdf");
+        assert!(unicode.contains("filename=\"_.pdf\""), "{unicode}");
+        assert!(unicode.contains("UTF-8''%C3%9F.pdf"), "{unicode}");
+        assert!(HeaderValue::from_str(&unicode).is_ok());
     }
 
     #[test]
