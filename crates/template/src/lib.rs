@@ -19,6 +19,7 @@ pub mod filters;
 mod formats;
 mod package;
 mod program;
+mod rich;
 mod sheet;
 mod xml;
 
@@ -69,6 +70,11 @@ impl Format {
             Format::Odt => "<text:line-break/>",
             _ => "",
         }
+    }
+
+    /// The environment a compiled template of this format renders with.
+    fn environment(self, settings: &Settings) -> minijinja::Environment<'static> {
+        filters::office_environment(settings, self.line_break(), rich::Mode::Render(self))
     }
 }
 
@@ -188,7 +194,7 @@ impl Compiled {
     /// the next render.
     pub fn set_settings(&mut self, settings: Settings) {
         self.settings = settings;
-        let mut env = filters::environment_for(&self.settings, self.format.line_break());
+        let mut env = self.format.environment(&self.settings);
         let _ = env.add_template_owned(TEMPLATE_NAME.to_string(), self.source.text.clone());
         self.env = env;
     }
@@ -201,8 +207,8 @@ impl Compiled {
     /// Fills the template. `data` is the root the expressions see; the
     /// caller puts request context under `ctx` before calling.
     pub fn render(&self, data: &serde_json::Value) -> Result<Vec<u8>> {
-        let rendered = self.render_text(&self.env, &self.source, data)?;
-        self.assemble(&rendered)
+        let (rendered, table) = self.render_text(&self.env, &self.source, data)?;
+        self.assemble(&rendered, table.as_deref())
     }
 
     fn render_text(
@@ -210,12 +216,15 @@ impl Compiled {
         env: &minijinja::Environment<'static>,
         source: &Source,
         data: &serde_json::Value,
-    ) -> Result<String> {
+    ) -> Result<(String, Option<Arc<rich::Table>>)> {
         let tmpl = env
             .get_template(TEMPLATE_NAME)
             .map_err(|e| self.map_error(&e, source))?;
-        tmpl.render(Value::from(minijinja::value::Serde(data)))
-            .map_err(|e| self.map_error(&e, source))
+        let captured = tmpl
+            .render_captured(Value::from(minijinja::value::Serde(data)))
+            .map_err(|e| self.map_error(&e, source))?;
+        let table = captured.state().get_extension::<Arc<rich::Table>>();
+        Ok((captured.output().to_string(), table.cloned()))
     }
 
     fn map_error(&self, e: &minijinja::Error, source: &Source) -> TemplateError {
@@ -231,7 +240,7 @@ impl Compiled {
     }
 
     /// Puts the rendered parts back into the container.
-    fn assemble(&self, rendered: &str) -> Result<Vec<u8>> {
+    fn assemble(&self, rendered: &str, table: Option<&rich::Table>) -> Result<Vec<u8>> {
         let outputs = program::split_output(rendered);
         if let Some((name, _)) = outputs
             .iter()
@@ -273,6 +282,10 @@ impl Compiled {
                     package::set(&mut entries, name, content.clone().into_bytes());
                 }
             }
+        }
+        if let Some(table) = table {
+            let names: Vec<&str> = outputs.iter().map(|(n, _)| n.as_str()).collect();
+            rich::apply(self.format, &mut entries, table, rendered, &names)?;
         }
         package::write(&entries)
     }
@@ -326,7 +339,9 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
         let has_shared_tag = format == Format::Xlsx
             && src.contains("t=\"s\"")
             && shared.iter().any(|s| !program::find_tags(s).is_empty());
-        if !src.contains('{') && !has_shared_tag {
+        // A slide the output does not list is a slide a loop dropped, so
+        // slides are compiled even when they hold no tag.
+        if !src.contains('{') && !has_shared_tag && format != Format::Pptx {
             continue;
         }
         let nodes = xml::parse(&src).map_err(|e| {
@@ -375,7 +390,7 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
         .collect();
 
     let source = program::emit(&parts, &tags, Mode::Render);
-    let mut env = filters::environment_for(&settings, format.line_break());
+    let mut env = format.environment(&settings);
     let mut renderable = true;
     if let Err(e) = env.add_template_owned(TEMPLATE_NAME.to_string(), source.text.clone()) {
         renderable = false;
@@ -459,14 +474,22 @@ pub fn validate(format: Format, bytes: &[u8], data: &serde_json::Value) -> Vec<D
     }
 
     // A strict render finds the first runtime problem precisely.
-    if let Err(e) = compiled.render_text(&compiled.env, &compiled.source, data) {
-        diags.push(to_diag(e));
+    match compiled.render_text(&compiled.env, &compiled.source, data) {
+        // Rich values are placed after rendering, so placing them is part of
+        // the test.
+        Ok((rendered, Some(table))) => {
+            if let Err(e) = compiled.assemble(&rendered, Some(&table)) {
+                diags.push(to_diag(e));
+            }
+        }
+        Ok(_) => {}
+        Err(e) => diags.push(to_diag(e)),
     }
 
     // A probing render finds every undefined value and loops over scalars.
     let records: Arc<Mutex<Vec<(usize, Severity, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let source = program::emit(&compiled.parts, &compiled.table, Mode::Probe);
-    let mut env = filters::environment_for(&compiled.settings, format.line_break());
+    let mut env = format.environment(&compiled.settings);
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
     let rec = records.clone();
     env.add_filter("__probe", move |v: Value, id: usize| {
@@ -536,7 +559,23 @@ fn dedup(diags: &mut Vec<Diagnostic>) {
 }
 
 /// The expression environment shared by every format: strict about
-/// undefined names, with a step budget and the document filters.
+/// undefined names, with a step budget and the document filters. This is the
+/// environment for plain text templates: the rich filters (`image`, `barcode`,
+/// `link`, `color`, `html`, `chart`, `pagebreak`) exist in it only to fail with
+/// a clear error, because text has no package to put their content in.
 pub fn environment() -> minijinja::Environment<'static> {
     filters::environment_for(&Settings::default(), "")
+}
+
+/// The expression environment with working rich filters for this format, for
+/// callers that want to check tags and their arguments outside a compiled
+/// template: a filter reports the same errors as in a real render, and its
+/// result prints as nothing. Only [`Compiled::render`] places rich content,
+/// and [`compile`] and [`validate`] already use the real filters themselves.
+pub fn rich_environment(format: Format) -> minijinja::Environment<'static> {
+    filters::office_environment(
+        &Settings::default(),
+        format.line_break(),
+        rich::Mode::Check(format),
+    )
 }

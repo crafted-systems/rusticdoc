@@ -64,11 +64,11 @@ pub fn inline_shared_strings(nodes: &mut [Node], shared: &[String]) {
     }
 }
 
-fn col_to_num(col: &str) -> u32 {
+pub fn col_to_num(col: &str) -> u32 {
     col.bytes().fold(0, |n, b| n * 26 + (b - b'A' + 1) as u32)
 }
 
-fn num_to_col(mut n: u32) -> String {
+pub fn num_to_col(mut n: u32) -> String {
     let mut s = Vec::new();
     while n > 0 {
         n -= 1;
@@ -80,7 +80,7 @@ fn num_to_col(mut n: u32) -> String {
 }
 
 /// Splits `B12` into `("B", 12)`.
-fn split_ref(r: &str) -> Option<(String, u32)> {
+pub fn split_ref(r: &str) -> Option<(String, u32)> {
     let p = r.find(|c: char| c.is_ascii_digit())?;
     Some((r[..p].to_string(), r[p..].parse().ok()?))
 }
