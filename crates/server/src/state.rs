@@ -16,6 +16,8 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub http: reqwest::Client,
     pub started: Instant,
+    /// What an outbound URL must get past.
+    pub url_policies: crate::webhook::UrlPolicies,
     /// Places for webhook jobs.
     pub jobs: crate::jobs::JobLimiter,
     /// Verifies bearer tokens when OpenID Connect is on.
@@ -55,6 +57,8 @@ impl AppState {
             .clone()
             .map(|oidc| Arc::new(crate::oidc::Verifier::new(oidc)));
         Self {
+            url_policies: crate::webhook::UrlPolicies::from_config(&config)
+                .expect("patterns are checked before the service starts"),
             jobs: crate::jobs::JobLimiter::new(
                 config.max_async_jobs,
                 config.max_async_jobs_per_caller,

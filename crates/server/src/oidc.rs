@@ -12,9 +12,9 @@
 
 use std::time::{Duration, Instant};
 
-use jsonwebtoken::jwk::{Jwk, JwkSet};
+use jsonwebtoken::jwk::{Jwk, JwkSet, PublicKeyUse};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
-use rusticdoc_core::config::OidcConfig;
+use rusticdoc_core::config::{OidcConfig, is_secure_url};
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 
@@ -64,8 +64,9 @@ impl Verifier {
         }
     }
 
-    /// Checks a token. The reason it fails is for the log, not the client.
-    pub async fn verify(&self, token: &str) -> Result<(), String> {
+    /// Checks a token and returns its subject, or the token's own digest when it
+    /// names none. The reason it fails is for the log, not the client.
+    pub async fn verify(&self, token: &str) -> Result<String, String> {
         let header = decode_header(token).map_err(|e| e.to_string())?;
         if !matches!(header.alg, Algorithm::RS256 | Algorithm::ES256) {
             return Err(format!("algorithm {:?} is not accepted", header.alg));
@@ -76,9 +77,14 @@ impl Verifier {
         validation.set_audience(&[&self.config.audience]);
         validation.set_issuer(&[&self.config.issuer]);
         validation.set_required_spec_claims(&["exp", "iss", "aud"]);
-        decode::<serde_json::Value>(token, &key, &validation)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        validation.validate_nbf = true;
+        let claims = decode::<serde_json::Value>(token, &key, &validation)
+            .map_err(|e| e.to_string())?
+            .claims;
+        Ok(match claims.get("sub").and_then(|sub| sub.as_str()) {
+            Some(subject) => subject.to_string(),
+            None => token.to_string(),
+        })
     }
 
     /// The key a token names, fetching the set when needed and allowed.
@@ -133,6 +139,11 @@ impl Verifier {
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, String> {
+        // Keys fetched in the clear could be anyone's. A discovery document
+        // names its own key set URL, so this is checked here as well as at start.
+        if !is_secure_url(url) {
+            return Err(format!("'{url}' is not https, or http on a loopback host"));
+        }
         let mut res = self.http.get(url).send().await.map_err(|e| e.to_string())?;
         if !res.status().is_success() {
             return Err(format!("status {} from the provider", res.status()));
@@ -148,10 +159,18 @@ impl Verifier {
     }
 }
 
+/// The signing key a token names. A key marked for anything but signatures is
+/// not one; a key with no `use` may be, as the JOSE specifications leave it out.
 fn find_key(set: &JwkSet, kid: Option<&str>) -> Option<Jwk> {
+    let signs = |jwk: &&Jwk| {
+        matches!(
+            jwk.common.public_key_use,
+            None | Some(PublicKeyUse::Signature)
+        )
+    };
     match kid {
-        Some(kid) => set.find(kid).cloned(),
-        None => set.keys.first().cloned(),
+        Some(kid) => set.find(kid).filter(signs).cloned(),
+        None => set.keys.iter().find(signs).cloned(),
     }
 }
 
@@ -319,6 +338,67 @@ Yfo0bRmNQhP1WmUPaBpWQtZEqxmMlQWeJzftl7o5GzJCX1oJHh9aL/HF
         let verifier = verifier_at(format!("http://127.0.0.1:{port}/jwks"));
         let err = verifier.verify(&unknown(0)).await.unwrap_err();
         assert!(err.contains("too large"), "{err}");
+    }
+
+    fn token_with(claims: serde_json::Value) -> String {
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some("one".into());
+        encode(
+            &header,
+            &claims,
+            &EncodingKey::from_ec_pem(PRIVATE_KEY.as_bytes()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    #[tokio::test]
+    async fn a_token_not_yet_valid_is_refused_and_a_subject_comes_back() {
+        let (url, _) = provider(StatusCode::OK, JWKS).await;
+        let verifier = verifier_at(url);
+        let claims = |nbf: i64| {
+            serde_json::json!({
+                "aud": "rusticdoc", "iss": "https://issuer.test/",
+                "exp": now() + 600, "nbf": nbf, "sub": "ada",
+            })
+        };
+        let early = token_with(claims(now() + 500));
+        assert!(verifier.verify(&early).await.is_err());
+        assert_eq!(
+            verifier.verify(&token_with(claims(now()))).await.unwrap(),
+            "ada"
+        );
+    }
+
+    #[tokio::test]
+    async fn keys_marked_for_encryption_do_not_verify() {
+        const ENC: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","kid":"one","use":"enc",
+            "x":"rHUPkDidcOAeJeyFCFLovs1jNpuGY2H6NG0ZjUIT9Vo",
+            "y":"ZQ9oGlZC1kSrGYyVBZ4nN-2XujkbMkJfWgkeH1ov8cU"}]}"#;
+        let (url, _) = provider(StatusCode::OK, ENC).await;
+        let verifier = verifier_at(url);
+        assert!(
+            verifier
+                .verify(&token("rusticdoc", "https://issuer.test/", 600))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn keys_are_not_fetched_in_the_clear_from_elsewhere() {
+        let verifier = verifier_at("http://keys.example.com/jwks".into());
+        let err = verifier
+            .verify(&token("rusticdoc", "https://issuer.test/", 600))
+            .await
+            .unwrap_err();
+        assert!(err.contains("loopback"), "{err}");
     }
 
     #[tokio::test]

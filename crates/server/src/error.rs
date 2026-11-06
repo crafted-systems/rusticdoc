@@ -63,18 +63,49 @@ impl From<axum::extract::multipart::MultipartError> for ApiError {
     }
 }
 
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
+/// The text a client reads for an error. Engine failures stay out of it, with
+/// their stderr and temp paths: they go to the log, and the client gets the
+/// status's name.
+pub fn public_text(status: StatusCode, kind: &str, message: &str) -> String {
+    match kind {
+        "timeout" => {
+            "The request exceeded the time limit. Increase it with --api-timeout, or reduce the workload.".to_string()
+        }
+        "reported" => message.to_string(),
+        _ if status.is_server_error() || status == StatusCode::UNAUTHORIZED => status
+            .canonical_reason()
+            .unwrap_or("Error")
+            .to_string(),
+        _ => message.to_string(),
+    }
+}
+
+impl ApiError {
+    /// Logs the whole error, inside the request's span.
+    pub fn log(&self) {
         if self.status.is_server_error() {
             tracing::error!(error = self.body.error, message = %self.body.message, "request failed");
         } else {
             tracing::warn!(error = self.body.error, message = %self.body.message, "request rejected");
         }
+    }
+
+    /// The same error with only what a client may read.
+    pub fn public(self) -> Self {
+        let message = public_text(self.status, self.body.error, &self.body.message);
+        Self::new(self.status, self.body.error, message)
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        self.log();
+        let this = self.public();
         let text = ErrorText {
-            kind: self.body.error,
-            message: self.body.message.clone(),
+            kind: this.body.error,
+            message: this.body.message.clone(),
         };
-        let mut res = (self.status, Json(self.body)).into_response();
+        let mut res = (this.status, Json(this.body)).into_response();
         res.extensions_mut().insert(text);
         res
     }

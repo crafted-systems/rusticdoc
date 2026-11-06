@@ -1,10 +1,11 @@
 use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
 
+use crate::auth;
 use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
@@ -35,8 +36,14 @@ pub struct Version {
 
 /// Liveness.
 #[utoipa::path(get, path = "/health", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
-pub async fn health(State(state): State<AppState>) -> Response {
-    let mut res = Json(status(&state).await).into_response();
+pub async fn health(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    // Pool numbers and engines are for callers the service knows.
+    let open = !state.config.auth_configured() || auth::identify(&state, &headers).await.is_some();
+    let mut res = if open {
+        Json(status(&state).await).into_response()
+    } else {
+        Json(serde_json::json!({ "status": "up" })).into_response()
+    };
     // Gotenberg's clients match on this exact value.
     res.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -73,8 +80,8 @@ async fn status(state: &AppState) -> Health {
 /// Readiness: the same as liveness today, kept separate so a warm-up can be
 /// added without clients changing.
 #[utoipa::path(get, path = "/ready", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
-pub async fn ready(state: State<AppState>) -> Response {
-    health(state).await
+pub async fn ready(state: State<AppState>, headers: HeaderMap) -> Response {
+    health(state, headers).await
 }
 
 /// Engine versions and paths.

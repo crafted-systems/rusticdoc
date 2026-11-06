@@ -155,6 +155,13 @@ fn flags(config: &Config) -> BTreeMap<&'static str, String> {
             None => default.to_string(),
         }
     };
+    let patterns = |set: &[String], default: &str| -> String {
+        if set.is_empty() {
+            default.to_string()
+        } else {
+            format!("[{}]", set.join(","))
+        }
+    };
     let private = |allowed: bool| if allowed { "false" } else { "true" }.to_string();
     let (bind_ip, port) = config
         .bind
@@ -193,8 +200,14 @@ fn flags(config: &Config) -> BTreeMap<&'static str, String> {
             "api-disable-version-route-telemetry",
             compat.version_telemetry_off.to_string(),
         ),
-        ("api-download-from-allow-list", "[.+]".to_string()),
-        ("api-download-from-deny-list", "[]".to_string()),
+        (
+            "api-download-from-allow-list",
+            patterns(&compat.download_allow_list, "[.+]"),
+        ),
+        (
+            "api-download-from-deny-list",
+            patterns(&compat.download_deny_list, "[]"),
+        ),
         (
             "api-download-from-deny-private-ips",
             private(config.download_from_allow_private),
@@ -289,17 +302,29 @@ fn flags(config: &Config) -> BTreeMap<&'static str, String> {
         ),
         ("prometheus-namespace", compat.prometheus_namespace.clone()),
         ("prometheus-metrics-path", compat.prometheus_path.clone()),
-        ("webhook-allow-list", "[.+]".to_string()),
+        (
+            "webhook-allow-list",
+            patterns(&compat.webhook_allow_list, "[.+]"),
+        ),
         ("webhook-client-timeout", "30s".to_string()),
-        ("webhook-deny-list", "[]".to_string()),
+        (
+            "webhook-deny-list",
+            patterns(&compat.webhook_deny_list, "[]"),
+        ),
         (
             "webhook-deny-private-ips",
             private(config.webhook_allow_private),
         ),
         ("webhook-deny-public-ips", "false".to_string()),
         ("webhook-disable", compat.webhook_disabled.to_string()),
-        ("webhook-error-allow-list", "[]".to_string()),
-        ("webhook-error-deny-list", "[]".to_string()),
+        (
+            "webhook-error-allow-list",
+            patterns(&compat.webhook_error_allow_list, "[]"),
+        ),
+        (
+            "webhook-error-deny-list",
+            patterns(&compat.webhook_error_deny_list, "[]"),
+        ),
         (
             "webhook-max-retry",
             config.webhook_attempts.saturating_sub(1).to_string(),

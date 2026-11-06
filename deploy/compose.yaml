@@ -11,16 +11,25 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
+    # On this machine only unless told otherwise: with no keys set, the service
+    # answers anyone who can reach it.
     ports:
-      - "${RUSTICDOC_PORT:-3000}:3000"
+      - "${RUSTICDOC_PUBLISH_HOST:-127.0.0.1}:${RUSTICDOC_PORT:-3000}:3000"
+    # Room for the service, two LibreOffice workers and four render workers at
+    # their limit of 1 GiB each (RUSTICDOC_RENDER_WORKERS, RUSTICDOC_RENDER_MEMORY).
+    # Raise it with those. Render workers are the first the kernel takes.
+    mem_limit: ${RUSTICDOC_MEM_LIMIT:-6g}
+    pids_limit: ${RUSTICDOC_PIDS_LIMIT:-512}
     environment:
       RUSTICDOC_API_TIMEOUT: ${RUSTICDOC_API_TIMEOUT:-60s}
       RUSTICDOC_WORKERS: ${RUSTICDOC_WORKERS:-2}
       RUSTICDOC_API_KEYS: ${RUSTICDOC_API_KEYS:-}
       RUSTICDOC_WEBHOOK_SECRET: ${RUSTICDOC_WEBHOOK_SECRET:-}
       RUSTICDOC_LOG_LEVEL: ${RUSTICDOC_LOG_LEVEL:-info}
+      RUSTICDOC_RENDER_MEMORY: ${RUSTICDOC_RENDER_MEMORY:-1GB}
+      RUSTICDOC_RENDER_WORKERS: ${RUSTICDOC_RENDER_WORKERS:-4}
     volumes:
       - ${RUSTICDOC_FONTS:-./fonts}:/fonts:ro
     tmpfs:
-      - /tmp
-      - /home/rusticdoc:uid=1001,gid=1001
+      - /tmp:size=${RUSTICDOC_TMP_SIZE:-2g}
+      - /home/rusticdoc:uid=1001,gid=1001,size=${RUSTICDOC_HOME_SIZE:-512m}

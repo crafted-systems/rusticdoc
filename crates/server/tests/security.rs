@@ -378,3 +378,237 @@ async fn a_multi_file_conversion_may_outlast_the_request_limit() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 }
+
+// ---------------------------------------------------------------- F7, F15
+
+fn get(path: &str) -> Request<Body> {
+    Request::get(path).body(Body::empty()).unwrap()
+}
+
+#[test]
+fn every_start_warns_about_what_is_open() {
+    let warnings = rusticdoc_server::startup_warnings(&config());
+    assert!(warnings.iter().any(|w| w.contains("RUSTICDOC_API_KEYS")));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("RUSTICDOC_WEBHOOK_SECRET"))
+    );
+    let mut c = config();
+    c.api_keys = vec!["k".into()];
+    c.webhook_secret = Some("s".into());
+    assert!(rusticdoc_server::startup_warnings(&c).is_empty());
+    let mut c = config();
+    c.compat.webhook_disabled = true;
+    let warnings = rusticdoc_server::startup_warnings(&c);
+    assert!(!warnings.iter().any(|w| w.contains("WEBHOOK_SECRET")));
+}
+
+fn guarded() -> Config {
+    let mut c = config();
+    c.api_keys = vec!["secret".into()];
+    c
+}
+
+#[tokio::test]
+async fn with_credentials_configured_little_is_open() {
+    for path in ["/metrics", "/v1/version", "/version", "/v1/fonts"] {
+        let res = service(guarded()).oneshot(get(path)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
+    let keyed = |path: &str| {
+        Request::get(path)
+            .header("x-api-key", "secret")
+            .body(Body::empty())
+            .unwrap()
+    };
+    for path in ["/metrics", "/v1/version"] {
+        let res = service(guarded()).oneshot(keyed(path)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+    }
+    let mut c = guarded();
+    c.metrics_public = true;
+    let res = service(c).oneshot(get("/metrics")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn health_shows_only_its_status_without_credentials() {
+    for path in ["/health", "/ready"] {
+        let res = service(guarded()).oneshot(get(path)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers().get("x-rusticdoc-version").is_none());
+        assert_eq!(text(res).await, r#"{"status":"up"}"#, "{path}");
+    }
+    let keyed = Request::get("/health")
+        .header("x-api-key", "secret")
+        .body(Body::empty())
+        .unwrap();
+    let res = service(guarded()).oneshot(keyed).await.unwrap();
+    assert!(text(res).await.contains("engines"));
+    // With no credentials configured, health stays as Gotenberg's clients expect.
+    let res = service(config()).oneshot(get("/health")).await.unwrap();
+    let body = text(res).await;
+    assert!(
+        body.contains("details") && body.contains("libreoffice"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn docs_are_opt_in_and_limited_when_on() {
+    let res = service(config()).oneshot(get("/docs")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let mut c = config();
+    c.enable_docs = true;
+    let res = service(c).oneshot(get("/docs")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let policy = res.headers().get("content-security-policy").unwrap();
+    assert!(policy.to_str().unwrap().contains("default-src 'none'"));
+}
+
+#[tokio::test]
+async fn every_response_says_nosniff() {
+    for (path, c) in [
+        ("/health", config()),
+        ("/version", guarded()),
+        ("/nowhere", config()),
+    ] {
+        let res = service(c).oneshot(get(path)).await.unwrap();
+        assert_eq!(
+            res.headers().get("x-content-type-options").unwrap(),
+            "nosniff",
+            "{path}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------- F8
+
+#[tokio::test]
+async fn disabling_routes_holds_on_v1_too() {
+    let pdf = fixtures::pages(1);
+    let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
+    let mut c = config();
+    c.compat.pdfengines_disable_routes = true;
+    for path in ["/v1/pdf/merge", "/v1/pdf/flatten", "/v1/pdf/forms/fill"] {
+        let res = service(c.clone())
+            .oneshot(post(path, &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    let mut c = config();
+    c.compat.libreoffice_disable_routes = true;
+    for path in ["/v1/convert", "/v1/pdf/convert"] {
+        let res = service(c.clone())
+            .oneshot(post(path, &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    // A conversion step in a render refuses as well.
+    let parts: [Part<'_>; 2] = [
+        ("template", Some("t.txt"), b"x"),
+        ("steps", None, b"convert"),
+    ];
+    let res = service(c)
+        .oneshot(post("/v1/render", &parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn webhook_disable_holds_on_v1_too() {
+    let receiver = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = receiver.local_addr().unwrap().port();
+    let mut c = config();
+    c.compat.webhook_disabled = true;
+    c.webhook_allow_private = true;
+    let parts: [Part<'_>; 1] = [("template", Some("t.txt"), b"hello")];
+    let res = service(c)
+        .oneshot(hooked("/v1/render", &parts, port, "k"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "the headers are ignored");
+    assert_eq!(text(res).await, "hello");
+    let accepted = tokio::time::timeout(Duration::from_millis(300), receiver.accept()).await;
+    assert!(accepted.is_err(), "nothing was delivered");
+}
+
+#[tokio::test]
+async fn url_lists_hold_on_every_route() {
+    let parts: [Part<'_>; 1] = [("template", Some("t.txt"), b"hello")];
+    let mut c = config();
+    c.webhook_allow_private = true;
+    c.compat.webhook_deny_list = vec!["/d$".into()];
+    let res = service(c.clone())
+        .oneshot(hooked("/v1/render", &parts, 1, "k"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let pdf = fixtures::pages(1);
+    let files: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
+    let res = service(c)
+        .oneshot(hooked("/forms/pdfengines/flatten", &files, 1, "k"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let mut c = config();
+    c.download_from_allow_private = true;
+    c.compat.download_deny_list = vec!["evil".into()];
+    let parts: [Part<'_>; 1] = [(
+        "downloadFrom",
+        None,
+        br#"[{"url":"http://127.0.0.1:1/evil"}]"#,
+    )];
+    let res = service(c)
+        .oneshot(post("/v1/pdf/merge", &parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn debug_prints_the_real_lists() {
+    let mut c = config();
+    c.compat.enable_debug_route = true;
+    let res = service(c.clone()).oneshot(get("/debug")).await.unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(body["flags"]["webhook-allow-list"], "[.+]");
+    c.compat.webhook_allow_list = vec!["^https://a".into()];
+    c.compat.download_deny_list = vec!["b".into()];
+    let res = service(c).oneshot(get("/debug")).await.unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(body["flags"]["webhook-allow-list"], "[^https://a]");
+    assert_eq!(body["flags"]["api-download-from-deny-list"], "[b]");
+}
+
+#[tokio::test]
+async fn engine_failures_stay_out_of_v1_responses() {
+    use rusticdoc_core::Error;
+    use rusticdoc_server::error::ApiError;
+    let stderr = "exit 2: qpdf: /tmp/rusticdoc-AbC/in.pdf: unable to find trailer";
+    let cases = [
+        Error::Engine {
+            engine: "qpdf",
+            message: stderr.into(),
+        },
+        Error::Io(std::io::Error::other(
+            "/tmp/rusticdoc-AbC/out.pdf: no space",
+        )),
+    ];
+    for error in cases {
+        let res = axum::response::IntoResponse::into_response(ApiError::from(error));
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = text(res).await;
+        assert!(!body.contains("/tmp") && !body.contains("qpdf"), "{body}");
+        assert!(body.contains("Internal Server Error"), "{body}");
+    }
+    // A client's own mistake still says what it was.
+    let res = axum::response::IntoResponse::into_response(ApiError::from(Error::InvalidRequest(
+        "bad page".into(),
+    )));
+    assert!(text(res).await.contains("bad page"));
+}

@@ -23,6 +23,8 @@ pub struct Engines {
     pub pdf: MultiEngine,
     /// PDF operations for Gotenberg's routes, in the order they use.
     pub forms: MultiEngine,
+    /// `LIBREOFFICE_DISABLE_ROUTES`: conversion steps on `/v1/*` refuse too.
+    pub office_routes_disabled: bool,
 }
 
 impl Engines {
@@ -42,6 +44,7 @@ impl Engines {
                 config.pdfcpu_bin.clone(),
                 &config.compat.engine_orders,
             ),
+            office_routes_disabled: config.compat.libreoffice_disable_routes,
         }
     }
 
@@ -55,6 +58,11 @@ impl Engines {
     }
 
     fn libreoffice(&self) -> Result<&LibreOffice> {
+        if self.office_routes_disabled {
+            return Err(Error::EngineUnavailable(
+                "LibreOffice conversion is disabled on this service".into(),
+            ));
+        }
         self.libreoffice.as_ref().ok_or_else(|| {
             Error::EngineUnavailable(
                 "LibreOffice is not configured; set RUSTICDOC_LIBREOFFICE_BIN".into(),
