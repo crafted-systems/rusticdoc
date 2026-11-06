@@ -243,7 +243,7 @@ pub fn write_token(out: &mut minijinja::Output, token: &Token, mode: Mode) -> Re
 }
 
 /// Most rich values one render may print.
-const MAX_PLACEMENTS: usize = 10_000;
+const MAX_PLACEMENTS: usize = 100_000;
 
 fn marker(id: usize) -> String {
     let mut s = String::new();
