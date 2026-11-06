@@ -140,6 +140,7 @@ impl Chart {
         }
         let mut categories = Vec::with_capacity(rows);
         let mut label_bytes = 0;
+        let mut escaped_bytes = 0;
         let mut series: Vec<Series> = options
             .y
             .iter()
@@ -167,7 +168,9 @@ impl Chart {
                     "the category labels are longer than {MAX_LABEL_BYTES} bytes"
                 ));
             }
-            if label_bytes.saturating_mul(series.len().max(1)) > MAX_GENERATED_LABEL_BYTES {
+            // Measured escaped, since `&` costs five bytes once written.
+            escaped_bytes += esc(&label).len();
+            if escaped_bytes.saturating_mul(series.len().max(1)) > MAX_GENERATED_LABEL_BYTES {
                 return Err(format!(
                     "the category labels repeated for {} series would pass {MAX_GENERATED_LABEL_BYTES} bytes",
                     series.len()

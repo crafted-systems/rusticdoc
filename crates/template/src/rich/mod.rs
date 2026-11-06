@@ -18,7 +18,7 @@ mod xlsx;
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use minijinja::value::{Kwargs, Object, ObjectRepr, Rest, Value};
@@ -98,6 +98,9 @@ pub struct Table {
     inner: Mutex<Inner>,
     /// How many times a rich value was printed or turned into a string.
     consumed: AtomicUsize,
+    /// Bytes of retained text behind every print: printing one long value
+    /// in a loop places it each time.
+    printed_bytes: AtomicU64,
 }
 
 #[derive(Debug, Default)]
@@ -191,6 +194,16 @@ impl Table {
         Ok(())
     }
 
+    /// The text one print of a value puts in the document.
+    fn print_cost(&self, id: usize) -> u64 {
+        match self.lock().items.get(id).map(|r| &**r) {
+            Some(Rich::Link { url, text }) => (url.len() + text.len()) as u64,
+            Some(Rich::Color { text, .. }) => text.len() as u64,
+            Some(Rich::Chart(chart)) => chart.text_bytes() as u64,
+            _ => 0,
+        }
+    }
+
     fn items(&self) -> Vec<Arc<Rich>> {
         self.lock().items.clone()
     }
@@ -237,6 +250,13 @@ pub fn write_token(out: &mut minijinja::Output, token: &Token, mode: Mode) -> Re
                 format!("rich values were printed more than {MAX_PLACEMENTS} times"),
             ));
         }
+        let cost = token.table.print_cost(token.id) + PLACEMENT_OVERHEAD;
+        if token.table.printed_bytes.fetch_add(cost, Ordering::Relaxed) + cost > MAX_TOTAL_BYTES {
+            return Err(Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                too_much_text(),
+            ));
+        }
         out.write_str(&marker(token.id)).map_err(Error::from)?;
     }
     Ok(())
@@ -244,6 +264,8 @@ pub fn write_token(out: &mut minijinja::Output, token: &Token, mode: Mode) -> Re
 
 /// Most rich values one render may print.
 const MAX_PLACEMENTS: usize = 100_000;
+/// The markup around a placement, charged per print beside its text.
+const PLACEMENT_OVERHEAD: u64 = 512;
 
 fn marker(id: usize) -> String {
     let mut s = String::new();
