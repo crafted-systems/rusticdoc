@@ -8,6 +8,8 @@
 //! die. The interface is the one the per-process version had.
 
 mod options;
+pub mod protection;
+mod sheets;
 mod worker;
 
 use std::fmt;
@@ -91,6 +93,8 @@ struct Inner {
     generation: AtomicU64,
     started: AtomicU64,
     restarts: AtomicU64,
+    /// Conversions waiting for a worker.
+    queued: AtomicU64,
 }
 
 /// The seed directory: the bridge script and the initialised profile.
@@ -145,6 +149,7 @@ impl LibreOffice {
                 generation: AtomicU64::new(0),
                 started: AtomicU64::new(0),
                 restarts: AtomicU64::new(0),
+                queued: AtomicU64::new(0),
             }),
         }
     }
@@ -191,6 +196,14 @@ impl LibreOffice {
         self.warm_up().await
     }
 
+    /// Conversions waiting for a worker, and workers replaced so far.
+    pub fn stats(&self) -> (u64, u64) {
+        (
+            self.inner.queued.load(Ordering::Relaxed),
+            self.inner.restarts.load(Ordering::Relaxed),
+        )
+    }
+
     /// The `soffice` binary.
     pub fn bin(&self) -> &PathBuf {
         &self.inner.settings.bin
@@ -228,13 +241,11 @@ impl LibreOffice {
             )));
         }
         options.validate()?;
-        let permit = self
-            .inner
-            .slots
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| Error::EngineUnavailable("LibreOffice pool closed".into()))?;
+        self.inner.queued.fetch_add(1, Ordering::Relaxed);
+        let permit = self.inner.slots.clone().acquire_owned().await;
+        self.inner.queued.fetch_sub(1, Ordering::Relaxed);
+        let permit =
+            permit.map_err(|_| Error::EngineUnavailable("LibreOffice pool closed".into()))?;
         let dedicated = !options.fonts.is_empty();
         let mut worker = if dedicated {
             self.start_dedicated(&options.fonts).await?
@@ -246,7 +257,18 @@ impl LibreOffice {
         tokio::fs::create_dir(&job_dir).await?;
         let input = job_dir.join(format!("input.{ext}"));
         let output = job_dir.join(format!("output.{}", to.extension()));
-        tokio::fs::write(&input, &doc.bytes).await?;
+        if options.single_page_sheets {
+            let (bytes, ext) = (doc.bytes.clone(), ext.clone());
+            let bytes = tokio::task::spawn_blocking(move || sheets::reset_scroll(bytes, &ext))
+                .await
+                .map_err(|e| Error::Engine {
+                    engine: "libreoffice",
+                    message: e.to_string(),
+                })?;
+            tokio::fs::write(&input, &bytes).await?;
+        } else {
+            tokio::fs::write(&input, &doc.bytes).await?;
+        }
         let empty = Map::new();
         let req = Request {
             id: worker.next_request_id(),
@@ -260,6 +282,7 @@ impl LibreOffice {
             },
             password: options.password.as_deref(),
             landscape: options.landscape,
+            update_indexes: options.update_indexes,
         };
         let started = Instant::now();
         let result = match tokio::time::timeout(timeout, worker.call(&req)).await {
@@ -565,6 +588,6 @@ mod tests {
     #[test]
     fn bridge_script_is_embedded() {
         assert!(BRIDGE.contains("--socket-path"));
-        assert!(BRIDGE.lines().count() <= 250, "keep the bridge small");
+        assert!(BRIDGE.lines().count() <= 275, "keep the bridge small");
     }
 }

@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use super::qpdf::workdir;
 use super::{
-    Bookmark, Overlay, OverlayKind, PdfEngine, Position, Rotation, SplitMode, page_count, pages,
-    require_pdf,
+    Bookmark, EncryptOptions, Overlay, OverlayKind, PdfEngine, Position, Rotation, SplitMode,
+    page_count, pages, require_pdf,
 };
 use crate::error::{Error, Result};
 use crate::job::Document;
@@ -208,6 +208,47 @@ fn from_pdfcpu(bookmarks: Vec<PdfcpuBookmark>) -> Vec<Bookmark> {
 impl PdfEngine for PdfcpuEngine {
     fn name(&self) -> &'static str {
         ENGINE
+    }
+
+    /// `pdfcpu encrypt --mode aes --upw U --opw O --perm all|none in out`.
+    ///
+    /// pdfcpu only takes passwords as arguments, so they are visible to this
+    /// user's other processes while it runs. qpdf comes first in the order
+    /// unless a deployment names pdfcpu for encryption on its own. Arguments
+    /// are not logged either way (see [`process::run`]).
+    async fn encrypt_with(
+        &self,
+        doc: &Document,
+        options: &EncryptOptions,
+        timeout: Duration,
+    ) -> Result<Document> {
+        let owner = if options.owner_password.is_empty() {
+            options.user_password.clone()
+        } else {
+            options.owner_password.clone()
+        };
+        if owner.is_empty() {
+            return Err(Error::InvalidRequest(
+                "encrypt needs an owner password".into(),
+            ));
+        }
+        let perm = if options.permissions.restricted() {
+            "none"
+        } else {
+            "all"
+        };
+        let args: Vec<String> = vec![
+            "encrypt".into(),
+            "--mode".into(),
+            "aes".into(),
+            "--upw".into(),
+            options.user_password.clone(),
+            "--opw".into(),
+            owner,
+            "--perm".into(),
+            perm.into(),
+        ];
+        self.transform(doc, &args, timeout).await
     }
 
     /// `pdfcpu merge --bookmark-mode preserve out.pdf a.pdf b.pdf`

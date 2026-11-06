@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
@@ -35,12 +35,22 @@ pub struct Version {
 
 /// Liveness.
 #[utoipa::path(get, path = "/health", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
-pub async fn health(State(state): State<AppState>) -> Json<Health> {
+pub async fn health(State(state): State<AppState>) -> Response {
+    let mut res = Json(status(&state).await).into_response();
+    // Gotenberg's clients match on this exact value.
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    res
+}
+
+async fn status(state: &AppState) -> Health {
     let pool = match &state.engines.libreoffice {
         Some(lo) => lo.health().await,
         None => serde_json::Value::Null,
     };
-    Json(Health {
+    Health {
         status: "up",
         uptime_seconds: state.started.elapsed().as_secs(),
         engines: EngineStatus {
@@ -57,18 +67,18 @@ pub async fn health(State(state): State<AppState>) -> Json<Health> {
                 "pool": pool,
             }
         }),
-    })
+    }
 }
 
 /// Readiness: the same as liveness today, kept separate so a warm-up can be
 /// added without clients changing.
 #[utoipa::path(get, path = "/ready", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
-pub async fn ready(state: State<AppState>) -> Json<Health> {
+pub async fn ready(state: State<AppState>) -> Response {
     health(state).await
 }
 
 /// Engine versions and paths.
-#[utoipa::path(get, path = "/version", tag = "service", responses((status = 200, description = "Version and engines", body = Version)))]
+#[utoipa::path(get, path = "/v1/version", tag = "service", responses((status = 200, description = "Version and engines", body = Version)))]
 pub async fn version(State(state): State<AppState>) -> Json<Version> {
     Json(Version {
         version: rusticdoc_core::VERSION,
