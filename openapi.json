@@ -1544,7 +1544,7 @@
         ]
       }
     },
-    "/version": {
+    "/v1/version": {
       "get": {
         "tags": [
           "service"

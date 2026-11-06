@@ -132,6 +132,17 @@ async fn gotenberg_headers(
         .and_then(|t| HeaderValue::from_str(&t).ok())
     {
         req.headers_mut().insert(REQUEST_ID, trace);
+    } else if let Some(given) = req.headers().get(&REQUEST_ID) {
+        // An id the client chose is held to the same rules as a trace.
+        let clean = given
+            .to_str()
+            .ok()
+            .and_then(telemetry::sanitize_correlation_id)
+            .and_then(|id| HeaderValue::from_str(&id).ok());
+        match clean {
+            Some(id) => req.headers_mut().insert(REQUEST_ID, id),
+            None => req.headers_mut().remove(&REQUEST_ID),
+        };
     }
     let on_v1 = req.uri().path().contains("/v1/");
     let wanted = req
