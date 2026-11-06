@@ -2,6 +2,9 @@
 
 use crate::error::{Error, Result};
 
+/// Most ranges one selection may list, checked before any range is expanded.
+pub const MAX_RANGES: usize = 1_000;
+
 /// An inclusive, 1-based page range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageRange {
@@ -45,6 +48,11 @@ pub fn parse(spec: &str, count: u32) -> Result<Vec<PageRange>> {
         if part.is_empty() {
             continue;
         }
+        if ranges.len() >= MAX_RANGES {
+            return Err(Error::InvalidRequest(format!(
+                "a page selection may list at most {MAX_RANGES} ranges"
+            )));
+        }
         let (first, last) = match part.split_once('-') {
             Some((a, b)) => {
                 let first = if a.trim().is_empty() {
@@ -79,13 +87,36 @@ pub fn parse(spec: &str, count: u32) -> Result<Vec<PageRange>> {
 
 /// The selected pages, sorted and without duplicates.
 pub fn select(spec: &str, count: u32) -> Result<Vec<u32>> {
-    let mut pages: Vec<u32> = parse(spec, count)?
+    let ranges = parse(spec, count)?;
+    Ok(merged(&ranges)
+        .into_iter()
+        .flat_map(|range| range.first..=range.last)
+        .collect())
+}
+
+/// The ranges sorted and joined where they overlap, so expanding them can never
+/// yield more than the document's pages, however often a selection repeats.
+pub fn merged(ranges: &[PageRange]) -> Vec<PageRange> {
+    let mut sorted = ranges.to_vec();
+    sorted.sort_unstable_by_key(|range| range.first);
+    let mut out: Vec<PageRange> = Vec::with_capacity(sorted.len());
+    for range in sorted {
+        match out.last_mut() {
+            Some(last) if range.first <= last.last.saturating_add(1) => {
+                last.last = last.last.max(range.last);
+            }
+            _ => out.push(range),
+        }
+    }
+    out
+}
+
+/// How many distinct pages the ranges select.
+pub fn distinct(ranges: &[PageRange]) -> u64 {
+    merged(ranges)
         .iter()
-        .flat_map(PageRange::pages)
-        .collect();
-    pages.sort_unstable();
-    pages.dedup();
-    Ok(pages)
+        .map(|range| u64::from(range.last - range.first) + 1)
+        .sum()
 }
 
 /// Splits `1..=count` into consecutive ranges of `span` pages.
@@ -131,5 +162,23 @@ mod tests {
             assert!(parse(bad, 5).is_err(), "{bad}");
         }
         assert!(intervals(0, 5).is_err());
+    }
+
+    #[test]
+    fn a_repeated_selection_expands_to_the_document_and_no_further() {
+        // Expanded range by range this would be eight gigabytes.
+        let spec = "1-,".repeat(MAX_RANGES);
+        let started = std::time::Instant::now();
+        let pages = select(&spec, 2_000_000).unwrap();
+        assert_eq!(pages.len(), 2_000_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(select("5,1-2,2-3,7", 9).unwrap(), vec![1, 2, 3, 5, 7]);
+        assert_eq!(distinct(&parse("1-3,2-4,9", 9).unwrap()), 5);
+    }
+
+    #[test]
+    fn too_many_ranges_are_refused_before_expansion() {
+        let spec = "1-,".repeat(MAX_RANGES + 1);
+        assert!(matches!(parse(&spec, 3), Err(Error::InvalidRequest(_))));
     }
 }

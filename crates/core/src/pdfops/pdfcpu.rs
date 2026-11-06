@@ -20,6 +20,7 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::job::Document;
+use crate::limits::{MAX_OUTPUT_BYTES, charge_output};
 use crate::process;
 
 const ENGINE: &str = "pdfcpu";
@@ -290,6 +291,7 @@ impl PdfEngine for PdfcpuEngine {
         let stem = doc.with_extension("");
         let stem = stem.trim_end_matches('.').to_string();
         let mut outputs = Vec::new();
+        let mut produced = 0;
         match mode {
             SplitMode::Pages { ranges, unify } => {
                 let ranges = pages::parse(ranges, count)?;
@@ -302,6 +304,7 @@ impl PdfEngine for PdfcpuEngine {
                     let part = self
                         .transform(doc, &["trim".into(), "-p".into(), spec.clone()], timeout)
                         .await?;
+                    charge_output(&mut produced, part.bytes.len(), MAX_OUTPUT_BYTES)?;
                     outputs.push(Document::new(
                         format!("{stem}-{}.pdf", spec.replace(',', "_")),
                         part.bytes,
@@ -341,9 +344,11 @@ impl PdfEngine for PdfcpuEngine {
                     });
                 }
                 for ((_, part), range) in parts.iter().zip(&ranges) {
+                    let bytes = tokio::fs::read(part).await?;
+                    charge_output(&mut produced, bytes.len(), MAX_OUTPUT_BYTES)?;
                     outputs.push(Document::new(
                         format!("{stem}-{}.pdf", range.label()),
-                        tokio::fs::read(part).await?,
+                        bytes,
                     ));
                 }
             }

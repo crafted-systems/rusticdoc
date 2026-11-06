@@ -41,6 +41,8 @@ pub struct Config {
     pub batch_limit: usize,
     /// Most bytes a text template, `batchName` or PDF form tag may write.
     pub max_render_bytes: usize,
+    /// Most file parts one form may hold.
+    pub max_form_parts: usize,
     /// Refuse the `downloadFrom` form field entirely.
     pub download_from_disabled: bool,
     /// Most URLs one request may fetch through `downloadFrom`.
@@ -175,6 +177,7 @@ impl Default for Config {
             cors_origins: Vec::new(),
             batch_limit: 100,
             max_render_bytes: crate::limits::DEFAULT_MAX_RENDER_BYTES,
+            max_form_parts: crate::limits::DEFAULT_MAX_FORM_PARTS,
             download_from_disabled: false,
             download_from_max_entries: 10,
             download_from_allow_private: false,
@@ -266,6 +269,9 @@ impl Config {
         }
         if let Some(v) = get("MAX_RENDER_BYTES").and_then(|v| parse_bytes(&v)) {
             c.max_render_bytes = v;
+        }
+        if let Some(v) = get("MAX_FORM_PARTS").and_then(|v| v.parse().ok()) {
+            c.max_form_parts = v;
         }
         if let Some(v) = get("CORS_ORIGINS") {
             c.cors_origins = v

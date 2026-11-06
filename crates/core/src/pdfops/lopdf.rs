@@ -20,6 +20,7 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::job::Document;
+use crate::limits::{MAX_OUTPUT_BYTES, charge_output};
 
 pub(super) const ENGINE: &str = "lopdf";
 
@@ -575,6 +576,16 @@ fn shift_pages(bookmarks: &mut [Bookmark], offset: u32) {
 // ------------------------------------------------------------------ split
 
 pub(super) fn split(doc: &Document, mode: &SplitMode, deadline: Deadline) -> Result<Vec<Document>> {
+    split_within(doc, mode, deadline, MAX_OUTPUT_BYTES)
+}
+
+/// As [`split`], producing at most `budget` bytes in all.
+pub(super) fn split_within(
+    doc: &Document,
+    mode: &SplitMode,
+    deadline: Deadline,
+    budget: usize,
+) -> Result<Vec<Document>> {
     let pdf = load(doc)?;
     let count = pdf.get_pages().len() as u32;
     let too_many = |parts: usize| {
@@ -621,6 +632,7 @@ pub(super) fn split(doc: &Document, mode: &SplitMode, deadline: Deadline) -> Res
     let stem = doc.with_extension("");
     let stem = stem.trim_end_matches('.');
     let mut outputs = Vec::with_capacity(parts.len());
+    let mut produced = 0;
     for (label, ranges) in parts {
         deadline.check()?;
         // `index[old page]` is the page's number in the part, 0 when dropped.
@@ -652,7 +664,9 @@ pub(super) fn split(doc: &Document, mode: &SplitMode, deadline: Deadline) -> Res
         part.prune_objects();
         part.renumber_objects();
         deadline.check()?;
-        outputs.push(save(part, format!("{stem}-{label}.pdf"))?);
+        let saved = save(part, format!("{stem}-{label}.pdf"))?;
+        charge_output(&mut produced, saved.bytes.len(), budget)?;
+        outputs.push(saved);
     }
     Ok(outputs)
 }
@@ -1422,4 +1436,34 @@ fn facturx(pdf: &mut Pdf, xml: Vec<u8>, profile: FacturxProfile, deadline: Deadl
         xmp::set_text(&mut packet, "pdfaid:conformance", Some("B"));
     }
     set_xmp_packet(pdf, packet)
+}
+
+#[cfg(test)]
+mod output_budget {
+    use super::*;
+
+    /// A one-page PDF that keeps `size` bytes in an attachment every part inherits.
+    fn heavy(size: usize) -> Document {
+        let mut pdf = load(&Document::new("a.pdf", super::super::fixtures::pages(1))).unwrap();
+        let mut stream = Stream::new(Dictionary::new(), vec![7u8; size]);
+        stream.allows_compression = false;
+        let id = pdf.add_object(stream);
+        pdf.catalog_mut().unwrap().set("Heavy", id);
+        save(pdf, "a.pdf".into()).unwrap()
+    }
+
+    #[test]
+    fn a_split_stops_at_its_byte_budget() {
+        let doc = heavy(1 << 20);
+        let mode = SplitMode::Pages {
+            ranges: vec!["1-"; 50].join(","),
+            unify: false,
+        };
+        let deadline = super::super::fixtures::far();
+        let err = split_within(&doc, &mode, deadline, 8 << 20).unwrap_err();
+        assert!(err.to_string().contains("limit"), "{err}");
+        // The same split with room for it goes through.
+        let parts = split_within(&doc, &mode, deadline, 128 << 20).unwrap();
+        assert_eq!(parts.len(), 50);
+    }
 }

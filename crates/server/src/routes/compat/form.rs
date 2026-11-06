@@ -198,19 +198,22 @@ impl FormData {
 /// same file name would otherwise overwrite each other in a ZIP.
 fn unique_names(files: &mut [Document]) -> HashMap<String, String> {
     let mut seen: HashSet<String> = HashSet::new();
+    // The next suffix per name, so a name sent many times costs one try each
+    // rather than a walk over every suffix it has had.
+    let mut next: HashMap<String, u64> = HashMap::new();
     let mut received = HashMap::new();
     for doc in files {
         if seen.insert(doc.name.clone()) {
             continue;
         }
+        let i = next.entry(doc.name.clone()).or_insert(2);
         let (stem, ext) = split_extension(&doc.name);
-        let mut i = 2;
         let unique = loop {
             let candidate = format!("{stem} ({i}){ext}");
+            *i += 1;
             if seen.insert(candidate.clone()) {
                 break candidate;
             }
-            i += 1;
         };
         received.insert(unique.clone(), std::mem::replace(&mut doc.name, unique));
     }
@@ -880,6 +883,31 @@ mod tests {
         let f = FormData::new(raw);
         let names: Vec<String> = f.paths(&[".pdf"]).into_iter().map(|d| d.name).collect();
         assert_eq!(names, ["page_2.pdf", "page_2 (2).pdf", "page_10.pdf"]);
+    }
+
+    #[test]
+    fn many_files_of_one_name_cost_one_try_each() {
+        // A walk over every earlier suffix would take minutes here.
+        let mut raw = Form::default();
+        for _ in 0..100_000 {
+            raw.files.push(Document::new("a.pdf", Vec::new()));
+        }
+        let started = std::time::Instant::now();
+        let f = FormData::new(raw);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(f.form.files[1].name, "a (2).pdf");
+        assert_eq!(f.form.files[99_999].name, "a (100000).pdf");
+    }
+
+    #[test]
+    fn a_name_already_taken_is_passed_over() {
+        let mut raw = Form::default();
+        for name in ["a.pdf", "a (2).pdf", "a.pdf", "a.pdf"] {
+            raw.files.push(Document::new(name, Vec::new()));
+        }
+        let f = FormData::new(raw);
+        let names: Vec<&str> = f.form.files.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["a.pdf", "a (2).pdf", "a (3).pdf", "a (4).pdf"]);
     }
 
     #[test]

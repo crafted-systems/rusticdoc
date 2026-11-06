@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use super::{EncryptOptions, PdfEngine, Rotation, SplitMode, page_count, pages, require_pdf};
 use crate::error::{Error, Result};
 use crate::job::Document;
+use crate::limits::{MAX_OUTPUT_BYTES, charge_output};
 use crate::process;
 
 const ENGINE: &str = "qpdf";
@@ -129,6 +130,7 @@ impl PdfEngine for QpdfEngine {
         let stem = doc.with_extension("");
         let stem = stem.trim_end_matches('.').to_string();
         let mut outputs = Vec::new();
+        let mut produced = 0;
         match mode {
             SplitMode::Pages { ranges, unify } => {
                 let ranges = pages::parse(ranges, count)?;
@@ -149,10 +151,9 @@ impl PdfEngine for QpdfEngine {
                     ];
                     self.run(dir.path(), &args, timeout).await?;
                     let label = spec.replace(',', "_");
-                    outputs.push(Document::new(
-                        format!("{stem}-{label}.pdf"),
-                        tokio::fs::read(&out).await?,
-                    ));
+                    let bytes = tokio::fs::read(&out).await?;
+                    charge_output(&mut produced, bytes.len(), MAX_OUTPUT_BYTES)?;
+                    outputs.push(Document::new(format!("{stem}-{label}.pdf"), bytes));
                 }
             }
             SplitMode::Intervals { span } => {
@@ -180,9 +181,11 @@ impl PdfEngine for QpdfEngine {
                     });
                 }
                 for ((_, part), range) in parts.iter().zip(&ranges) {
+                    let bytes = tokio::fs::read(part).await?;
+                    charge_output(&mut produced, bytes.len(), MAX_OUTPUT_BYTES)?;
                     outputs.push(Document::new(
                         format!("{stem}-{}.pdf", range.label()),
-                        tokio::fs::read(part).await?,
+                        bytes,
                     ));
                 }
             }
