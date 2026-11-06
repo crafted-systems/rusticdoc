@@ -111,25 +111,27 @@ fn recall_cache() -> &'static Mutex<Cache<Document>> {
     RECALL.get_or_init(|| Mutex::new(Cache::default()))
 }
 
-/// Keeps a template so a later request can send only its hash.
-pub fn remember(doc: &Document) {
+/// Keeps a template so a later request from the same `scope` can send only
+/// its hash. A scope is the caller's identity, so one tenant cannot recall
+/// another's template by learning its hash.
+pub fn remember(scope: &str, doc: &Document) {
     if doc.bytes.len() > RECALL_MAX_BYTES {
         return;
     }
-    let key = template_hash(&doc.bytes);
+    let key = format!("{scope}/{}", template_hash(&doc.bytes));
     recall_cache()
         .lock()
         .expect("template cache")
         .put(key, Arc::new(doc.clone()));
 }
 
-/// A remembered template by the hex SHA-256 of its bytes.
-pub fn recall(hash: &str) -> Option<Document> {
-    let hash = hash.trim().to_ascii_lowercase();
+/// A template this `scope` remembered, by the hex SHA-256 of its bytes.
+pub fn recall(scope: &str, hash: &str) -> Option<Document> {
+    let key = format!("{scope}/{}", hash.trim().to_ascii_lowercase());
     recall_cache()
         .lock()
         .expect("template cache")
-        .get(&hash)
+        .get(&key)
         .map(|d| d.as_ref().clone())
 }
 
