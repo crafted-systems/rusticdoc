@@ -7,3 +7,4 @@ Cargo.lock.orig
 /sdk/typescript/
 /sdk/python/
 /sdk/go/
+/.upstream/
