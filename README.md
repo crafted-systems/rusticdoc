@@ -2,17 +2,19 @@
 
 A document engine in Rust: fills Office and PDF templates from JSON with `{{customer.name}}` tags, converts the result with LibreOffice, and finishes it with PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously; the OpenAPI description feeds the SDKs.
 
-It takes templating from Carbone and conversion and PDF handling from Gotenberg, covers documents only (no HTML or URL rendering), and ships as one hardened image with no Node, Java, Python or Chromium. The design is in [rusticdoc: a document engine in Rust](https://claude.ai/artifact/4ZBnc3L7jTH1ov5TKH8qs3); the plan in [docs/ROADMAP.md](docs/ROADMAP.md).
+It takes templating from Carbone and conversion and PDF handling from Gotenberg, and covers documents only: no HTML or URL rendering through a browser. It ships as one hardened image with no Node, Java or Chromium. LibreOffice does the conversions, driven through a small Python bridge, and qpdf and pdfcpu back the PDF stage alongside the built-in engine. The design is in [rusticdoc: a document engine in Rust](https://claude.ai/artifact/4ZBnc3L7jTH1ov5TKH8qs3), and what is done against it is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
-**Status: phase 0.** The service, CLI, webhooks, metrics and image work. Text templates (`.txt`, `.md`, `.html`, `.csv`, `.xml`, `.json`, `.svg`) render today; Office files are converted as they are; DOCX templating is phase 1. PDF operations so far: merge and encrypt.
+**Status: pre-release.** The templating, PDF, service and CLI work described here is built and tested. Generated Office files have only been opened in LibreOffice so far, not in Microsoft Office. [Known limits](#known-limits) lists this and the rest of what has not been checked.
 
 ## Run it
 
 ```bash
 docker build -t rusticdoc .
 docker run -d --name rusticdoc --read-only --cap-drop ALL --security-opt no-new-privileges \
-  --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 -p 3000:3000 rusticdoc
+  --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 -p 127.0.0.1:3000:3000 rusticdoc
 ```
+
+`deploy/compose.yaml` does the same with memory, process and temporary file limits. With no credentials configured the service answers anyone and warns at every start, so set `RUSTICDOC_API_KEYS` before exposing it. See [Security](#security).
 
 Fill a template and get a PDF:
 
@@ -30,14 +32,42 @@ curl -F files=@report.docx http://localhost:3000/forms/libreoffice/convert -o re
 
 The API description is at `http://localhost:3000/openapi.json`. `RUSTICDOC_ENABLE_DOCS=true` also serves an interactive page at `/docs`; it is off by default because it loads a third-party script from a CDN on the API's origin, under a Content-Security-Policy that limits what the page can do.
 
+## Templates
+
+Tags are `{{ customer.name }}`, with `{% for %}`, `{% if %}` and filters. They work in `.docx`, `.odt`, `.xlsx`, `.ods`, `.pptx`, `.odp`, in PDF form fields and annotations, and in text formats (`.txt`, `.md`, `.html`, `.csv`, `.xml`, `.json`, `.svg`). A tag split across runs by Word still works, and a loop around a table row or a paragraph repeats that row or paragraph.
+
+Text filters include `currency("KES")`, `date` and `t` for translations. These filters put richer content in Office templates:
+
+| Filter | Example | Puts in |
+|---|---|---|
+| `image` | `{{ logo \| image(width=120) }}` | A picture from base64 or a data URL. Never fetched from a URL |
+| `barcode` | `{{ sku \| barcode("code128") }}` | `qr`, `code128`, `code39`, `ean13` or `ean8` |
+| `link` | `{{ url \| link("Open") }}` | A hyperlink |
+| `color` | `{{ name \| color("#c00") }}` | Coloured text, with `background=` too |
+| `html` | `{{ body \| html }}` | A safe subset of HTML as native formatting |
+| `chart` | `{{ rows \| chart(type="bar", x="month", y=["sales"]) }}` | A native `bar`, `column`, `line` or `pie` chart, in DOCX, PPTX and XLSX |
+| `pagebreak` | `{{ "" \| pagebreak }}` | A page break |
+
+`POST /v1/templates/validate` or `rusticdoc validate` lists every problem in a template against sample data, with where it sits.
+
+## PDF forms
+
+Send a `.pdf` to `/v1/render` as the template, or use `/v1/pdf/forms/fill`, to fill its form fields from `data`, including tags written in field values and annotations. `flatten=true` makes the result uneditable. `/v1/pdf/forms/fields` lists what a PDF has, and `/v1/pdf/overlay` lays one PDF over another. `/v1/pdf/sign` places a signature image; it is not a cryptographic signature.
+
+## Fonts
+
+Mount fonts at `/fonts` and call `POST /v1/fonts/reload`: no rebuild, no restart, and running conversions finish on the old set. `GET /v1/fonts` lists what is available. A request can also carry its own `fonts` files, which apply to that request only. The `x-fonts-used` response header names the fonts a converted document used.
+
 ## API
 
 | Endpoint | Does |
 |---|---|
-| `POST /v1/render` | Template plus `data` JSON, then `steps` in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge` |
+| `POST /v1/render` | Template plus `data` JSON, then `steps` in order: `convert`, `pdfa`, `pdfua`, `merge`, `split`, `watermark`, `stamp`, `rotate`, `flatten`, `optimize`, `bookmarks`, `metadata`, `embed`, `factur-x`, `encrypt` |
+| `POST /v1/render/batch` | One template, once per element of an array in the data, returned as a ZIP |
 | `POST /v1/templates/validate` | Reports template errors against sample data without converting |
 | `POST /v1/convert` | Convert one or more files; several come back as a ZIP, or one PDF with `merge=true` |
-| `POST /v1/pdf/*` | PDF operations |
+| `POST /v1/pdf/*` | `merge`, `split`, `rotate`, `flatten`, `optimize`, `encrypt`, `convert`, `watermark`, `stamp`, `overlay`, `sign`, `embed`, `factur-x`, `metadata/read`, `metadata/write`, `bookmarks/read`, `bookmarks/write`, `forms/fields`, `forms/fill` |
+| `GET /v1/fonts`, `POST /v1/fonts/reload` | List the fonts and pick up new ones |
 | `POST /forms/libreoffice/convert`, `POST /forms/pdfengines/*` | Gotenberg's API, see below |
 | `GET /health`, `/ready`, `/openapi.json` | Open. With credentials configured, `/health` and `/ready` show only the status to a caller without them |
 | `GET /metrics` | Open with no credentials configured; otherwise behind them unless `RUSTICDOC_METRICS_PUBLIC=true` |
@@ -49,7 +79,7 @@ Every response carries `x-request-id`; the same id is in the logs and in webhook
 
 ### Gotenberg's paths
 
-`/forms/*` answers as Gotenberg 8.39 does, so its clients move over by changing the image: every route takes many PDFs and answers with one file or a ZIP, with its file naming (`<input>.pdf` from LibreOffice, zero-based `<stem>_<n>.pdf` split parts, `Gotenberg-Output-Filename`), and errors are `text/plain` with its exact strings instead of JSON. `Gotenberg-Trace` is the correlation id in the logs and on webhook deliveries, and `Gotenberg-Version` is on every authenticated response. Gotenberg's webhook headers work on these routes, including `Gotenberg-Webhook-Events-Url`; a delivery cannot set `Content-Disposition` or the other headers the service owns, which is the one known difference in behaviour. `test/parity.sh` replays Gotenberg's own scenarios against both.
+`/forms/*` answers as Gotenberg 8.39 does, so its clients move over by changing the image: every route takes many PDFs and answers with one file or a ZIP, with its file naming (`<input>.pdf` from LibreOffice, zero-based `<stem>_<n>.pdf` split parts, `Gotenberg-Output-Filename`), and errors are `text/plain` with its exact strings instead of JSON. `Gotenberg-Trace` is the correlation id in the logs and on webhook deliveries, and `Gotenberg-Version` is on every authenticated response. Gotenberg's webhook headers work on these routes, including `Gotenberg-Webhook-Events-Url`. `test/parity.sh` replays Gotenberg's own scenarios against both. Scenarios that select PDFtk or expect Chromium in the output differ, because this build has neither; naming `pdftk` stops the service from starting rather than failing a request later.
 
 ### Webhooks
 
@@ -70,10 +100,14 @@ The same binary works without the service:
 ```bash
 rusticdoc render letter.txt --data data.json --steps convert -o letter.pdf
 rusticdoc convert report.docx deck.pptx --merge -o bundle.pdf
+rusticdoc validate invoice.docx --data sample.json
+rusticdoc pdf merge a.pdf b.pdf -o both.pdf
 rusticdoc engines          # which engines this machine has
 rusticdoc openapi          # the API description
 rusticdoc serve            # the service
 ```
+
+`rusticdoc pdf` has `merge`, `split`, `rotate`, `flatten`, `optimize`, `encrypt`, `metadata`, `bookmarks`, `embed`, `watermark`, `stamp`, `sign`, `facturx`, `fields`, `fill` and `overlay`; `--help` shows each one's options. The CLI renders templates in its own process, because there the template is yours. `serve` isolates them.
 
 ## Configuration
 
@@ -122,7 +156,7 @@ Gotenberg's variable names are accepted as well. These decide how its routes beh
 | `API_ENABLE_DEBUG_ROUTE`, `GOTENBERG_BUILD_DEBUG_DATA` | `false`, `true` | `/debug` and what it lists |
 | `API_TRACE_HEADER`, `API_CORRELATION_ID_HEADER` | `Gotenberg-Trace` | The correlation id header |
 | `API_DISABLE_HEALTH_CHECK_ROUTE_TELEMETRY`, `API_DISABLE_ROOT_ROUTE_TELEMETRY`, `API_DISABLE_DEBUG_ROUTE_TELEMETRY`, `API_DISABLE_VERSION_ROUTE_TELEMETRY`, `PROMETHEUS_DISABLE_ROUTE_TELEMETRY` (or `*_LOGGING`) | `true` | Leave the route out of the access log |
-| `PROMETHEUS_NAMESPACE`, `PROMETHEUS_METRICS_PATH`, `PROMETHEUS_DISABLE_COLLECT` | `gotenberg`, `/prometheus/metrics`, `false` | Gotenberg's metrics route; `/metrics` is separate and always on |
+| `PROMETHEUS_NAMESPACE`, `PROMETHEUS_METRICS_PATH`, `PROMETHEUS_DISABLE_COLLECT` | `gotenberg`, `/prometheus/metrics`, `false` | Gotenberg's metrics route; `/metrics` is separate |
 | `WEBHOOK_ENABLE_SYNC_MODE`, `WEBHOOK_DISABLE` | `false` | Answer only after the delivery; ignore the webhook headers, on every route |
 | `WEBHOOK_ALLOW_LIST`, `WEBHOOK_DENY_LIST`, `WEBHOOK_ERROR_ALLOW_LIST`, `WEBHOOK_ERROR_DENY_LIST`, `API_DOWNLOAD_FROM_ALLOW_LIST`, `API_DOWNLOAD_FROM_DENY_LIST` | none | Comma-separated regular expressions, matched against the URL with its host normalised, on every route. Deny wins. A refusal is `403`. They add to the refusal of private addresses and never relax it, and an invalid one stops the service from starting |
 | `API_ENABLE_OIDC_AUTH`, `API_OIDC_ISSUER`, `API_OIDC_AUDIENCE`, `API_OIDC_JWKS_URL` | off | Accept bearer tokens from an OpenID Connect provider on the protected routes |
@@ -141,7 +175,43 @@ make openapi   # refresh openapi.json; CI checks it is current
 make docker    # the image
 ```
 
-The workspace has three crates: `rusticdoc-core` (pipeline, template stage, engines), `rusticdoc-server` (axum API, auth, webhooks, metrics, OpenAPI) and `rusticdoc` (the CLI and `serve`). Tests run without LibreOffice or qpdf; conversion is exercised by the CI image smoke test.
+The workspace has four crates: `rusticdoc-template` (the template engine), `rusticdoc-core` (pipeline, engines, the render worker), `rusticdoc-server` (axum API, auth, webhooks, metrics, OpenAPI) and `rusticdoc` (the CLI and `serve`). Tests run without LibreOffice or qpdf; conversion is exercised by the CI image smoke test.
+
+Three checks need Docker and the image:
+
+```bash
+make parity      # Gotenberg's own scenarios against this image and the official one
+make outbound    # crafted documents must reach no network and read no local file
+make isolation   # secrets stay out of worker processes, and /proc stays closed
+```
+
+## Security
+
+What the service does by itself:
+
+- **Client templates run in a worker process.** It has no environment, limits on memory, CPU, files and core dumps, and is the kernel's first choice under memory pressure. A template that exhausts its limit gets `413`, and the service keeps running. The memory limit relies on Linux; on macOS it has not been shown to hold.
+- **Input is capped before it expands.** That covers request bodies held in memory, form parts, page ranges, split output, stamp text, template output, PDF tags and webhook jobs. The settings are in the table above.
+- **Secrets stay out of children.** LibreOffice, Python, qpdf and pdfcpu start from an empty environment, and on Linux the service closes its own `/proc` entries to them. Do not run the image with `docker run --init`, which puts a process back at PID 1 that exposes the environment. Anyone who can `docker exec` into the container can still read it.
+- **Documents cannot reach out.** LibreOffice is configured to fetch nothing, and its web and CMIS content providers are removed from the image. `make outbound` checks this across formats.
+- **Webhooks and `downloadFrom` refuse private addresses**, pin the address they checked, and follow no redirects.
+
+What it leaves to you:
+
+- Set `RUSTICDOC_API_KEYS`, basic auth or OpenID Connect, and `RUSTICDOC_WEBHOOK_SECRET`. Half-configured authentication stops the service from starting.
+- Rate limit at a reverse proxy. The per-caller and connection limits bound what one client holds, but many clients together can still fill them for as long as the timeouts allow.
+- Terminate TLS in front of it. The service speaks plain HTTP.
+- Rebuild the image regularly. A scan finds CVEs in Debian's packages, and those with a Debian fix arrive by rebuilding. `make docker` uses the digests pinned in the `Dockerfile`, which dependabot keeps fresh.
+
+A compromised LibreOffice still runs as the service's user, in the service's container. It cannot read the service's secrets or memory, but it can see other requests' temporary files while they exist. Treat the container as the boundary between tenants that do not trust each other, and run one per tenant if that matters.
+
+## Known limits
+
+- Generated DOCX, XLSX and PPTX files have been opened in LibreOffice, not in Word, Excel or PowerPoint, so a repair prompt there has not been ruled out.
+- Barcodes have not been scanned with a reader.
+- Filled PDF forms have not been viewed in Chrome, Acrobat or Preview.
+- There is no golden-PDF corpus: output is checked by content, not compared byte for byte across architectures.
+- Repeating a whole sheet in XLSX or ODS is not supported, only rows within one. Charts are not supported in ODF templates.
+- `data` counts against the render memory limit once parsed. At the default limit, a list of 8 million small numbers rendered and one of 16 million got `413`, so raise `RUSTICDOC_RENDER_MEMORY` for data that size.
 
 ## Licence
 
