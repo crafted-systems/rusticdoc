@@ -70,6 +70,10 @@ RUN groupadd --gid 1001 rusticdoc \
     && chgrp -R 0 /home/rusticdoc /fonts \
     && chmod -R g=u /home/rusticdoc /fonts
 
+# LibreOffice has no setting that stops its HTML loader fetching stylesheets, so
+# beside the dead proxy in its profile, its HTTP, WebDAV and CMIS providers go.
+RUN rm -f /usr/lib/libreoffice/program/libucpdav1.so /usr/lib/libreoffice/program/libucpcmis1lo.so
+
 COPY deploy/fonts.conf /etc/fonts/conf.d/100-rusticdoc.conf
 COPY --from=pdfcpu /out/pdfcpu /usr/bin/pdfcpu
 COPY --from=build /rusticdoc /usr/bin/rusticdoc

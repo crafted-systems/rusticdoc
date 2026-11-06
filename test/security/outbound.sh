@@ -38,7 +38,7 @@ convert() { # file, label, path, extra curl arguments
         status=1
     fi
 }
-for f in ext.docx ext.html ext.fodt ext.fods ext.pptx ext.odp ext.fodp ext.fodg ext.svg ext.xhtml ext.rtf ext.xlsx; do
+for f in ext.docx ext.html ext.fodt ext.fods ext.pptx ext.odp ext.fodp ext.fodg ext.svg ext.xhtml ext.rtf ext.xlsx web.html web.xhtml frames.html objects.fodt linked.docx; do
     convert "$f" forms /forms/libreoffice/convert
     convert "$f" landscape /forms/libreoffice/convert -F landscape=true
     convert "$f" v1 /v1/convert
