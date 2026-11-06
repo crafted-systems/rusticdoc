@@ -740,71 +740,12 @@ fn libreoffice_xlsx_renders_with_rebased_formulas() {
 
 // --- LibreOffice ----------------------------------------------------------
 
-const OFFICE_IMAGE: &str = "ghcr.io/crafted-systems/gotenberg-slim-office:latest";
-const TOOLS_IMAGE: &str = "gotenberg/integration-tools:latest";
-
-fn docker_has(image: &str) -> bool {
-    matches!(run("docker", &["image", "inspect", image]), Some((true, _)))
-}
-
-/// Converts `file` in `dir` with LibreOffice. The profile is kept on the
-/// host between the warm-up run and the conversion; without that first
-/// run, soffice exits with code 81.
-fn soffice(dir: &str, to: &str, file: &str) -> bool {
-    std::fs::create_dir_all(format!("{dir}/profile")).unwrap();
-    let mount = format!("{dir}:/w");
-    let profile = format!("{dir}/profile:/tmp/p");
-    let input = format!("/w/{file}");
-    let base = [
-        "run",
-        "--rm",
-        "--platform",
-        "linux/arm64",
-        "-v",
-        &mount,
-        "-v",
-        &profile,
-        "--entrypoint",
-        "/usr/lib/libreoffice/program/soffice.bin",
-        OFFICE_IMAGE,
-        "-env:UserInstallation=file:///tmp/p",
-        "--headless",
-    ];
-    let mut warm = base.to_vec();
-    warm.push("--terminate_after_init");
-    run("docker", &warm);
-    let mut convert = base.to_vec();
-    convert.extend(["--convert-to", to, "--outdir", "/w", &input]);
-    matches!(run("docker", &convert), Some((true, _)))
-}
-
-fn pdf_text(dir: &str, file: &str) -> String {
-    let mount = format!("{dir}:/w");
-    let pdf = format!("/w/{file}");
-    let args = [
-        "run",
-        "--rm",
-        "--platform",
-        "linux/arm64",
-        "-v",
-        &mount,
-        TOOLS_IMAGE,
-        "pdftotext",
-        "-layout",
-        &pdf,
-        "-",
-    ];
-    let (ok, text) = run("docker", &args).unwrap();
-    assert!(ok, "pdftotext failed: {text}");
-    text
-}
-
 /// Renders a DOCX and an XLSX, converts them to PDF with LibreOffice in the
 /// office container and checks the text, which for the sheet proves the
 /// re-based formulas recalculate. Skips when the images are not present.
 #[test]
 fn rendered_files_convert_to_pdf_with_the_expected_text() {
-    if !docker_has(OFFICE_IMAGE) || !docker_has(TOOLS_IMAGE) {
+    if !libreoffice_available() {
         eprintln!("skipping: docker images not available");
         return;
     }
