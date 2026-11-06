@@ -117,6 +117,27 @@ pub enum PdfOp {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Place a signature image at exact coordinates (not a cryptographic
+    /// signature).
+    Sign {
+        file: PathBuf,
+        /// PNG or JPEG.
+        #[arg(long)]
+        image: PathBuf,
+        #[arg(long, default_value_t = 1)]
+        page: u32,
+        /// Points from the page's left edge.
+        #[arg(long)]
+        x: f32,
+        /// Points from the page's bottom edge.
+        #[arg(long)]
+        y: f32,
+        /// Width in points; default the image's natural size.
+        #[arg(long)]
+        width: Option<f32>,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Embed Factur-X invoice XML.
     Facturx {
         file: PathBuf,
@@ -209,6 +230,7 @@ impl MarkArgs {
             other => bail!("unknown position '{other}'"),
         };
         Ok(Overlay {
+            placement: None,
             kind,
             position,
             opacity: self.opacity.clamp(0.0, 1.0),
@@ -353,6 +375,30 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
             &output,
             &pdf.stamp(&read(&file)?, &mark.overlay()?, t).await?,
         ),
+        PdfOp::Sign {
+            file,
+            image,
+            page,
+            x,
+            y,
+            width,
+            output,
+        } => {
+            let mark = read(&image)?;
+            let overlay = Overlay {
+                placement: Some(rusticdoc_core::pdfops::Placement { x, y, width }),
+                kind: OverlayKind::Image {
+                    bytes: mark.bytes.to_vec(),
+                    name: mark.name,
+                },
+                position: Position::Center,
+                opacity: 1.0,
+                rotation: 0.0,
+                scale: 0.0,
+                pages: page.to_string(),
+            };
+            write(&output, &pdf.stamp(&read(&file)?, &overlay, t).await?)
+        }
         PdfOp::Facturx {
             file,
             xml,

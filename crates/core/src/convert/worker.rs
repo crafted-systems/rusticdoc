@@ -20,6 +20,11 @@ pub(super) struct Launch {
     pub soffice: PathBuf,
     /// An initialised profile to copy, or `None` to start from an empty one.
     pub seed_profile: Option<PathBuf>,
+    /// The mounted fonts directory, added to the worker's fontconfig.
+    pub fonts_dir: Option<PathBuf>,
+    /// Fonts for this worker alone, written to its private directory. A
+    /// worker with these serves one job and is thrown away.
+    pub extra_fonts: Vec<(String, Vec<u8>)>,
 }
 
 /// One conversion request, as the bridge reads it.
@@ -65,12 +70,53 @@ pub(super) struct Worker {
     stdout: Lines<BufReader<ChildStdout>>,
     /// Profile and job files; removed with the worker.
     dir: tempfile::TempDir,
+    /// The pool's font generation when this worker started.
+    pub generation: u64,
     /// Conversions served so far.
     pub jobs: u64,
     pub last_used: Instant,
     next_request: u64,
     /// The `soffice` the bridge reported, in its own session; killed by pid.
     soffice_pid: Option<u32>,
+}
+
+/// A fontconfig file for one worker: the system's configuration, plus the
+/// mounted directory and any fonts for this worker alone. File names are
+/// generated, never taken from the upload.
+async fn write_fontconfig(dir: &Path, launch: &Launch) -> Result<Option<PathBuf>> {
+    if launch.fonts_dir.is_none() && launch.extra_fonts.is_empty() {
+        return Ok(None);
+    }
+    let mut conf = String::from(
+        "<?xml version=\"1.0\"?>\n<fontconfig>\n<include ignore_missing=\"yes\">/etc/fonts/fonts.conf</include>\n",
+    );
+    if let Some(fonts_dir) = &launch.fonts_dir {
+        conf.push_str(&format!(
+            "<dir>{}</dir>\n",
+            xml_escape(&fonts_dir.display().to_string())
+        ));
+    }
+    if !launch.extra_fonts.is_empty() {
+        let extra = dir.join("fonts");
+        tokio::fs::create_dir(&extra).await?;
+        for (i, (_, bytes)) in launch.extra_fonts.iter().enumerate() {
+            tokio::fs::write(extra.join(format!("font-{i}.ttf")), bytes).await?;
+        }
+        conf.push_str(&format!(
+            "<dir>{}</dir>\n",
+            xml_escape(&extra.display().to_string())
+        ));
+    }
+    conf.push_str("</fontconfig>\n");
+    let path = dir.join("fonts.conf");
+    tokio::fs::write(&path, conf).await?;
+    Ok(Some(path))
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 impl Worker {
@@ -99,6 +145,9 @@ impl Worker {
             uuid::Uuid::new_v4().simple()
         );
         let mut cmd = Command::new(&launch.python);
+        if let Some(conf) = write_fontconfig(dir.path(), launch).await? {
+            cmd.env("FONTCONFIG_FILE", conf);
+        }
         cmd.arg(&launch.script)
             .arg("--socket-path")
             .arg(&pipe)
@@ -128,6 +177,7 @@ impl Worker {
             stdin,
             stdout: BufReader::new(stdout).lines(),
             dir,
+            generation: 0,
             jobs: 0,
             last_used: Instant::now(),
             next_request: 1,

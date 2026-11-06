@@ -290,6 +290,7 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
                 .unwrap_or(default)
         };
         out.push(Overlay {
+            placement: None,
             kind,
             position,
             opacity: num("op", 1.0).clamp(0.0, 1.0),
@@ -299,30 +300,6 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
         });
     }
     Ok(out)
-}
-
-/// The steps a `/v1/*` route adds when the caller sends the same fields.
-pub fn has_post_fields(form: &Form) -> bool {
-    [
-        "merge",
-        "splitMode",
-        "watermarkSource",
-        "stampSource",
-        "rotateAngle",
-        "flatten",
-        "optimizeImages",
-        "pdfa",
-        "pdfua",
-        "bookmarks",
-        "metadata",
-        "userPassword",
-        "ownerPassword",
-        "facturxConformanceLevel",
-    ]
-    .iter()
-    .any(|f| form.field(f).is_some())
-        || form.by_field.contains_key("embeds")
-        || form.by_field.contains_key("facturxXml")
 }
 
 /// A boolean field in Gotenberg's strict form: `true` or `false`, or a 400.
@@ -419,6 +396,12 @@ pub fn convert_options(form: &Form) -> ApiResult<rusticdoc_core::convert::Conver
                 "The PDF format '{level}' is not supported. Valid formats include PDF/A-1b, PDF/A-2b, PDF/A-3b, PDF/A-4, and PDF/UA."
             ))
         })?);
+    }
+    if let Some(fonts) = form.by_field.get("fonts") {
+        o.fonts = fonts
+            .iter()
+            .map(|f| (f.name.clone(), f.bytes.to_vec()))
+            .collect();
     }
     o.validate()?;
     Ok(o)

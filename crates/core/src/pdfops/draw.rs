@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use ::lopdf::{Dictionary, Document as Pdf, Object, ObjectId, Stream, dictionary};
 
 use super::lopdf::{engine_error, inherited, load};
-use super::{Deadline, Overlay, OverlayKind, Position, pages};
+use super::{Deadline, Overlay, OverlayKind, Placement, Position, pages};
 use crate::error::{Error, Result};
 use crate::job::Document;
 
@@ -372,13 +372,14 @@ pub(super) fn overlay(
                 let name = format!("FxF{}", font.0);
                 add_resource(pdf, page_id, "Font", &name, *font)?;
                 let unit: f32 = text.chars().map(width).sum::<f32>() / 1000.0;
-                let size = if overlay.scale > 0.0 && unit > 0.0 {
-                    overlay.scale * pw / unit
-                } else {
-                    *size
+                let size = match overlay.placement {
+                    Some(Placement { width: Some(w), .. }) if unit > 0.0 => w / unit,
+                    Some(_) => *size,
+                    None if overlay.scale > 0.0 && unit > 0.0 => overlay.scale * pw / unit,
+                    None => *size,
                 };
                 let (w, h) = (unit * size, size);
-                let (cx, cy) = anchor(overlay.position, bx, w, h);
+                let (cx, cy) = centre(overlay, bx, w, h);
                 let _ = write!(
                     content,
                     "1 0 0 1 {} {} cm {} {} {} {} 0 0 cm BT /{name} {} Tf {} {} {} rg {} {} Td (",
@@ -410,13 +411,14 @@ pub(super) fn overlay(
             Art::Image { id, width, height } => {
                 let name = format!("FxI{}", id.0);
                 add_resource(pdf, page_id, "XObject", &name, *id)?;
-                let w = if overlay.scale > 0.0 {
-                    overlay.scale * pw
-                } else {
-                    *width
+                let w = match overlay.placement {
+                    Some(Placement { width: Some(w), .. }) => w,
+                    Some(_) => *width,
+                    None if overlay.scale > 0.0 => overlay.scale * pw,
+                    None => *width,
                 };
                 let h = w * height / width;
-                let (cx, cy) = anchor(overlay.position, bx, w, h);
+                let (cx, cy) = centre(overlay, bx, w, h);
                 let _ = writeln!(
                     content,
                     "1 0 0 1 {} {} cm {} {} {} {} 0 0 cm {} 0 0 {} {} {} cm /{name} Do Q",
@@ -463,6 +465,15 @@ fn place(pdf: &mut Pdf, page_id: ObjectId, drawing: Vec<u8>, over: bool) -> Resu
         let mut before = drawing;
         before.extend_from_slice(b"q\n");
         wrap_content(pdf, page_id, before, b"Q\n".to_vec())
+    }
+}
+
+/// The centre of a `w` by `h` mark: at its exact placement, or at its
+/// position inside the page box.
+fn centre(overlay: &Overlay, bx: [f32; 4], w: f32, h: f32) -> (f32, f32) {
+    match overlay.placement {
+        Some(p) => (bx[0] + p.x + w / 2.0, bx[1] + p.y + h / 2.0),
+        None => anchor(overlay.position, bx, w, h),
     }
 }
 

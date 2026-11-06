@@ -431,6 +431,7 @@ mod tests {
     #[test]
     fn descriptions_follow_pdfcpu_syntax() {
         let overlay = Overlay {
+            placement: None,
             kind: OverlayKind::Text {
                 text: "DRAFT".into(),
                 font_size: 24.0,
@@ -447,6 +448,7 @@ mod tests {
             "pos:c, rot:45.0, scale:0.500 rel, op:0.30, font:Helvetica, points:24, fillcolor:#808080"
         );
         let image = Overlay {
+            placement: None,
             kind: OverlayKind::Image {
                 bytes: vec![],
                 name: "logo.png".into(),

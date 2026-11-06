@@ -66,6 +66,9 @@ pub struct ConvertOptions {
     pub max_image_resolution: u16,
     /// Password that opens a protected input document.
     pub password: Option<String>,
+    /// Fonts for this conversion alone, as (name, bytes). The job runs on
+    /// a dedicated worker that is discarded afterwards, so it is slower.
+    pub fonts: Vec<(String, Vec<u8>)>,
 }
 
 impl Default for ConvertOptions {
@@ -95,6 +98,7 @@ impl Default for ConvertOptions {
             reduce_image_resolution: false,
             max_image_resolution: 300,
             password: None,
+            fonts: Vec::new(),
         }
     }
 }
@@ -111,6 +115,7 @@ impl ConvertOptions {
 
     /// Rejects values LibreOffice would refuse or silently change.
     pub fn validate(&self) -> Result<()> {
+        crate::fonts::check_uploads(&self.fonts)?;
         if !(1..=100).contains(&self.quality) {
             return Err(Error::InvalidRequest(format!(
                 "quality must be between 1 and 100, not {}",
@@ -192,6 +197,7 @@ impl fmt::Debug for ConvertOptions {
             .field("filter_data", &self.filter_data())
             .field("landscape", &self.landscape)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("fonts", &self.fonts.len())
             .finish()
     }
 }

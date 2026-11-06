@@ -154,6 +154,20 @@ pub struct Overlay {
     /// Page selection such as `1-3,5`; all pages when empty.
     #[serde(default)]
     pub pages: String,
+    /// Exact placement, overriding `position` and `scale`: how a signature
+    /// lands on the line drawn for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
+}
+
+/// The lower-left corner of a mark in points from the page's lower-left
+/// corner, and optionally its width.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Placement {
+    pub x: f32,
+    pub y: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

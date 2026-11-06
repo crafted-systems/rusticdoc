@@ -29,6 +29,7 @@ fn page_text(pdf: &Pdf, page: u32) -> String {
 
 fn text_overlay(text: &str) -> Overlay {
     Overlay {
+        placement: None,
         kind: OverlayKind::Text {
             text: text.into(),
             font_size: 24.0,
@@ -538,6 +539,7 @@ async fn text_stamps_go_over_and_watermarks_under_the_content() {
 async fn image_and_pdf_overlays() {
     let input = doc("i.pdf", fixtures::pages(2));
     let image = Overlay {
+        placement: None,
         kind: OverlayKind::Image {
             bytes: fixtures::PNG_DOT.to_vec(),
             name: "dot.png".into(),
@@ -562,6 +564,7 @@ async fn image_and_pdf_overlays() {
     assert_eq!((images.len(), images[0].width, images[0].height), (1, 1, 1));
 
     let not_image = Overlay {
+        placement: None,
         kind: OverlayKind::Image {
             bytes: b"nope".to_vec(),
             name: "x.png".into(),
@@ -577,6 +580,7 @@ async fn image_and_pdf_overlays() {
     ));
 
     let overlay = Overlay {
+        placement: None,
         kind: OverlayKind::Pdf {
             bytes: fixtures::outlined(),
             name: "template.pdf".into(),
@@ -1023,6 +1027,7 @@ async fn request_sizes_are_capped() {
         .unwrap_err();
     assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
     let big_overlay = Overlay {
+        placement: None,
         kind: OverlayKind::Image {
             bytes: vec![0; 11],
             name: "x.png".into(),

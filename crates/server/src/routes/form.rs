@@ -16,7 +16,15 @@ use crate::webhook;
 
 /// File parts under these field names are not inputs to convert; routes
 /// read them from [`Form::by_field`].
-const SPECIAL_FIELDS: &[&str] = &["embeds", "watermark", "stamp", "facturx", "facturX"];
+const SPECIAL_FIELDS: &[&str] = &[
+    "embeds",
+    "watermark",
+    "stamp",
+    "facturx",
+    "facturX",
+    "facturxXml",
+    "fonts",
+];
 
 #[derive(Debug, Default)]
 pub struct Form {
@@ -260,6 +268,12 @@ pub fn request_id(headers: &HeaderMap) -> String {
 
 /// A file download with the pipeline timings in a header.
 pub fn download(out: Output) -> Response {
+    // Bytes are cheap to clone. Very large files skip the font scan.
+    let pdf_head = if out.bytes.len() <= 32 * 1024 * 1024 {
+        out.bytes.clone()
+    } else {
+        bytes::Bytes::new()
+    };
     let mut res = Response::new(Body::from(out.bytes));
     *res.status_mut() = StatusCode::OK;
     let headers = res.headers_mut();
@@ -272,6 +286,15 @@ pub fn download(out: Output) -> Response {
         out.name.replace('"', "")
     )) {
         headers.insert(header::CONTENT_DISPOSITION, v);
+    }
+    if out.content_type == "application/pdf" {
+        // Font names are printable ASCII; anything else skips the header.
+        let fonts = rusticdoc_core::fonts::pdf_font_names(&pdf_head);
+        if !fonts.is_empty()
+            && let Ok(v) = HeaderValue::from_str(&fonts.join(", "))
+        {
+            headers.insert("x-fonts-used", v);
+        }
     }
     let timings: Vec<String> = out
         .timings
