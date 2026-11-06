@@ -67,6 +67,8 @@ pub struct Config {
     pub max_connections_per_peer: usize,
     /// How long a connection may stay blocked on its client.
     pub stall_timeout: Duration,
+    /// How long writes may spend blocked in all, until the queue drains.
+    pub response_write_timeout: Duration,
     /// A proxy for webhooks and downloads, named on purpose. Pinning to the vetted
     /// addresses no longer applies through it.
     pub outbound_proxy: Option<String>,
@@ -251,6 +253,7 @@ impl Default for Config {
             max_connections: 1024,
             max_connections_per_peer: 0,
             stall_timeout: Duration::from_secs(30),
+            response_write_timeout: Duration::from_secs(300),
             outbound_proxy: None,
             metrics_public: false,
             enable_docs: false,
@@ -355,6 +358,9 @@ impl Config {
         }
         if let Some(v) = get("STALL_TIMEOUT").and_then(|v| parse_duration(&v)) {
             c.stall_timeout = v;
+        }
+        if let Some(v) = get("RESPONSE_WRITE_TIMEOUT").and_then(|v| parse_duration(&v)) {
+            c.response_write_timeout = v;
         }
         c.outbound_proxy = get("OUTBOUND_PROXY");
         if let Some(v) = get("METRICS_PUBLIC") {
