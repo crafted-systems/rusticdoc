@@ -1,8 +1,10 @@
 //! API keys, basic auth and OpenID Connect tokens. Nothing is required until
 //! one of them is configured; health and the API description stay open.
 
+use std::net::SocketAddr;
+
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -106,6 +108,40 @@ pub async fn identify(state: &AppState, headers: &HeaderMap) -> Option<Principal
     None
 }
 
+/// Who a request said it was, for the log: the scheme and a digest prefix. A
+/// password or token never appears, and for basic auth only the user is hashed.
+fn presented(headers: &HeaderMap) -> String {
+    let prefix = |value: &str| hex::encode(Sha256::digest(value.as_bytes()))[..12].to_string();
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Some(value) = authorization {
+        let (scheme, credential) = value.split_once(' ').unwrap_or((value, ""));
+        let scheme = scheme.to_ascii_lowercase();
+        if scheme == "basic" {
+            let user = base64::engine::general_purpose::STANDARD
+                .decode(credential.trim())
+                .ok()
+                .and_then(|v| String::from_utf8(v).ok())
+                .and_then(|pair| pair.split(':').next().map(str::to_string))
+                .unwrap_or_default();
+            return format!("basic:{}", prefix(&user));
+        }
+        if scheme == "bearer" {
+            return format!("bearer:{}", prefix(credential.trim()));
+        }
+        return "other".to_string();
+    }
+    match headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
+        Some(key) => format!("key:{}", prefix(key.trim())),
+        None => "none".to_string(),
+    }
+}
+
+/// The caller a request ended up as, on its response for the access log.
+#[derive(Debug, Clone)]
+pub struct LoggedCaller(pub String);
+
 pub async fn require(
     State(state): State<AppState>,
     mut req: Request<Body>,
@@ -116,9 +152,19 @@ pub async fn require(
         return next.run(req).await;
     }
     if let Some(principal) = identify(&state, req.headers()).await {
+        let caller = LoggedCaller(principal.short());
         req.extensions_mut().insert(principal);
-        return next.run(req).await;
+        let mut res = next.run(req).await;
+        res.extensions_mut().insert(caller);
+        return res;
     }
+    let caller = presented(req.headers());
+    let remote_addr = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|peer| peer.0.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    tracing::warn!(%remote_addr, %caller, "authentication failed");
     let mut res = ApiError::new(
         StatusCode::UNAUTHORIZED,
         "unauthorized",
@@ -131,6 +177,7 @@ pub async fn require(
             "Basic realm=\"rusticdoc\"".parse().unwrap(),
         );
     }
+    res.extensions_mut().insert(LoggedCaller(caller));
     res
 }
 

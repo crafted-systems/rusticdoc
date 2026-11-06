@@ -54,6 +54,7 @@ impl Verifier {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .build()
             .expect("reqwest client");
         Self {
@@ -144,12 +145,17 @@ impl Verifier {
         if !is_secure_url(url) {
             return Err(format!("'{url}' is not https, or http on a loopback host"));
         }
-        let mut res = self.http.get(url).send().await.map_err(|e| e.to_string())?;
+        let mut res = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
         if !res.status().is_success() {
             return Err(format!("status {} from the provider", res.status()));
         }
         let mut body = Vec::new();
-        while let Some(chunk) = res.chunk().await.map_err(|e| e.to_string())? {
+        while let Some(chunk) = res.chunk().await.map_err(|e| e.without_url().to_string())? {
             if body.len() + chunk.len() > MAX_DOCUMENT {
                 return Err("the provider's document is too large".into());
             }

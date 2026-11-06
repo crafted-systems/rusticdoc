@@ -14,7 +14,6 @@ pub struct AppState {
     pub engines: Arc<Engines>,
     pub pipeline: Pipeline,
     pub metrics: Arc<Metrics>,
-    pub http: reqwest::Client,
     pub started: Instant,
     /// What an outbound URL must get past.
     pub url_policies: crate::webhook::UrlPolicies,
@@ -45,12 +44,6 @@ impl AppState {
         let pipeline = Pipeline::new(engines.clone(), config.api_timeout)
             .with_max_output(config.max_render_bytes)
             .with_renderer(renderer);
-        let http = reqwest::Client::builder()
-            .user_agent(format!("rusticdoc/{}", rusticdoc_core::VERSION))
-            .timeout(config.api_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("reqwest client");
         let oidc = config
             .compat
             .oidc
@@ -68,7 +61,6 @@ impl AppState {
             engines,
             pipeline,
             metrics: Arc::new(Metrics::new()),
-            http,
             started: Instant::now(),
             fonts: Default::default(),
             fonts_reload: Default::default(),

@@ -66,6 +66,13 @@ pub fn page_count(doc: &Document) -> Result<u32> {
     Ok(lopdf::load(doc)?.get_pages().len() as u32)
 }
 
+/// As [`page_count`], off the async threads and behind the blocking permits:
+/// parsing a large PDF takes seconds.
+pub async fn page_count_off_thread(doc: &Document, timeout: Duration) -> Result<u32> {
+    let doc = doc.clone();
+    blocking(timeout, move |_| page_count(&doc)).await
+}
+
 /// Document metadata as the API exposes it: Info dictionary keys such as
 /// `Title`, `Author`, `Subject`, `Keywords`, `Creator`, `Producer`,
 /// `CreationDate`, `ModDate`, plus custom keys.
@@ -825,6 +832,12 @@ pub fn pdfa_part(doc: &Document) -> Option<String> {
     let pdf = lopdf::load(doc).ok()?;
     let packet = lopdf::xmp_packet(&pdf)?;
     xmp::get(&packet, "pdfaid:part")
+}
+
+/// As [`pdfa_part`], off the async threads and behind the blocking permits.
+pub async fn pdfa_part_off_thread(doc: &Document, timeout: Duration) -> Result<Option<String>> {
+    let doc = doc.clone();
+    blocking(timeout, move |_| Ok(pdfa_part(&doc))).await
 }
 
 /// Refuses anything that is not a PDF before an engine sees it.

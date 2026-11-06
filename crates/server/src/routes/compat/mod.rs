@@ -13,6 +13,7 @@ pub mod service;
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
@@ -139,13 +140,13 @@ where
         && ["gotenberg-webhook-url", "x-rusticdoc-webhook-url"]
             .iter()
             .any(|name| headers.contains_key(*name));
+    let caller = req
+        .extensions()
+        .get::<Principal>()
+        .map(|p| p.0.clone())
+        .unwrap_or_else(|| "public".to_string());
     let permit = if wants_hook {
-        let caller = req
-            .extensions()
-            .get::<Principal>()
-            .map(|p| p.0.as_str())
-            .unwrap_or("public");
-        match state.jobs.try_acquire(caller) {
+        match state.jobs.try_acquire(&caller) {
             Ok(permit) => Some(Arc::new(permit)),
             Err(e) => return e.into_response(),
         }
@@ -160,7 +161,11 @@ where
         None
     } else {
         match Webhook::from_gotenberg_headers(&headers, &state.url_policies).await {
-            Ok(hook) => hook.map(|hook| Webhook { permit, ..hook }),
+            Ok(hook) => hook.map(|hook| Webhook {
+                permit,
+                principal: caller,
+                ..hook
+            }),
             Err(e) => return e.into_response(),
         }
     };
@@ -177,10 +182,12 @@ where
     };
     let Some(hook) = hook else {
         return match job.await {
-            Ok(Reply::Files(docs)) => match respond_files(docs, output_name.as_deref()) {
-                Ok(out) => download(out),
-                Err(e) => e.into_response(),
-            },
+            Ok(Reply::Files(docs)) => {
+                match respond_files(docs, output_name.as_deref(), state.config.api_timeout).await {
+                    Ok(out) => download(out).await,
+                    Err(e) => e.into_response(),
+                }
+            }
             Ok(Reply::Json(value)) => Json(value).into_response(),
             Err(e) => e.into_response(),
         };
@@ -190,7 +197,9 @@ where
         let rid = rid.clone();
         async move {
             let result = match job.await {
-                Ok(Reply::Files(docs)) => respond_files(docs, output_name.as_deref()),
+                Ok(Reply::Files(docs)) => {
+                    respond_files(docs, output_name.as_deref(), state.config.api_timeout).await
+                }
                 Ok(Reply::Json(_)) => Err(ApiError::bad_request(
                     "The webhook middleware can only work with multipart/form-data routes that results in output files",
                 )),
@@ -244,7 +253,11 @@ fn output_filename(headers: &HeaderMap) -> Option<String> {
 
 /// The response file for what a route produced: the one document, or a ZIP of
 /// them, under the requested name when there is one.
-pub fn respond_files(docs: Vec<Document>, wanted: Option<&str>) -> Result<Output, ApiError> {
+pub async fn respond_files(
+    docs: Vec<Document>,
+    wanted: Option<&str>,
+    timeout: Duration,
+) -> Result<Output, ApiError> {
     let mut docs = docs;
     if docs.len() == 1 {
         let doc = docs.remove(0);
@@ -266,7 +279,9 @@ pub fn respond_files(docs: Vec<Document>, wanted: Option<&str>) -> Result<Output
     let stem = wanted
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let archive = job::zip_documents(&stem, &parts).map_err(ApiError::from)?;
+    let archive = job::zip_off_thread(&stem, parts, timeout)
+        .await
+        .map_err(ApiError::from)?;
     Ok(Output {
         name: short_name(&archive.name),
         content_type: "application/zip",
@@ -309,9 +324,16 @@ mod tests {
         assert_eq!(short_name("a.pdf"), "a.pdf");
     }
 
-    #[test]
-    fn one_file_stays_a_file_and_many_become_a_zip() {
-        let one = respond_files(vec![Document::new("a.pdf", b"x".to_vec())], Some("foo")).unwrap();
+    #[tokio::test]
+    async fn one_file_stays_a_file_and_many_become_a_zip() {
+        let limit = Duration::from_secs(30);
+        let one = respond_files(
+            vec![Document::new("a.pdf", b"x".to_vec())],
+            Some("foo"),
+            limit,
+        )
+        .await
+        .unwrap();
         assert_eq!(one.name, "foo.pdf");
         assert_eq!(one.content_type, "application/pdf");
         let many = respond_files(
@@ -320,7 +342,9 @@ mod tests {
                 Document::new("b.pdf", b"y".to_vec()),
             ],
             Some("foo"),
+            limit,
         )
+        .await
         .unwrap();
         assert_eq!(many.name, "foo.zip");
         assert_eq!(many.content_type, "application/zip");

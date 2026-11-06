@@ -1,15 +1,17 @@
 //! Structured logs and request spans.
 
+use std::net::SocketAddr;
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::{OriginalUri, State};
+use axum::extract::{ConnectInfo, OriginalUri, State};
 use axum::http::{Request, header};
 use axum::middleware::Next;
 use axum::response::Response;
 use tracing::Instrument;
 use tracing_subscriber::EnvFilter;
 
+use crate::auth::LoggedCaller;
 use crate::state::AppState;
 
 /// Installs the global subscriber: JSON lines by default, `pretty` for a
@@ -99,11 +101,21 @@ pub async fn access(State(state): State<AppState>, req: Request<Body>, next: Nex
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
     let method = req.method().to_string();
+    let remote_addr = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|peer| peer.0.to_string())
+        .unwrap_or_else(|| "-".to_string());
     let span = tracing::info_span!("request", request_id = %correlation_id);
     let started = Instant::now();
     let res = next.run(req).instrument(span.clone()).await;
     let latency = started.elapsed();
     let status = res.status().as_u16();
+    let caller = res
+        .extensions()
+        .get::<LoggedCaller>()
+        .map(|caller| caller.0.clone())
+        .unwrap_or_else(|| "-".to_string());
     let bytes_out = res
         .headers()
         .get(header::CONTENT_LENGTH)
@@ -116,6 +128,8 @@ pub async fn access(State(state): State<AppState>, req: Request<Body>, next: Nex
                 tracing::$level!(
                     log_type = "access",
                     correlation_id = %correlation_id,
+                    remote_addr = %remote_addr,
+                    caller = %caller,
                     host = %host,
                     method = %method,
                     path = %full_path,

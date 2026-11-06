@@ -58,6 +58,19 @@ enum Command {
         #[arg(short, long)]
         data: Option<PathBuf>,
     },
+    /// Print the key a caller's webhook deliveries are signed with, in hex, from
+    /// RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it.
+    WebhookSecret {
+        /// The caller's API key.
+        #[arg(long, group = "caller")]
+        api_key: Option<String>,
+        /// The caller's basic-auth user.
+        #[arg(long, group = "caller")]
+        basic_user: Option<String>,
+        /// The subject of the caller's OpenID Connect tokens.
+        #[arg(long, group = "caller")]
+        oidc_subject: Option<String>,
+    },
     /// Evaluates templates for `serve`, in a process of their own.
     #[command(name = "__render-worker", hide = true)]
     RenderWorker,
@@ -165,6 +178,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Health { url } => {
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
+                .no_proxy()
                 .build()?;
             let res = client
                 .get(format!("{}/health", url.trim_end_matches('/')))
@@ -200,6 +214,28 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
         Command::RenderWorker => unreachable!("handled in main"),
+        Command::WebhookSecret {
+            api_key,
+            basic_user,
+            oidc_subject,
+        } => {
+            use rusticdoc_server::auth;
+            let Some(secret) = &config.webhook_secret else {
+                bail!("set RUSTICDOC_WEBHOOK_SECRET to the service's secret");
+            };
+            let principal = if let Some(key) = api_key {
+                auth::key_principal(&key)
+            } else if let Some(user) = basic_user {
+                auth::basic_principal(&user)
+            } else if let Some(subject) = oidc_subject {
+                auth::oidc_principal(&subject)
+            } else {
+                auth::Principal("public".into())
+            };
+            let key = rusticdoc_server::webhook::signing_key(secret, &principal.0);
+            let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+            println!("{hex}");
+        }
         Command::Engines => {
             let engines = Engines::from_config(&config);
             println!("{}", serde_json::to_string_pretty(&engines.describe())?);

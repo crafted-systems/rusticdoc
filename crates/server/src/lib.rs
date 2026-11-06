@@ -16,11 +16,15 @@ pub mod state;
 pub mod telemetry;
 pub mod webhook;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{ConnectInfo, DefaultBodyLimit};
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
+use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper_util::service::TowerToHyperService;
+use tokio::sync::Semaphore;
 use tower::ServiceExt;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
@@ -275,9 +279,90 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
             }
         });
     }
-    axum::serve(listener, app(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
+    let limits = ConnectionLimits {
+        header_timeout: state.config.header_timeout,
+        max_connections: state.config.max_connections,
+    };
+    serve_on(listener, app(state), limits, shutdown_signal()).await
+}
+
+/// What one connection may cost.
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectionLimits {
+    /// How long a client may take to send its request headers.
+    pub header_timeout: Duration,
+    /// Connections served at once.
+    pub max_connections: usize,
+}
+
+/// Serves until `shutdown`, then lets the connections in flight finish.
+///
+/// `axum::serve` sets no timer, which turns off hyper's timeout on request
+/// headers, and has no limit on connections, so a client could hold sockets for
+/// nothing. A connection past the limit waits in the listen queue.
+pub async fn serve_on(
+    listener: tokio::net::TcpListener,
+    router: Router,
+    limits: ConnectionLimits,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> std::io::Result<()> {
+    let places = Arc::new(Semaphore::new(limits.max_connections.max(1)));
+    let (closing, closed) = tokio::sync::watch::channel(false);
+    let mut shutdown = std::pin::pin!(shutdown);
+    loop {
+        let place = tokio::select! {
+            place = places.clone().acquire_owned() => place.map_err(std::io::Error::other)?,
+            _ = &mut shutdown => break,
+        };
+        let (stream, peer) = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                Err(e) => {
+                    // Out of file descriptors, most likely: wait for some.
+                    tracing::warn!(error = %e, "accept failed");
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+            },
+            _ = &mut shutdown => break,
+        };
+        let _ = stream.set_nodelay(true);
+        let service = TowerToHyperService::new(router.clone().map_request(
+            move |mut req: axum::http::Request<hyper::body::Incoming>| {
+                req.extensions_mut().insert(ConnectInfo(peer));
+                req
+            },
+        ));
+        let mut closed = closed.clone();
+        tokio::spawn(async move {
+            let _place = place;
+            let conn = hyper::server::conn::http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(limits.header_timeout)
+                .serve_connection(TokioIo::new(stream), service);
+            let mut conn = std::pin::pin!(conn);
+            let mut closing = false;
+            loop {
+                tokio::select! {
+                    result = conn.as_mut() => {
+                        if let Err(e) = result {
+                            tracing::debug!(error = %e, "connection ended");
+                        }
+                        break;
+                    }
+                    _ = closed.changed(), if !closing => {
+                        closing = true;
+                        conn.as_mut().graceful_shutdown();
+                    }
+                }
+            }
+        });
+    }
+    let _ = closing.send(true);
+    // Every place back means every connection has finished.
+    let all = u32::try_from(limits.max_connections.max(1)).unwrap_or(u32::MAX);
+    let _ = places.acquire_many(all).await;
+    Ok(())
 }
 
 async fn shutdown_signal() {

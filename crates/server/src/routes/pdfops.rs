@@ -155,9 +155,7 @@ pub struct FacturxForm {
 }
 
 fn output_name(form: &Form, doc: &Document, suffix: &str) -> String {
-    form.field("outputFilename")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    form.output_name()
         .map(|s| format!("{s}.pdf"))
         .unwrap_or_else(|| {
             if suffix.is_empty() {
@@ -227,17 +225,13 @@ pub async fn split(
     if span.is_empty() {
         return Err(ApiError::bad_request("'splitSpan' is required"));
     }
-    let stem = form
-        .field("outputFilename")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            std::path::Path::new(&doc.name)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("split")
-                .to_string()
-        });
+    let stem = form.output_name().unwrap_or_else(|| {
+        std::path::Path::new(&doc.name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("split")
+            .to_string()
+    });
     let st = state.clone();
     let job = async move {
         let parts = st
@@ -255,7 +249,7 @@ pub async fn split(
             only.name = format!("{stem}.pdf");
             Ok(only)
         } else {
-            zip(&stem, &outputs)
+            zip(&stem, &outputs, st.config.api_timeout).await
         }
     };
     finish(state, hook, request_id(&headers), job).await
