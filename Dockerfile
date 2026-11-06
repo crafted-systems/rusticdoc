@@ -58,7 +58,7 @@ RUN groupadd --gid 1001 rusticdoc \
     && apt-get update -qq \
     && apt-get upgrade -yqq \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        ca-certificates tini qpdf fontconfig python3 \
+        ca-certificates qpdf fontconfig python3 \
         fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fonts-liberation2 \
         fonts-dejavu fonts-noto-cjk fonts-noto-color-emoji fonts-noto-core \
         hyphen-en-us hyphen-en-gb hyphen-de hyphen-fr hyphen-es hyphen-it hyphen-nl hyphen-pt-pt hyphen-pt-br \
@@ -86,5 +86,7 @@ WORKDIR /home/rusticdoc
 VOLUME ["/fonts"]
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=6s --start-period=20s --retries=3 CMD ["/usr/bin/rusticdoc", "health"]
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/rusticdoc"]
+# As PID 1 it reaps and forwards signals itself, so that /proc/1/environ, which holds
+# the service's secrets, can be closed to the user LibreOffice runs as.
+ENTRYPOINT ["/usr/bin/rusticdoc"]
 CMD ["serve"]
