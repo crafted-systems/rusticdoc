@@ -1314,8 +1314,16 @@ fn facturx_with(
     if !packet.contains(xmp::FACTURX_NS) {
         xmp::insert_description(&mut packet, xmp::FACTURX_SCHEMA);
     }
-    xmp::set_text(&mut packet, "fx:DocumentType", Some(&properties.document_type));
-    xmp::set_text(&mut packet, "fx:DocumentFileName", Some(&properties.file_name));
+    xmp::set_text(
+        &mut packet,
+        "fx:DocumentType",
+        Some(&properties.document_type),
+    );
+    xmp::set_text(
+        &mut packet,
+        "fx:DocumentFileName",
+        Some(&properties.file_name),
+    );
     xmp::set_text(&mut packet, "fx:Version", Some(&properties.version));
     xmp::set_text(
         &mut packet,

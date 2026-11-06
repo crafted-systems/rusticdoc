@@ -39,17 +39,21 @@ impl PdfFormats {
     }
 
     /// The level LibreOffice exports, or `None` when no PDF/A was asked for.
-    pub fn level(&self) -> std::result::Result<Option<PdfaLevel>, ()> {
+    pub fn level(&self) -> std::result::Result<Option<PdfaLevel>, UnknownFormat> {
         Ok(match self.pdfa.as_str() {
             "" => None,
             "PDF/A-1b" => Some(PdfaLevel::A1b),
             "PDF/A-2b" => Some(PdfaLevel::A2b),
             "PDF/A-3b" => Some(PdfaLevel::A3b),
             "PDF/A-4" => Some(PdfaLevel::A4),
-            _ => return Err(()),
+            _ => return Err(UnknownFormat),
         })
     }
 }
+
+/// A `pdfa` value LibreOffice has no export for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownFormat;
 
 /// Text for a format no engine can apply to an existing PDF.
 pub const FORMAT_NOT_SUPPORTED: &str = "The requested PDF format is not supported, or no PDF engine could apply it. Valid formats include PDF/A-1b, PDF/A-2b, PDF/A-3b, PDF/A-4, and PDF/UA.";
@@ -200,7 +204,7 @@ pub struct Compat<'a> {
 }
 
 impl Compat<'_> {
-    fn pdf(&self) -> &pdfops::MultiEngine {
+    fn forms(&self) -> &pdfops::MultiEngine {
         &self.engines.forms
     }
 
@@ -211,7 +215,7 @@ impl Compat<'_> {
         match docs {
             [] => Err(bad("no input paths")),
             [one] => Ok(one.clone()),
-            _ => self.pdf().merge(docs, self.timeout).await,
+            _ => self.forms().merge(docs, self.timeout).await,
         }
     }
 
@@ -222,7 +226,7 @@ impl Compat<'_> {
         for doc in docs {
             let stem = stem_of(&doc.name);
             let mode = split_mode(split, doc)?;
-            let parts = self.pdf().split(doc, &mode, self.timeout).await?;
+            let parts = self.forms().split(doc, &mode, self.timeout).await?;
             if split.unify && split.mode == "pages" {
                 let first = parts
                     .into_iter()
@@ -266,7 +270,7 @@ impl Compat<'_> {
         for mark in marks {
             docs = self
                 .each(docs, |doc| async move {
-                    self.pdf().watermark(&doc, mark, self.timeout).await
+                    self.forms().watermark(&doc, mark, self.timeout).await
                 })
                 .await?;
         }
@@ -281,7 +285,7 @@ impl Compat<'_> {
         for mark in marks {
             docs = self
                 .each(docs, |doc| async move {
-                    self.pdf().stamp(&doc, mark, self.timeout).await
+                    self.forms().stamp(&doc, mark, self.timeout).await
                 })
                 .await?;
         }
@@ -295,7 +299,7 @@ impl Compat<'_> {
         docs: Vec<Document>,
     ) -> Result<Vec<Document>> {
         self.each(docs, |doc| async move {
-            self.pdf()
+            self.forms()
                 .rotate(&doc, rotation, selection, self.timeout)
                 .await
         })
@@ -304,14 +308,16 @@ impl Compat<'_> {
 
     pub async fn flatten_stub(&self, docs: Vec<Document>) -> Result<Vec<Document>> {
         self.each(docs, |doc| async move {
-            self.pdf().flatten(&doc, self.timeout).await
+            self.forms().flatten(&doc, self.timeout).await
         })
         .await
     }
 
     pub async fn optimize_stub(&self, quality: u8, docs: Vec<Document>) -> Result<Vec<Document>> {
         self.each(docs, |doc| async move {
-            self.pdf().optimize_images(&doc, quality, self.timeout).await
+            self.forms()
+                .optimize_images(&doc, quality, self.timeout)
+                .await
         })
         .await
     }
@@ -326,12 +332,12 @@ impl Compat<'_> {
         if formats.is_empty() {
             return Ok(docs);
         }
-        let level = formats
-            .level()
-            .map_err(|()| bad(FORMAT_NOT_SUPPORTED))?;
-        let office = self.engines.libreoffice.as_ref().ok_or_else(|| {
-            Error::EngineUnavailable("LibreOffice is not configured".into())
-        })?;
+        let level = formats.level().map_err(|_| bad(FORMAT_NOT_SUPPORTED))?;
+        let office = self
+            .engines
+            .libreoffice
+            .as_ref()
+            .ok_or_else(|| Error::EngineUnavailable("LibreOffice is not configured".into()))?;
         let options = ConvertOptions {
             pdfa: level,
             pdfua: formats.pdfua,
@@ -357,7 +363,7 @@ impl Compat<'_> {
             return Ok(docs);
         };
         self.each(docs, |doc| async move {
-            self.pdf().write_exif(&doc, metadata, self.timeout).await
+            self.forms().write_exif(&doc, metadata, self.timeout).await
         })
         .await
     }
@@ -372,14 +378,14 @@ impl Compat<'_> {
             Bookmarks::List(list) if list.is_empty() => Ok(docs),
             Bookmarks::List(list) => {
                 self.each(docs, |doc| async move {
-                    self.pdf().write_bookmarks(&doc, list, self.timeout).await
+                    self.forms().write_bookmarks(&doc, list, self.timeout).await
                 })
                 .await
             }
             Bookmarks::Map(map) => {
                 self.each(docs, |doc| async move {
                     match map.get(&doc.name) {
-                        Some(list) => self.pdf().write_bookmarks(&doc, list, self.timeout).await,
+                        Some(list) => self.forms().write_bookmarks(&doc, list, self.timeout).await,
                         None => Ok(doc),
                     }
                 })
@@ -397,14 +403,14 @@ impl Compat<'_> {
         if !embeds.is_empty() {
             docs = self
                 .each(docs, |doc| async move {
-                    self.pdf().embed(&doc, embeds, self.timeout).await
+                    self.forms().embed(&doc, embeds, self.timeout).await
                 })
                 .await?;
         }
         if !metadata.is_empty() {
             docs = self
                 .each(docs, |doc| async move {
-                    self.pdf()
+                    self.forms()
                         .set_embed_metadata(&doc, metadata, self.timeout)
                         .await
                 })
@@ -422,7 +428,7 @@ impl Compat<'_> {
             return Ok(docs);
         };
         self.each(docs, |doc| async move {
-            self.pdf()
+            self.forms()
                 .facturx_with(&doc, &facturx.xml, &facturx.properties, self.timeout)
                 .await
         })
@@ -438,13 +444,17 @@ impl Compat<'_> {
             return Ok(docs);
         }
         self.each(docs, |doc| async move {
-            self.pdf().encrypt_with(&doc, encrypt, self.timeout).await
+            self.forms().encrypt_with(&doc, encrypt, self.timeout).await
         })
         .await
     }
 
     /// Watermarks, stamps, rotation, flattening and optimization.
-    async fn before_convert(&self, steps: &PostSteps, mut docs: Vec<Document>) -> Result<Vec<Document>> {
+    async fn before_convert(
+        &self,
+        steps: &PostSteps,
+        mut docs: Vec<Document>,
+    ) -> Result<Vec<Document>> {
         docs = self.watermark_stub(&steps.watermarks, docs).await?;
         docs = self.stamp_stub(&steps.stamps, docs).await?;
         if let Some((rotation, selection)) = &steps.rotate {
@@ -461,8 +471,14 @@ impl Compat<'_> {
 
     /// Metadata, embeds, Factur-X and encryption. These come after any
     /// conversion, since LibreOffice drops them on the way to PDF/A.
-    async fn after_convert(&self, steps: &PostSteps, mut docs: Vec<Document>) -> Result<Vec<Document>> {
-        docs = self.write_metadata_stub(steps.metadata.as_ref(), docs).await?;
+    async fn after_convert(
+        &self,
+        steps: &PostSteps,
+        mut docs: Vec<Document>,
+    ) -> Result<Vec<Document>> {
+        docs = self
+            .write_metadata_stub(steps.metadata.as_ref(), docs)
+            .await?;
         docs = self
             .embed_stub(&steps.embeds, &steps.embeds_metadata, docs)
             .await?;
@@ -481,7 +497,7 @@ impl Compat<'_> {
         auto_index_bookmarks: bool,
         title_bookmarks: bool,
     ) -> Result<Vec<Document>> {
-        let merged = self.pdf().merge(&inputs, self.timeout).await?;
+        let merged = self.forms().merge(&inputs, self.timeout).await?;
         let mut docs = vec![Document::new("merged.pdf", merged.bytes)];
         docs = self.before_convert(steps, docs).await?;
         let formats = facturx_formats(steps.facturx.is_some(), &steps.formats, false, &docs);
@@ -521,7 +537,7 @@ impl Compat<'_> {
                 .unwrap_or_default();
             // Titles nest each input's own outline under its entry.
             if own.is_empty() && (auto_index || titles) {
-                own = self.pdf().read_bookmarks(input, self.timeout).await?;
+                own = self.forms().read_bookmarks(input, self.timeout).await?;
             }
             shift_pages(&mut own, offset);
             if titles {
@@ -541,7 +557,7 @@ impl Compat<'_> {
     /// The input's Title, or its file name without the extension.
     async fn document_title(&self, doc: &Document) -> String {
         let title = self
-            .pdf()
+            .forms()
             .read_exif(doc, self.timeout)
             .await
             .ok()
@@ -601,16 +617,18 @@ impl Compat<'_> {
         let mut options = base.clone();
         if native {
             options.pdfua = formats.pdfua;
-            options.pdfa = formats.level().map_err(|()| {
+            options.pdfa = formats.level().map_err(|_| {
                 bad(format!(
                     "The PDF format '{}' is not supported. Valid formats include PDF/A-1b, PDF/A-2b, PDF/A-3b, PDF/A-4, and PDF/UA.",
                     formats.pdfa
                 ))
             })?;
         }
-        let office = self.engines.libreoffice.as_ref().ok_or_else(|| {
-            Error::EngineUnavailable("LibreOffice is not configured".into())
-        })?;
+        let office = self
+            .engines
+            .libreoffice
+            .as_ref()
+            .ok_or_else(|| Error::EngineUnavailable("LibreOffice is not configured".into()))?;
         let mut docs = Vec::with_capacity(inputs.len());
         for input in &inputs {
             precheck(input, &options)?;
@@ -646,11 +664,10 @@ impl Compat<'_> {
 /// Complains about what the bytes already tell, so a bad password never reaches
 /// a LibreOffice worker.
 fn precheck(input: &Document, options: &ConvertOptions) -> Result<()> {
-    if let Some(ranges) = options
-        .native_page_ranges
-        .as_deref()
-        .filter(|r| !r.chars().all(|c| c.is_ascii_digit() || matches!(c, '-' | ',' | ' ')))
-    {
+    if let Some(ranges) = options.native_page_ranges.as_deref().filter(|r| {
+        !r.chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '-' | ',' | ' '))
+    }) {
         return Err(page_ranges_error(ranges, &input.name));
     }
     let protection = protection::detect(input);
@@ -1009,7 +1026,10 @@ mod tests {
 
     #[test]
     fn protection_is_checked_first() {
-        let protected = Document::new("a.docx", vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+        let protected = Document::new(
+            "a.docx",
+            vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1],
+        );
         let options = ConvertOptions::default();
         assert!(
             matches!(precheck(&protected, &options), Err(Error::InvalidRequest(m)) if m.contains("password-protected"))

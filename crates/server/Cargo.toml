@@ -12,6 +12,7 @@ hex = "0.4.3"
 hmac = "0.13.0"
 http = "1.5.0"
 http-body-util = "0.1.5"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 mime = "0.3.18"
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
 prometheus-client = "0.25.2"

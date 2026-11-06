@@ -8,6 +8,7 @@
 pub mod auth;
 pub mod error;
 pub mod metrics;
+pub mod oidc;
 pub mod openapi;
 pub mod routes;
 pub mod state;
@@ -101,10 +102,12 @@ pub fn app(state: AppState) -> Router {
         router
     } else {
         // `/foo/` is the root route as well as `/foo`.
-        let with_slash = router.clone().map_request(|mut req: axum::extract::Request| {
-            *req.uri_mut() = axum::http::Uri::from_static("/");
-            req
-        });
+        let with_slash = router
+            .clone()
+            .map_request(|mut req: axum::extract::Request| {
+                *req.uri_mut() = axum::http::Uri::from_static("/");
+                req
+            });
         Router::new()
             .nest(root, router)
             .route_service(&format!("{root}/"), with_slash)

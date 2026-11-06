@@ -541,10 +541,7 @@ async fn send_event(state: &AppState, hook: &Webhook, request_id: &str, event: &
     let mut req = client
         .post(&target.url)
         .header("content-type", "application/json")
-        .header(
-            state.config.compat.trace_header.as_str(),
-            request_id,
-        )
+        .header(state.config.compat.trace_header.as_str(), request_id)
         .header("gotenberg-version", rusticdoc_core::VERSION);
     if let Some(traceparent) = &hook.traceparent {
         req = req.header("traceparent", traceparent);

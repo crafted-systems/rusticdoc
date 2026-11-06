@@ -111,11 +111,7 @@ pub fn read(doc: &Document) -> Result<Metadata> {
         if let Some(count) = page_count(&pdf, catalog) {
             out.insert("PageCount".into(), json!(count));
         }
-        if let Some(lang) = catalog
-            .get(b"Lang")
-            .ok()
-            .and_then(|l| deref_text(&pdf, l))
-        {
+        if let Some(lang) = catalog.get(b"Lang").ok().and_then(|l| deref_text(&pdf, l)) {
             out.insert("Language".into(), json!(lang));
         }
         let marked = catalog
@@ -213,11 +209,7 @@ fn number_or(s: &str) -> Value {
 /// `/Keywords` is a comma or semicolon separated list; one entry stays a bare
 /// string.
 fn split_keywords(text: &str) -> Value {
-    let parts: Vec<&str> = text
-        .trim()
-        .split([',', ';'])
-        .map(str::trim)
-        .collect();
+    let parts: Vec<&str> = text.trim().split([',', ';']).map(str::trim).collect();
     if parts.len() == 1 {
         return json!(parts[0]);
     }
@@ -897,10 +889,7 @@ fn values(value: &Value) -> Result<Vec<String>> {
         Value::Number(n) => vec![n.to_string()],
         Value::Null | Value::Object(_) => return Err(refused()),
     };
-    if values
-        .iter()
-        .any(|s| s.contains(['\n', '\r', '\0']))
-    {
+    if values.iter().any(|s| s.contains(['\n', '\r', '\0'])) {
         return Err(refused());
     }
     Ok(values.into_iter().filter(|s| !s.is_empty()).collect())

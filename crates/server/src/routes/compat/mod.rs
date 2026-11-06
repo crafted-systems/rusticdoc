@@ -40,10 +40,7 @@ const MAX_NAME_BYTES: usize = 255;
 pub fn forms(config: &Config) -> Router<AppState> {
     let mut router = Router::new();
     if !config.compat.libreoffice_disable_routes {
-        router = router.route(
-            "/forms/libreoffice/convert",
-            post(libreoffice::convert),
-        );
+        router = router.route("/forms/libreoffice/convert", post(libreoffice::convert));
     }
     if !config.compat.pdfengines_disable_routes {
         router = router
@@ -326,8 +323,7 @@ mod tests {
         .unwrap();
         assert_eq!(many.name, "foo.zip");
         assert_eq!(many.content_type, "application/zip");
-        let mut archive =
-            zip::ZipArchive::new(std::io::Cursor::new(many.bytes.to_vec())).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(many.bytes.to_vec())).unwrap();
         assert_eq!(archive.len(), 2);
         assert!(archive.by_name("b.pdf").is_ok());
     }
@@ -343,7 +339,11 @@ mod tests {
             "Internal Server Error"
         );
         assert_eq!(
-            public_text(StatusCode::BAD_REQUEST, "invalid_request", "Invalid form data: x"),
+            public_text(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Invalid form data: x"
+            ),
             "Invalid form data: x"
         );
         assert_eq!(

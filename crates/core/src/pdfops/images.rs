@@ -39,7 +39,9 @@ pub(super) fn reencode(pdf: &mut Pdf, quality: u8, deadline: Deadline) -> Result
             continue;
         };
         if let Some(Object::Stream(stream)) = pdf.objects.get_mut(&id) {
-            stream.dict.set("Filter", Object::Name(b"DCTDecode".to_vec()));
+            stream
+                .dict
+                .set("Filter", Object::Name(b"DCTDecode".to_vec()));
             stream.dict.remove(b"DecodeParms");
             stream.set_content(jpeg);
             stream.allows_compression = false;
@@ -85,7 +87,14 @@ fn components(pdf: &Pdf, space: &Object) -> Option<u32> {
                 b"CalRGB" => Some(3),
                 b"ICCBased" => {
                     let (_, profile) = pdf.dereference(list.get(1)?).ok()?;
-                    let n = profile.as_stream().ok()?.dict.get(b"N").ok()?.as_i64().ok()?;
+                    let n = profile
+                        .as_stream()
+                        .ok()?
+                        .dict
+                        .get(b"N")
+                        .ok()?
+                        .as_i64()
+                        .ok()?;
                     matches!(n, 1 | 3).then_some(n as u32)
                 }
                 _ => None,

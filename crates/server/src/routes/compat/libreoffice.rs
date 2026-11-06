@@ -11,19 +11,18 @@ use crate::state::AppState;
 
 /// What LibreOffice is sent. Anything else in a form is ignored.
 const EXTENSIONS: &[&str] = &[
-    ".123", ".602", ".abw", ".bib", ".bmp", ".cdr", ".cgm", ".cmx", ".csv", ".cwk", ".dbf",
-    ".dif", ".doc", ".docm", ".docx", ".dot", ".dotm", ".dotx", ".dxf", ".emf", ".eps", ".epub",
-    ".fodg", ".fodp", ".fods", ".fodt", ".fopd", ".gif", ".htm", ".html", ".hwp", ".jpeg",
-    ".jpg", ".key", ".ltx", ".lwp", ".mcw", ".met", ".mml", ".mw", ".numbers", ".odd", ".odg",
-    ".odm", ".odp", ".ods", ".odt", ".otg", ".oth", ".otp", ".ots", ".ott", ".pages", ".pbm",
-    ".pcd", ".pct", ".pcx", ".pdb", ".pdf", ".pgm", ".png", ".pot", ".potm", ".potx", ".ppm",
-    ".pps", ".ppsm", ".ppsx", ".ppt", ".pptm", ".pptx", ".psd", ".psw", ".pub", ".pwp", ".pxl",
-    ".ras", ".rtf", ".sda", ".sdc", ".sdd", ".sdp", ".sdw", ".sgl", ".slk", ".smf", ".stc",
-    ".std", ".sti", ".stw", ".svg", ".svm", ".swf", ".sxc", ".sxd", ".sxg", ".sxi", ".sxm",
-    ".sxw", ".tga", ".tif", ".tiff", ".txt", ".uof", ".uop", ".uos", ".uot", ".vdx", ".vor",
-    ".vsd", ".vsdm", ".vsdx", ".wb2", ".wk1", ".wks", ".wmf", ".wpd", ".wpg", ".wps", ".xbm",
-    ".xhtml", ".xls", ".xlsb", ".xlsm", ".xlsx", ".xlt", ".xltm", ".xltx", ".xlw", ".xml",
-    ".xpm", ".zabw",
+    ".123", ".602", ".abw", ".bib", ".bmp", ".cdr", ".cgm", ".cmx", ".csv", ".cwk", ".dbf", ".dif",
+    ".doc", ".docm", ".docx", ".dot", ".dotm", ".dotx", ".dxf", ".emf", ".eps", ".epub", ".fodg",
+    ".fodp", ".fods", ".fodt", ".fopd", ".gif", ".htm", ".html", ".hwp", ".jpeg", ".jpg", ".key",
+    ".ltx", ".lwp", ".mcw", ".met", ".mml", ".mw", ".numbers", ".odd", ".odg", ".odm", ".odp",
+    ".ods", ".odt", ".otg", ".oth", ".otp", ".ots", ".ott", ".pages", ".pbm", ".pcd", ".pct",
+    ".pcx", ".pdb", ".pdf", ".pgm", ".png", ".pot", ".potm", ".potx", ".ppm", ".pps", ".ppsm",
+    ".ppsx", ".ppt", ".pptm", ".pptx", ".psd", ".psw", ".pub", ".pwp", ".pxl", ".ras", ".rtf",
+    ".sda", ".sdc", ".sdd", ".sdp", ".sdw", ".sgl", ".slk", ".smf", ".stc", ".std", ".sti", ".stw",
+    ".svg", ".svm", ".swf", ".sxc", ".sxd", ".sxg", ".sxi", ".sxm", ".sxw", ".tga", ".tif",
+    ".tiff", ".txt", ".uof", ".uop", ".uos", ".uot", ".vdx", ".vor", ".vsd", ".vsdm", ".vsdx",
+    ".wb2", ".wk1", ".wks", ".wmf", ".wpd", ".wpg", ".wps", ".xbm", ".xhtml", ".xls", ".xlsb",
+    ".xlsm", ".xlsx", ".xlt", ".xltm", ".xltx", ".xlw", ".xml", ".xpm", ".zabw",
 ];
 
 fn int_in(
@@ -36,9 +35,9 @@ fn int_in(
         if value.is_empty() {
             return Ok(default);
         }
-        let n = value.parse::<i64>().map_err(|_| {
-            format!("strconv.Atoi: parsing {value:?}: invalid syntax")
-        })?;
+        let n = value
+            .parse::<i64>()
+            .map_err(|_| format!("strconv.Atoi: parsing {value:?}: invalid syntax"))?;
         check(n)?;
         i32::try_from(n).map_err(|_| format!("strconv.Atoi: parsing {value:?}: value out of range"))
     })
