@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1.92"
 bytes = "1.12.1"
+fontdb = { version = "0.24.0", default-features = false, features = ["fs", "fontconfig"] }
 hex = "0.4.3"
 libc = "0.2"
 lopdf = { version = "0.47.0", features = ["embed_image"] }

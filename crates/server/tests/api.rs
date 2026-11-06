@@ -890,3 +890,153 @@ async fn gotenberg_boolean_fields_are_strict() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn templates_can_be_reused_by_hash_and_a_miss_is_a_404() {
+    let router = app(AppState::new(config()));
+    let body = "Reuse {{ who }} ".to_string() + &format!("{:?}", std::thread::current().id());
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("reuse.txt"), &body),
+                ("data", None, r#"{"who":"me"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let hash = rusticdoc_core::template::template_hash(body.as_bytes());
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("templateHash", None, &hash),
+                ("data", None, r#"{"who":"again"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(text(res).await.starts_with("Reuse again"));
+
+    let res = router
+        .oneshot(post_form(
+            "/v1/render",
+            &[("templateHash", None, "00ff"), ("data", None, "{}")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(body["error"], "template_not_cached");
+}
+
+#[tokio::test]
+async fn named_steps_take_their_fields_and_refuse_empty_ones() {
+    use rusticdoc_core::pdfops::fixtures;
+    let router = app(AppState::new(config()));
+    // A PDF through the render route with a stamp in the step list.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), fixtures::pages(1)),
+                ("steps", None, b"stamp,rotate".to_vec()),
+                ("stampSource", None, b"text".to_vec()),
+                ("stampExpression", None, b"PAID".to_vec()),
+                ("rotateAngle", None, b"90".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let res = router
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), fixtures::pages(1)),
+                ("steps", None, b"watermark".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn signatures_land_at_exact_coordinates() {
+    use rusticdoc_core::pdfops::fixtures;
+    let router = app(AppState::new(config()));
+    let png = fixtures::PNG_DOT.to_vec();
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), fixtures::pages(2)),
+                ("files", Some("sig.png"), png.clone()),
+                ("page", None, b"2".to_vec()),
+                ("x", None, b"100".to_vec()),
+                ("y", None, b"72".to_vec()),
+                ("width", None, b"150".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let pdf = lopdf::Document::load_mem(&bytes_of(res).await).unwrap();
+    let page2 = pdf.get_pages()[&2];
+    let content = String::from_utf8_lossy(&pdf.get_page_content(page2)).to_string();
+    assert!(
+        content.contains("175"),
+        "the centre is x + width / 2: {content}"
+    );
+    assert!(content.contains("/FxI"), "{content}");
+
+    let res = router
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), fixtures::pages(1)),
+                ("files", Some("sig.png"), png),
+                ("page", None, b"1".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn fonts_are_listed_behind_auth_and_reload_without_engines() {
+    let mut c = config();
+    c.fonts_dir = std::env::temp_dir();
+    let router = app(AppState::new(c));
+    let res = router
+        .clone()
+        .oneshot(Request::get("/fonts").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let list: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert!(list.is_array());
+    let res = router
+        .oneshot(Request::post("/fonts/reload").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let mut c = config();
+    c.api_keys = vec!["k".into()];
+    let router = app(AppState::new(c));
+    let res = router
+        .oneshot(Request::get("/fonts").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}

@@ -125,6 +125,24 @@ pub struct OverlayForm {
 
 #[derive(ToSchema)]
 #[allow(dead_code)]
+pub struct SignForm {
+    /// The PDF first, then one PNG or JPEG per placement.
+    #[schema(value_type = Vec<String>, format = Binary)]
+    pub files: Vec<String>,
+    /// 1-based page of each signature; repeat the field for several.
+    pub page: u32,
+    /// Points from the page's left edge to the image's left edge.
+    pub x: f32,
+    /// Points from the page's bottom edge to the image's bottom edge.
+    pub y: f32,
+    /// Width in points. Default the image's natural size.
+    pub width: Option<f32>,
+    #[schema(rename = "outputFilename")]
+    pub output_filename: Option<String>,
+}
+
+#[derive(ToSchema)]
+#[allow(dead_code)]
 pub struct FacturxForm {
     /// The PDF/A-3 invoice, then the Factur-X XML.
     #[schema(value_type = Vec<String>, format = Binary)]
@@ -564,6 +582,7 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
         return Err(ApiError::bad_request("'opacity' must be between 0 and 1"));
     }
     Ok(Overlay {
+        placement: None,
         kind,
         position,
         opacity,
@@ -631,6 +650,108 @@ pub async fn stamp(
                 .await?,
             "stamp",
         ))
+    };
+    finish(state, hook, request_id(&headers), job).await
+}
+
+/// Places signature images at exact coordinates. This draws the image; it
+/// is not a cryptographic signature.
+#[utoipa::path(
+    post, path = "/v1/pdf/sign", tag = "pdf",
+    request_body(content_type = "multipart/form-data", content = SignForm),
+    responses(
+        (status = 200, description = "The signed PDF", content_type = "application/pdf", body = BinaryFile),
+        (status = 204, description = "Accepted; the result goes to the webhook"),
+        (status = 400, description = "The request is wrong", body = ErrorBody),
+    ),
+    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+)]
+pub async fn sign(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> ApiResult<Response> {
+    let hook = Webhook::from_headers(&headers, state.config.webhook_allow_private).await?;
+    let mut form = Form::read(multipart, &state).await?;
+    let doc = one_pdf(&mut form)?;
+    let images = std::mem::take(&mut form.files);
+    if images.is_empty() || images.len() > 50 {
+        return Err(ApiError::bad_request(
+            "send the PDF first, then one to 50 PNG or JPEG signatures",
+        ));
+    }
+    let (pages, xs, ys, widths) = (
+        form.all("page"),
+        form.all("x"),
+        form.all("y"),
+        form.all("width"),
+    );
+    if pages.len() != images.len() || xs.len() != images.len() || ys.len() != images.len() {
+        return Err(ApiError::bad_request(
+            "each signature needs its own 'page', 'x' and 'y' fields",
+        ));
+    }
+    let mut overlays = Vec::with_capacity(images.len());
+    for (i, image) in images.into_iter().enumerate() {
+        let number = |name: &str, raw: &str| -> ApiResult<f32> {
+            raw.trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "'{name}' must be a non-negative number, not '{raw}'"
+                    ))
+                })
+        };
+        let page: u32 = pages[i]
+            .trim()
+            .parse()
+            .ok()
+            .filter(|p| *p >= 1)
+            .ok_or_else(|| {
+                ApiError::bad_request(format!("'page' must be a page number, not '{}'", pages[i]))
+            })?;
+        let x = number("x", &xs[i])?;
+        let y = number("y", &ys[i])?;
+        let width = widths
+            .get(i)
+            .filter(|w| !w.trim().is_empty())
+            .map(|w| number("width", w))
+            .transpose()?;
+        let png = image.bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+        let jpeg = image.bytes.starts_with(b"\xff\xd8\xff");
+        if !(png || jpeg) {
+            return Err(ApiError::bad_request(format!(
+                "'{}' is not a PNG or JPEG image",
+                image.name
+            )));
+        }
+        overlays.push(Overlay {
+            placement: Some(rusticdoc_core::pdfops::Placement { x, y, width }),
+            kind: OverlayKind::Image {
+                bytes: image.bytes.to_vec(),
+                name: image.name,
+            },
+            position: Position::Center,
+            opacity: 1.0,
+            rotation: 0.0,
+            scale: 0.0,
+            pages: page.to_string(),
+        });
+    }
+    let name = output_name(&form, &doc, "");
+    let st = state.clone();
+    let job = async move {
+        let mut current = doc;
+        for overlay in &overlays {
+            current = st
+                .engines
+                .pdf
+                .stamp(&current, overlay, st.config.api_timeout)
+                .await?;
+        }
+        Ok(pdf_output(name, current, "sign"))
     };
     finish(state, hook, request_id(&headers), job).await
 }

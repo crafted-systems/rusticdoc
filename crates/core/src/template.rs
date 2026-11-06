@@ -103,13 +103,42 @@ pub fn validate(
 
 /// Most compiled templates kept in memory, by content hash.
 const CACHE_ENTRIES: usize = 64;
+/// Largest template kept for reuse by hash.
+const RECALL_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+fn recall_cache() -> &'static Mutex<Cache<Document>> {
+    static RECALL: OnceLock<Mutex<Cache<Document>>> = OnceLock::new();
+    RECALL.get_or_init(|| Mutex::new(Cache::default()))
+}
+
+/// Keeps a template so a later request can send only its hash.
+pub fn remember(doc: &Document) {
+    if doc.bytes.len() > RECALL_MAX_BYTES {
+        return;
+    }
+    let key = template_hash(&doc.bytes);
+    recall_cache()
+        .lock()
+        .expect("template cache")
+        .put(key, Arc::new(doc.clone()));
+}
+
+/// A remembered template by the hex SHA-256 of its bytes.
+pub fn recall(hash: &str) -> Option<Document> {
+    let hash = hash.trim().to_ascii_lowercase();
+    recall_cache()
+        .lock()
+        .expect("template cache")
+        .get(&hash)
+        .map(|d| d.as_ref().clone())
+}
 
 /// The compiled form of a template, from the cache or freshly parsed.
 fn compiled(
     format: rusticdoc_template::Format,
     bytes: &[u8],
 ) -> Result<Arc<rusticdoc_template::Compiled>> {
-    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<Cache<rusticdoc_template::Compiled>>> = OnceLock::new();
     let key = format!("{}:{}", format.extension(), template_hash(bytes));
     let cache = CACHE.get_or_init(|| Mutex::new(Cache::default()));
     if let Some(hit) = cache.lock().expect("template cache").get(&key) {
@@ -125,14 +154,22 @@ fn compiled(
     Ok(compiled)
 }
 
-#[derive(Default)]
-struct Cache {
-    map: HashMap<String, Arc<rusticdoc_template::Compiled>>,
+struct Cache<T> {
+    map: HashMap<String, Arc<T>>,
     order: VecDeque<String>,
 }
 
-impl Cache {
-    fn get(&mut self, key: &str) -> Option<Arc<rusticdoc_template::Compiled>> {
+impl<T> Default for Cache<T> {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+}
+
+impl<T> Cache<T> {
+    fn get(&mut self, key: &str) -> Option<Arc<T>> {
         let hit = self.map.get(key).cloned()?;
         if let Some(pos) = self.order.iter().position(|k| k == key) {
             self.order.remove(pos);
@@ -141,7 +178,13 @@ impl Cache {
         Some(hit)
     }
 
-    fn put(&mut self, key: String, value: Arc<rusticdoc_template::Compiled>) {
+    fn put(&mut self, key: String, value: Arc<T>) {
+        if self.map.contains_key(&key) {
+            if let Some(pos) = self.order.iter().position(|k| *k == key) {
+                self.order.remove(pos);
+            }
+            self.map.remove(&key);
+        }
         while self.map.len() >= CACHE_ENTRIES {
             match self.order.pop_front() {
                 Some(old) => {

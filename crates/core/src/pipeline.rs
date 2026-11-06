@@ -24,10 +24,9 @@ pub struct Engines {
 impl Engines {
     pub fn from_config(config: &Config) -> Self {
         Self {
-            libreoffice: config
-                .libreoffice_bin
-                .clone()
-                .map(|bin| LibreOffice::new(bin, config.workers)),
+            libreoffice: config.libreoffice_bin.clone().map(|bin| {
+                LibreOffice::new(bin, config.workers).with_fonts_dir(config.fonts_dir.clone())
+            }),
             pdf: MultiEngine::standard(config.qpdf_bin.clone(), config.pdfcpu_bin.clone()),
         }
     }

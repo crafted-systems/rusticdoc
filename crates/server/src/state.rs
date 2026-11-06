@@ -14,6 +14,8 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub http: reqwest::Client,
     pub started: Instant,
+    /// The loaded fonts, scanned on first use and on reload.
+    pub fonts: Arc<tokio::sync::RwLock<Option<Arc<Vec<rusticdoc_core::fonts::FontInfo>>>>>,
 }
 
 impl AppState {
@@ -33,6 +35,7 @@ impl AppState {
             metrics: Arc::new(Metrics::new()),
             http,
             started: Instant::now(),
+            fonts: Default::default(),
         }
     }
 }

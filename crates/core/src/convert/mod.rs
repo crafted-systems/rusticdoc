@@ -76,6 +76,8 @@ struct Settings {
     workers: usize,
     max_jobs: u64,
     start_timeout: Duration,
+    /// Added to every worker's fontconfig.
+    fonts_dir: Option<PathBuf>,
 }
 
 struct Inner {
@@ -85,6 +87,8 @@ struct Inner {
     idle: Mutex<Vec<Worker>>,
     seed: OnceCell<Seed>,
     next_id: AtomicU64,
+    /// Bumped when fonts change; workers from older generations retire.
+    generation: AtomicU64,
     started: AtomicU64,
     restarts: AtomicU64,
 }
@@ -125,6 +129,7 @@ impl LibreOffice {
             workers,
             max_jobs,
             start_timeout: DEFAULT_START_TIMEOUT,
+            fonts_dir: None,
         })
     }
 
@@ -137,6 +142,7 @@ impl LibreOffice {
                 idle: Mutex::new(Vec::with_capacity(workers)),
                 seed: OnceCell::new(),
                 next_id: AtomicU64::new(1),
+                generation: AtomicU64::new(0),
                 started: AtomicU64::new(0),
                 restarts: AtomicU64::new(0),
             }),
@@ -165,6 +171,24 @@ impl LibreOffice {
     /// without LibreOffice. Meant for tests.
     pub fn with_bridge(self, script: PathBuf) -> Self {
         self.rebuild(|s| s.bridge = Some(script))
+    }
+
+    /// Adds a directory of mounted fonts to every worker's fontconfig.
+    pub fn with_fonts_dir(self, dir: PathBuf) -> Self {
+        self.rebuild(|s| s.fonts_dir = Some(dir))
+    }
+
+    /// Makes workers see a changed fonts directory: idle workers go now and
+    /// restart, and busy ones are replaced when their job ends.
+    pub async fn reload_fonts(&self) -> Result<()> {
+        self.inner.generation.fetch_add(1, Ordering::Relaxed);
+        let idle: Vec<Worker> = self.inner.idle.lock().await.drain(..).collect();
+        let dropped = idle.len() as u64;
+        for mut worker in idle {
+            worker.kill().await;
+        }
+        self.inner.restarts.fetch_add(dropped, Ordering::Relaxed);
+        self.warm_up().await
     }
 
     /// The `soffice` binary.
@@ -211,7 +235,12 @@ impl LibreOffice {
             .acquire_owned()
             .await
             .map_err(|_| Error::EngineUnavailable("LibreOffice pool closed".into()))?;
-        let mut worker = self.checkout().await?;
+        let dedicated = !options.fonts.is_empty();
+        let mut worker = if dedicated {
+            self.start_dedicated(&options.fonts).await?
+        } else {
+            self.checkout().await?
+        };
 
         let job_dir = worker.dir().join(format!("job-{}", worker.jobs));
         tokio::fs::create_dir(&job_dir).await?;
@@ -235,11 +264,19 @@ impl LibreOffice {
         let started = Instant::now();
         let result = match tokio::time::timeout(timeout, worker.call(&req)).await {
             Err(_) => {
-                self.retire(worker, permit, "timed out");
+                if dedicated {
+                    worker.kill().await;
+                } else {
+                    self.retire(worker, permit, "timed out");
+                }
                 return Err(Error::Timeout(timeout));
             }
             Ok(Err(e)) => {
-                self.retire(worker, permit, &e.to_string());
+                if dedicated {
+                    worker.kill().await;
+                } else {
+                    self.retire(worker, permit, &e.to_string());
+                }
                 return Err(e);
             }
             Ok(Ok(resp)) if !resp.ok => Err(Error::Engine {
@@ -266,7 +303,14 @@ impl LibreOffice {
         let _ = tokio::fs::remove_dir_all(&job_dir).await;
         worker.jobs += 1;
         worker.last_used = Instant::now();
-        if !worker.is_alive() {
+        if dedicated {
+            worker.kill().await;
+            drop(permit);
+            return result;
+        }
+        if worker.generation != self.inner.generation.load(Ordering::Relaxed) {
+            self.retire(worker, permit, "fonts changed");
+        } else if !worker.is_alive() {
             self.retire(worker, permit, "the bridge exited");
         } else if worker.jobs >= self.inner.settings.max_jobs {
             self.retire(worker, permit, "served its jobs");
@@ -338,11 +382,22 @@ impl LibreOffice {
         }
     }
 
+    /// A worker with extra fonts, for one job.
+    async fn start_dedicated(&self, fonts: &[(String, Vec<u8>)]) -> Result<Worker> {
+        let seed = self.seed().await?;
+        let mut launch = seed.launch.clone();
+        launch.extra_fonts = fonts.to_vec();
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        Worker::start(id, &launch, self.inner.settings.start_timeout).await
+    }
+
     async fn start_worker(&self) -> Result<Worker> {
         let seed = self.seed().await?;
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let started = Instant::now();
-        let worker = Worker::start(id, &seed.launch, self.inner.settings.start_timeout).await?;
+        let generation = self.inner.generation.load(Ordering::Relaxed);
+        let mut worker = Worker::start(id, &seed.launch, self.inner.settings.start_timeout).await?;
+        worker.generation = generation;
         self.inner.started.fetch_add(1, Ordering::Relaxed);
         tracing::info!(
             worker = id,
@@ -403,6 +458,8 @@ impl LibreOffice {
                         script,
                         soffice: settings.bin.clone(),
                         seed_profile,
+                        fonts_dir: settings.fonts_dir.clone(),
+                        extra_fonts: Vec::new(),
                     },
                     _dir: dir,
                 })

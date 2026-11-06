@@ -45,6 +45,7 @@ async fn main() {
         }
         ["stamp", input, out, text] => {
             let overlay = Overlay {
+                placement: None,
                 kind: OverlayKind::Text {
                     text: text.to_string(),
                     font_size: 24.0,

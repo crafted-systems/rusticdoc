@@ -1,4 +1,5 @@
 pub mod convert;
+pub mod fonts;
 pub mod form;
 pub mod forms;
 pub mod gotenberg;
@@ -28,6 +29,11 @@ pub fn router() -> Router<AppState> {
         .route("/forms/pdfengines/merge", post(pdf::merge))
         .route("/v1/pdf/encrypt", post(pdf::encrypt))
         .route("/forms/pdfengines/encrypt", post(pdf::encrypt))
+        .route("/v1/fonts", get(fonts::list))
+        .route("/fonts", get(fonts::list))
+        .route("/v1/fonts/reload", post(fonts::reload))
+        .route("/fonts/reload", post(fonts::reload))
+        .route("/v1/pdf/sign", post(pdfops::sign))
         .route("/v1/pdf/convert", post(convert::convert_pdf))
         .route("/forms/pdfengines/convert", post(convert::convert_pdf))
         .route("/v1/pdf/split", post(pdfops::split))

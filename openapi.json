@@ -134,6 +134,83 @@
         ]
       }
     },
+    "/v1/fonts": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Lists the fonts LibreOffice and the PDF stage can use.",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "The loaded fonts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FontSchema"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/fonts/reload": {
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Rescans the fonts directory and restarts idle LibreOffice workers, so a\nnew font needs no container restart. Busy workers restart after their\ncurrent job.",
+        "operationId": "reload",
+        "responses": {
+          "200": {
+            "description": "What is loaded now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reloaded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A worker could not restart",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
     "/v1/pdf/bookmarks/read": {
       "post": {
         "tags": [
@@ -1002,6 +1079,61 @@
         ]
       }
     },
+    "/v1/pdf/sign": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Places signature images at exact coordinates. This draws the image; it\nis not a cryptographic signature.",
+        "operationId": "sign",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SignForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The signed PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
     "/v1/pdf/split": {
       "post": {
         "tags": [
@@ -1723,6 +1855,37 @@
           }
         }
       },
+      "FontSchema": {
+        "type": "object",
+        "required": [
+          "family",
+          "style",
+          "weight",
+          "file",
+          "mounted"
+        ],
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string",
+            "description": "The file's base name."
+          },
+          "mounted": {
+            "type": "boolean",
+            "description": "True when it came from the mounted fonts directory."
+          },
+          "style": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -1838,6 +2001,23 @@
           }
         }
       },
+      "Reloaded": {
+        "type": "object",
+        "required": [
+          "families",
+          "faces"
+        ],
+        "properties": {
+          "faces": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "families": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "RenderForm": {
         "type": "object",
         "description": "The multipart form `/v1/render` accepts. Documented here; parsed by hand.",
@@ -1939,6 +2119,55 @@
             "type": "string",
             "description": "90, 180 or 270.",
             "example": "90"
+          }
+        }
+      },
+      "SignForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "page",
+          "x",
+          "y"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF first, then one PNG or JPEG per placement."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based page of each signature; repeat the field for several.",
+            "minimum": 0
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Width in points. Default the image's natural size."
+          },
+          "x": {
+            "type": "number",
+            "format": "float",
+            "description": "Points from the page's left edge to the image's left edge."
+          },
+          "y": {
+            "type": "number",
+            "format": "float",
+            "description": "Points from the page's bottom edge to the image's bottom edge."
           }
         }
       },
@@ -2069,6 +2298,10 @@
     {
       "name": "pdf-forms",
       "description": "PDF templates: form fields, tags in annotations, overlays"
+    },
+    {
+      "name": "fonts",
+      "description": "Loaded fonts and reloading a mounted directory"
     },
     {
       "name": "service",

@@ -3,13 +3,14 @@ use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use rusticdoc_core::job::parse_steps;
-use rusticdoc_core::{RenderRequest, template};
+use rusticdoc_core::{RenderRequest, Step, template};
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::metrics::StageLabels;
 use crate::routes::form::{Form, download, request_id};
+use crate::routes::gotenberg;
 use crate::state::AppState;
 use crate::webhook::{self, Webhook};
 
@@ -78,16 +79,38 @@ pub async fn render(
         .position(|f| f.name != "data.json" && f.name != "ctx.json")
     {
         Some(pos) => form.files.remove(pos),
-        None => {
-            return Err(ApiError::bad_request(
-                "no template in the form; send it as a file part",
-            ));
-        }
+        None => match form
+            .field("templateHash")
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+        {
+            // Stateless by contract: a miss is a 404 and the client sends
+            // the file again.
+            Some(hash) => template::recall(hash).ok_or_else(|| {
+                ApiError::new(
+                    axum::http::StatusCode::NOT_FOUND,
+                    "template_not_cached",
+                    "no template with that hash is cached; send the file",
+                )
+            })?,
+            None => {
+                return Err(ApiError::bad_request(
+                    "no template in the form; send it as a file part, or a 'templateHash'",
+                ));
+            }
+        },
     };
+    template::remember(&template);
     let mut req = RenderRequest::new(template);
     req.data = form.json("data")?;
     req.ctx = form.json("ctx")?;
-    req.steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
+    let mut options = gotenberg::convert_options(&form)?;
+    // Here PDF/A and PDF/UA happen where the step list says, not on every
+    // conversion.
+    options.pdfa = None;
+    options.pdfua = false;
+    req.convert_options = options;
+    req.steps = named_steps(&mut form)?;
     req.output_name = form
         .field("outputFilename")
         .map(|s| s.trim().to_string())
@@ -127,6 +150,37 @@ pub async fn render(
     }
 
     run(state, hook, request_id(&headers), req).await
+}
+
+/// The form's `steps` list. Steps that carry files or repeat
+/// (`watermark`, `stamp`, `embed`, `factur-x`) are built from their own
+/// fields, in the position the list names.
+fn named_steps(form: &mut Form) -> ApiResult<Vec<Step>> {
+    let list = form.field("steps").unwrap_or("").to_string();
+    let carried = gotenberg::post_steps(form, false)?;
+    let mut steps = Vec::new();
+    for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let wanted: Option<fn(&Step) -> bool> = match name.to_ascii_lowercase().as_str() {
+            "watermark" => Some(|s| matches!(s, Step::Watermark { .. })),
+            "stamp" => Some(|s| matches!(s, Step::Stamp { .. })),
+            "embed" => Some(|s| matches!(s, Step::Embed { .. })),
+            "factur-x" | "facturx" => Some(|s| matches!(s, Step::Facturx { .. })),
+            _ => None,
+        };
+        match wanted {
+            Some(matches) => {
+                let before = steps.len();
+                steps.extend(carried.iter().filter(|s| matches(s)).cloned());
+                if steps.len() == before {
+                    return Err(ApiError::bad_request(format!(
+                        "step '{name}' has nothing to do; send its fields"
+                    )));
+                }
+            }
+            None => steps.extend(parse_steps(name, &form.fields)?),
+        }
+    }
+    Ok(steps)
 }
 
 /// Runs a request now, or hands it to a webhook task.
