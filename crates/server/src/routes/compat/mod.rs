@@ -29,7 +29,7 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::auth::Principal;
-use crate::error::{ApiError, ErrorText};
+use crate::error::{ApiError, ErrorText, public_text};
 use crate::routes::form::{self as uploads, Form, download, request_id};
 use crate::state::AppState;
 use crate::webhook::{self, Webhook};
@@ -103,22 +103,6 @@ pub fn engines(state: &AppState) -> Compat<'_> {
     }
 }
 
-/// The text a client reads for an error. Engine failures stay out of it: they
-/// go to the log, and the client gets the status's name.
-pub fn public_text(status: StatusCode, kind: &str, message: &str) -> String {
-    match kind {
-        "timeout" => {
-            "The request exceeded the time limit. Increase it with --api-timeout, or reduce the workload.".to_string()
-        }
-        "reported" => message.to_string(),
-        _ if status.is_server_error() || status == StatusCode::UNAUTHORIZED => status
-            .canonical_reason()
-            .unwrap_or("Error")
-            .to_string(),
-        _ => message.to_string(),
-    }
-}
-
 /// Every error on Gotenberg's paths is `text/plain`, in its words. A middleware,
 /// so it also covers what never reaches a handler: authentication, an unknown
 /// route, a request that ran out of time.
@@ -175,7 +159,7 @@ where
     let hook = if state.config.compat.webhook_disabled {
         None
     } else {
-        match Webhook::from_gotenberg_headers(&headers, state.config.webhook_allow_private).await {
+        match Webhook::from_gotenberg_headers(&headers, &state.url_policies).await {
             Ok(hook) => hook.map(|hook| Webhook { permit, ..hook }),
             Err(e) => return e.into_response(),
         }
@@ -212,10 +196,6 @@ where
                 )),
                 Err(e) => Err(e),
             };
-            let result = result.map_err(|e| {
-                let text = public_text(e.status, e.body.error, &e.body.message);
-                ApiError::new(e.status, e.body.error, text)
-            });
             webhook::deliver(state, hook, rid, result).await;
         }
     };

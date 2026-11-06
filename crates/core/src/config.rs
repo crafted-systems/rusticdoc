@@ -59,6 +59,10 @@ pub struct Config {
     pub render_memory: u64,
     /// Render workers that may run at once.
     pub render_workers: usize,
+    /// `/metrics` stays open when other routes need credentials.
+    pub metrics_public: bool,
+    /// Serve `/docs`, which loads a third-party script.
+    pub enable_docs: bool,
     /// Refuse the `downloadFrom` form field entirely.
     pub download_from_disabled: bool,
     /// Most URLs one request may fetch through `downloadFrom`.
@@ -137,6 +141,19 @@ pub struct CompatConfig {
     pub oidc: Option<OidcConfig>,
     /// Engine lists by variable name, as set. Unset lists use the defaults.
     pub engine_orders: BTreeMap<String, Vec<String>>,
+    /// `WEBHOOK_ALLOW_LIST`: regular expressions a webhook URL must match one of.
+    /// Empty allows all, subject to the refusal of private addresses.
+    pub webhook_allow_list: Vec<String>,
+    /// `WEBHOOK_DENY_LIST`: regular expressions no webhook URL may match.
+    pub webhook_deny_list: Vec<String>,
+    /// `WEBHOOK_ERROR_ALLOW_LIST`: the allow list for error URLs, when set.
+    pub webhook_error_allow_list: Vec<String>,
+    /// `WEBHOOK_ERROR_DENY_LIST`: more refusals for error URLs.
+    pub webhook_error_deny_list: Vec<String>,
+    /// `API_DOWNLOAD_FROM_ALLOW_LIST`, as `webhook_allow_list` for `downloadFrom`.
+    pub download_allow_list: Vec<String>,
+    /// `API_DOWNLOAD_FROM_DENY_LIST`, as `webhook_deny_list` for `downloadFrom`.
+    pub download_deny_list: Vec<String>,
 }
 
 impl Default for CompatConfig {
@@ -159,6 +176,12 @@ impl Default for CompatConfig {
             webhook_disabled: false,
             oidc: None,
             engine_orders: BTreeMap::new(),
+            webhook_allow_list: Vec::new(),
+            webhook_deny_list: Vec::new(),
+            webhook_error_allow_list: Vec::new(),
+            webhook_error_deny_list: Vec::new(),
+            download_allow_list: Vec::new(),
+            download_deny_list: Vec::new(),
         }
     }
 }
@@ -213,6 +236,8 @@ impl Default for Config {
             render_worker_bin: None,
             render_memory: 1024 * 1024 * 1024,
             render_workers: 4,
+            metrics_public: false,
+            enable_docs: false,
             download_from_disabled: false,
             download_from_max_entries: 10,
             download_from_allow_private: false,
@@ -227,14 +252,15 @@ impl Default for Config {
 impl Config {
     /// Reads `RUSTICDOC_*` variables over the defaults.
     pub fn from_env() -> Self {
-        let mut c = Self::default();
-        let get = |k: &str| {
-            std::env::var(format!("RUSTICDOC_{k}"))
-                .ok()
-                .filter(|v| !v.is_empty())
-        };
+        Self::from_vars(&|name| std::env::var(name).ok())
+    }
 
-        c.apply_gotenberg_names();
+    /// Reads the settings from `vars`, which looks up one variable.
+    pub fn from_vars(vars: &dyn Fn(&str) -> Option<String>) -> Self {
+        let mut c = Self::default();
+        let get = |k: &str| vars(&format!("RUSTICDOC_{k}")).filter(|v| !v.is_empty());
+
+        c.apply_gotenberg_names(vars);
         if let Some(v) = get("BIND") {
             c.bind = v;
         }
@@ -280,9 +306,20 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+            // Left empty is left unset, as compose passes it; a value with no
+            // key in it is a mistake that would leave the service open.
+            if c.api_keys.is_empty() {
+                c.problems
+                    .push("RUSTICDOC_API_KEYS is set but holds no key".into());
+            }
         }
-        if let (Some(u), Some(p)) = (get("BASIC_AUTH_USERNAME"), get("BASIC_AUTH_PASSWORD")) {
-            c.basic_auth = Some((u, p));
+        match (get("BASIC_AUTH_USERNAME"), get("BASIC_AUTH_PASSWORD")) {
+            (Some(u), Some(p)) => c.basic_auth = Some((u, p)),
+            (None, None) => {}
+            _ => c.problems.push(
+                "RUSTICDOC_BASIC_AUTH_USERNAME and RUSTICDOC_BASIC_AUTH_PASSWORD go together"
+                    .into(),
+            ),
         }
         c.webhook_secret = get("WEBHOOK_SECRET");
         if let Some(v) = get("WEBHOOK_ALLOW_PRIVATE") {
@@ -290,6 +327,12 @@ impl Config {
         }
         if let Some(v) = get("WEBHOOK_ATTEMPTS").and_then(|v| v.parse().ok()) {
             c.webhook_attempts = v;
+        }
+        if let Some(v) = get("METRICS_PUBLIC") {
+            c.metrics_public = matches!(v.as_str(), "1" | "true" | "yes");
+        }
+        if let Some(v) = get("ENABLE_DOCS") {
+            c.enable_docs = matches!(v.as_str(), "1" | "true" | "yes");
         }
         if let Some(v) = get("DOWNLOAD_FROM_DISABLED") {
             c.download_from_disabled = matches!(v.as_str(), "1" | "true" | "yes");
@@ -358,8 +401,8 @@ impl Config {
 
     /// Gotenberg's variable names are accepted too, so a deployment moves
     /// over by changing the image. `RUSTICDOC_*` wins when both are set.
-    fn apply_gotenberg_names(&mut self) {
-        let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    fn apply_gotenberg_names(&mut self, vars: &dyn Fn(&str) -> Option<String>) {
+        let get = |k: &str| vars(k).filter(|v| !v.is_empty());
         let port = get("API_PORT");
         let ip = get("API_BIND_IP");
         if port.is_some() || ip.is_some() {
@@ -378,13 +421,22 @@ impl Config {
         if let Some(v) = get("API_BODY_LIMIT").and_then(|v| parse_bytes(&v)) {
             self.body_limit = v;
         }
-        if matches!(get("API_ENABLE_BASIC_AUTH").as_deref(), Some("true" | "1"))
-            && let (Some(u), Some(p)) = (
-                get("GOTENBERG_API_BASIC_AUTH_USERNAME"),
-                get("GOTENBERG_API_BASIC_AUTH_PASSWORD"),
-            )
-        {
-            self.basic_auth = Some((u, p));
+        if let Some(flag) = get("API_ENABLE_BASIC_AUTH") {
+            match parse_go_bool(&flag) {
+                Some(true) => match (
+                    get("GOTENBERG_API_BASIC_AUTH_USERNAME"),
+                    get("GOTENBERG_API_BASIC_AUTH_PASSWORD"),
+                ) {
+                    (Some(u), Some(p)) => self.basic_auth = Some((u, p)),
+                    _ => self.problems.push(
+                        "API_ENABLE_BASIC_AUTH needs GOTENBERG_API_BASIC_AUTH_USERNAME and GOTENBERG_API_BASIC_AUTH_PASSWORD".into(),
+                    ),
+                },
+                Some(false) => {}
+                None => self
+                    .problems
+                    .push(format!("API_ENABLE_BASIC_AUTH is '{flag}', not a boolean")),
+            }
         }
         if let Some(v) = get("LIBREOFFICE_BIN_PATH") {
             self.libreoffice_bin = Some(PathBuf::from(v));
@@ -416,11 +468,11 @@ impl Config {
         if let Some(v) = get("API_DOWNLOAD_FROM_MAX_ENTRIES").and_then(|v| v.parse().ok()) {
             self.download_from_max_entries = v;
         }
-        self.apply_compat_names();
+        self.apply_compat_names(vars);
     }
 
-    fn apply_compat_names(&mut self) {
-        let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    fn apply_compat_names(&mut self, vars: &dyn Fn(&str) -> Option<String>) {
+        let get = |k: &str| vars(k).filter(|v| !v.is_empty());
         let on = |k: &str| get(k).and_then(|v| parse_go_bool(&v));
         let compat = &mut self.compat;
         if let Some(v) = on("LIBREOFFICE_DISABLE_ROUTES") {
@@ -497,13 +549,38 @@ impl Config {
         if let Some(v) = on("WEBHOOK_DISABLE") {
             compat.webhook_disabled = v;
         }
-        if on("API_ENABLE_OIDC_AUTH") == Some(true) {
-            compat.oidc = Some(OidcConfig {
-                issuer: get("API_OIDC_ISSUER").unwrap_or_default(),
-                audience: get("API_OIDC_AUDIENCE").unwrap_or_default(),
-                jwks_url: get("API_OIDC_JWKS_URL").unwrap_or_default(),
-            });
+        if let Some(flag) = get("API_ENABLE_OIDC_AUTH") {
+            match parse_go_bool(&flag) {
+                Some(true) => {
+                    compat.oidc = Some(OidcConfig {
+                        issuer: get("API_OIDC_ISSUER").unwrap_or_default(),
+                        audience: get("API_OIDC_AUDIENCE").unwrap_or_default(),
+                        jwks_url: get("API_OIDC_JWKS_URL").unwrap_or_default(),
+                    });
+                }
+                Some(false) => {}
+                None => self
+                    .problems
+                    .push(format!("API_ENABLE_OIDC_AUTH is '{flag}', not a boolean")),
+            }
         }
+        let list = |name: &str| -> Vec<String> {
+            get(name)
+                .map(|v| {
+                    v.split(',')
+                        .map(|e| e.trim().to_string())
+                        .filter(|e| !e.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        compat.webhook_allow_list = list("WEBHOOK_ALLOW_LIST");
+        compat.webhook_deny_list = list("WEBHOOK_DENY_LIST");
+        compat.webhook_error_allow_list = list("WEBHOOK_ERROR_ALLOW_LIST");
+        compat.webhook_error_deny_list = list("WEBHOOK_ERROR_DENY_LIST");
+        compat.download_allow_list = list("API_DOWNLOAD_FROM_ALLOW_LIST");
+        compat.download_deny_list = list("API_DOWNLOAD_FROM_DENY_LIST");
+        let compat = &mut self.compat;
         for name in ENGINE_VARIABLES.iter().chain(["PDFENGINES_ENGINES"].iter()) {
             if let Some(list) = get(name) {
                 compat.engine_orders.insert(
@@ -515,6 +592,16 @@ impl Config {
                 );
             }
         }
+    }
+
+    /// True when requests must carry credentials.
+    pub fn auth_configured(&self) -> bool {
+        !self.api_keys.is_empty() || self.basic_auth.is_some() || self.compat.oidc.is_some()
+    }
+
+    /// True when `/metrics` needs credentials.
+    pub fn metrics_guarded(&self) -> bool {
+        self.auth_configured() && !self.metrics_public
     }
 
     /// Settings the service refuses to start with. PDFtk and ExifTool are
@@ -546,12 +633,56 @@ impl Config {
         {
             return Err(format!("'{trace_header}' cannot be a header name"));
         }
-        if let Some(oidc) = &self.compat.oidc
-            && (oidc.issuer.is_empty() || oidc.audience.is_empty())
-        {
-            return Err("API_ENABLE_OIDC_AUTH needs API_OIDC_ISSUER and API_OIDC_AUDIENCE".into());
+        if let Some(oidc) = &self.compat.oidc {
+            if oidc.issuer.is_empty() || oidc.audience.is_empty() {
+                return Err(
+                    "API_ENABLE_OIDC_AUTH needs API_OIDC_ISSUER and API_OIDC_AUDIENCE".into(),
+                );
+            }
+            for (name, url) in [
+                ("API_OIDC_ISSUER", oidc.issuer.as_str()),
+                ("API_OIDC_JWKS_URL", oidc.jwks_url.as_str()),
+            ] {
+                if !url.is_empty() && !is_secure_url(url) {
+                    return Err(format!(
+                        "{name} must be https, or http on a loopback host, not '{url}'"
+                    ));
+                }
+            }
+        }
+        let compat = &self.compat;
+        for (name, list) in [
+            ("WEBHOOK_ALLOW_LIST", &compat.webhook_allow_list),
+            ("WEBHOOK_DENY_LIST", &compat.webhook_deny_list),
+            ("WEBHOOK_ERROR_ALLOW_LIST", &compat.webhook_error_allow_list),
+            ("WEBHOOK_ERROR_DENY_LIST", &compat.webhook_error_deny_list),
+            ("API_DOWNLOAD_FROM_ALLOW_LIST", &compat.download_allow_list),
+            ("API_DOWNLOAD_FROM_DENY_LIST", &compat.download_deny_list),
+        ] {
+            for pattern in list {
+                if let Err(e) = regex::Regex::new(pattern) {
+                    return Err(format!("{name} holds an invalid pattern '{pattern}': {e}"));
+                }
+            }
         }
         Ok(())
+    }
+}
+
+/// True for an `https` URL, or an `http` one whose host is this machine.
+pub fn is_secure_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    match parsed.scheme() {
+        "https" => true,
+        "http" => match parsed.host() {
+            Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        },
+        _ => false,
     }
 }
 
@@ -620,6 +751,85 @@ pub fn parse_bytes(s: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn from(vars: &[(&str, &str)]) -> Config {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Config::from_vars(&move |name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()))
+    }
+
+    #[test]
+    fn half_configured_authentication_stops_the_service() {
+        for vars in [
+            &[("API_ENABLE_BASIC_AUTH", "true")][..],
+            &[("API_ENABLE_BASIC_AUTH", "yes")],
+            &[
+                ("API_ENABLE_BASIC_AUTH", "true"),
+                ("GOTENBERG_API_BASIC_AUTH_USERNAME", "u"),
+            ],
+            &[("RUSTICDOC_BASIC_AUTH_USERNAME", "u")],
+            &[("RUSTICDOC_BASIC_AUTH_PASSWORD", "p")],
+            &[("RUSTICDOC_API_KEYS", " , ")],
+            &[("API_ENABLE_OIDC_AUTH", "yes")],
+            &[("API_ENABLE_OIDC_AUTH", "true")],
+            &[
+                ("API_ENABLE_OIDC_AUTH", "true"),
+                ("API_OIDC_ISSUER", "http://idp.example.com"),
+                ("API_OIDC_AUDIENCE", "a"),
+            ],
+            &[
+                ("API_ENABLE_OIDC_AUTH", "true"),
+                ("API_OIDC_ISSUER", "https://idp.example.com"),
+                ("API_OIDC_AUDIENCE", "a"),
+                ("API_OIDC_JWKS_URL", "http://idp.example.com/keys"),
+            ],
+        ] {
+            assert!(from(vars).check().is_err(), "{vars:?}");
+        }
+    }
+
+    #[test]
+    fn authentication_is_read_as_gotenberg_reads_it() {
+        let basic = [
+            ("API_ENABLE_BASIC_AUTH", "True"),
+            ("GOTENBERG_API_BASIC_AUTH_USERNAME", "u"),
+            ("GOTENBERG_API_BASIC_AUTH_PASSWORD", "p"),
+        ];
+        let config = from(&basic);
+        assert!(config.check().is_ok());
+        assert!(config.basic_auth.is_some());
+        let off = [
+            ("API_ENABLE_BASIC_AUTH", "false"),
+            ("GOTENBERG_API_BASIC_AUTH_USERNAME", "u"),
+        ];
+        assert!(from(&off).check().is_ok());
+        assert!(from(&off).basic_auth.is_none());
+        // Left empty is left unset, as compose passes it.
+        assert!(from(&[("RUSTICDOC_API_KEYS", "")]).check().is_ok());
+        assert_eq!(from(&[("RUSTICDOC_API_KEYS", "a, b")]).api_keys.len(), 2);
+        let local = [
+            ("API_ENABLE_OIDC_AUTH", "1"),
+            ("API_OIDC_ISSUER", "http://127.0.0.1:8080"),
+            ("API_OIDC_AUDIENCE", "a"),
+        ];
+        assert!(from(&local).check().is_ok());
+        assert!(from(&[]).check().is_ok());
+    }
+
+    #[test]
+    fn invalid_url_patterns_stop_the_service() {
+        for name in [
+            "WEBHOOK_ALLOW_LIST",
+            "WEBHOOK_DENY_LIST",
+            "API_DOWNLOAD_FROM_ALLOW_LIST",
+            "API_DOWNLOAD_FROM_DENY_LIST",
+        ] {
+            assert!(from(&[(name, "(")]).check().is_err(), "{name}");
+            assert!(from(&[(name, "^https://a,^https://b")]).check().is_ok());
+        }
+    }
 
     #[test]
     fn durations() {

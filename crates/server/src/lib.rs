@@ -43,10 +43,15 @@ pub fn app(state: AppState) -> Router {
         HeaderName::from_static("gotenberg-version"),
         version.clone(),
     );
+    let own_version = SetResponseHeaderLayer::if_not_present(
+        HeaderName::from_static("x-rusticdoc-version"),
+        version,
+    );
 
     let guarded = |group: Router<AppState>, limit: Duration| {
         group
             .layer(advertise.clone())
+            .layer(own_version.clone())
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 auth::require,
@@ -57,9 +62,9 @@ pub fn app(state: AppState) -> Router {
                 limit,
             ))
     };
-    let api = guarded(routes::router(), timeout);
+    let api = guarded(routes::router(&state.config), timeout);
     let long = guarded(
-        routes::long_router(),
+        routes::long_router(&state.config),
         state.config.batch_timeout + Duration::from_secs(5),
     );
 
@@ -67,6 +72,7 @@ pub fn app(state: AppState) -> Router {
     let forms = routes::compat::forms(&state.config)
         .merge(routes::compat::service::routes(&state.config))
         .layer(advertise)
+        .layer(own_version.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require,
@@ -78,8 +84,14 @@ pub fn app(state: AppState) -> Router {
         ))
         .layer(axum::middleware::from_fn(routes::compat::plain_errors));
 
+    // Without credentials configured nothing is hidden from anyone. With them,
+    // the open routes do not say which version runs.
+    let mut public = routes::public(&state.config);
+    if !state.config.auth_configured() {
+        public = public.layer(own_version);
+    }
     let router = Router::new()
-        .merge(routes::public())
+        .merge(public)
         .merge(api)
         .merge(long)
         .merge(forms)
@@ -91,9 +103,9 @@ pub fn app(state: AppState) -> Router {
             state.clone(),
             telemetry::access,
         ))
-        .layer(SetResponseHeaderLayer::if_not_present(
-            HeaderName::from_static("x-rusticdoc-version"),
-            version,
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
         ))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID))
         .layer(SetRequestIdLayer::new(REQUEST_ID, MakeRequestUuid))
@@ -220,6 +232,23 @@ fn cors(config: &rusticdoc_core::Config) -> CorsLayer {
         .expose_headers([header::CONTENT_DISPOSITION, REQUEST_ID])
 }
 
+/// What an operator should hear at every start.
+pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if !config.auth_configured() {
+        warnings.push(
+            "no authentication is configured, so anyone who can reach this service can use it; set RUSTICDOC_API_KEYS".to_string(),
+        );
+    }
+    if !config.compat.webhook_disabled && config.webhook_secret.is_none() {
+        warnings.push(
+            "webhooks are possible and deliveries are not signed; set RUSTICDOC_WEBHOOK_SECRET"
+                .to_string(),
+        );
+    }
+    warnings
+}
+
 /// Binds, serves, and stops cleanly on SIGINT or SIGTERM.
 pub async fn serve(state: AppState) -> std::io::Result<()> {
     state
@@ -230,6 +259,9 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
         .map_err(|e| std::io::Error::other(format!("the render worker cannot start: {e}")))?;
     let bind = state.config.bind.clone();
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+    for warning in startup_warnings(&state.config) {
+        tracing::warn!("{warning}");
+    }
     tracing::info!(%bind, version = rusticdoc_core::VERSION, engines = %state.engines.describe(), "rusticdoc listening");
     // Start the LibreOffice workers now rather than on the first request,
     // so the first conversions are as fast as the rest.

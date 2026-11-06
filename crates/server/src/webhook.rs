@@ -25,6 +25,7 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use hmac::{Hmac, KeyInit, Mac};
+use regex::Regex;
 use rusticdoc_core::Output;
 use sha2::Sha256;
 use tracing::Instrument;
@@ -55,6 +56,94 @@ const RESERVED_HEADERS: &[&str] = &[
 pub fn is_reserved_header(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.starts_with("x-rusticdoc-") || RESERVED_HEADERS.contains(&lower.as_str())
+}
+
+/// What a URL must get past before it is resolved. The lists add to the refusal
+/// of private addresses and never relax it.
+#[derive(Debug, Clone, Default)]
+pub struct UrlPolicy {
+    /// Allow addresses that are not global unicast.
+    pub allow_private: bool,
+    /// A URL must match one of these. Empty allows any.
+    pub allow: Vec<Regex>,
+    /// A URL may match none of these. Deny wins over allow.
+    pub deny: Vec<Regex>,
+}
+
+impl UrlPolicy {
+    /// The private-address rule alone.
+    pub fn private(allow_private: bool) -> Self {
+        Self {
+            allow_private,
+            ..Self::default()
+        }
+    }
+
+    fn compile(allow_private: bool, allow: &[String], deny: &[&String]) -> Result<Self, String> {
+        let compile = |pattern: &String| Regex::new(pattern).map_err(|e| e.to_string());
+        Ok(Self {
+            allow_private,
+            allow: allow.iter().map(compile).collect::<Result<_, _>>()?,
+            deny: deny
+                .iter()
+                .copied()
+                .map(compile)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
+    fn permits(&self, url: &str) -> bool {
+        !self.deny.iter().any(|r| r.is_match(url))
+            && (self.allow.is_empty() || self.allow.iter().any(|r| r.is_match(url)))
+    }
+}
+
+/// The policies of every outbound URL a request can name.
+#[derive(Debug, Clone, Default)]
+pub struct UrlPolicies {
+    pub webhook: UrlPolicy,
+    pub webhook_error: UrlPolicy,
+    pub download: UrlPolicy,
+}
+
+impl UrlPolicies {
+    /// From the settings. [`rusticdoc_core::Config::check`] has seen the patterns.
+    pub fn from_config(config: &rusticdoc_core::Config) -> Result<Self, String> {
+        let compat = &config.compat;
+        let hook = config.webhook_allow_private;
+        let error_allow = if compat.webhook_error_allow_list.is_empty() {
+            &compat.webhook_allow_list
+        } else {
+            &compat.webhook_error_allow_list
+        };
+        let error_deny: Vec<&String> = compat
+            .webhook_deny_list
+            .iter()
+            .chain(&compat.webhook_error_deny_list)
+            .collect();
+        Ok(Self {
+            webhook: UrlPolicy::compile(
+                hook,
+                &compat.webhook_allow_list,
+                &compat.webhook_deny_list.iter().collect::<Vec<_>>(),
+            )?,
+            webhook_error: UrlPolicy::compile(hook, error_allow, &error_deny)?,
+            download: UrlPolicy::compile(
+                config.download_from_allow_private,
+                &compat.download_allow_list,
+                &compat.download_deny_list.iter().collect::<Vec<_>>(),
+            )?,
+        })
+    }
+
+    /// The private-address rule alone, for webhooks and downloads alike.
+    pub fn private(allow_private: bool) -> Self {
+        Self {
+            webhook: UrlPolicy::private(allow_private),
+            webhook_error: UrlPolicy::private(allow_private),
+            download: UrlPolicy::private(allow_private),
+        }
+    }
 }
 
 /// A vetted destination: the URL rebuilt from its normalised host, and the
@@ -103,8 +192,11 @@ impl FromRequestParts<AppState> for Hook {
             .get::<Principal>()
             .map(|p| p.0.as_str())
             .unwrap_or("public");
-        let Some(mut hook) =
-            Webhook::from_headers(&parts.headers, state.config.webhook_allow_private).await?
+        // `WEBHOOK_DISABLE` means the headers are ignored, here as on `/forms/*`.
+        if state.config.compat.webhook_disabled {
+            return Ok(Self(None));
+        }
+        let Some(mut hook) = Webhook::from_headers(&parts.headers, &state.url_policies).await?
         else {
             return Ok(Self(None));
         };
@@ -145,7 +237,7 @@ impl Webhook {
     /// the request is synchronous.
     pub async fn from_headers(
         headers: &HeaderMap,
-        allow_private: bool,
+        policies: &UrlPolicies,
     ) -> Result<Option<Self>, ApiError> {
         let get = |names: &[&str]| {
             names
@@ -158,12 +250,12 @@ impl Webhook {
         let Some(url) = get(&["x-rusticdoc-webhook-url", "gotenberg-webhook-url"]) else {
             return Ok(None);
         };
-        let target = resolve(&url, allow_private).await?;
+        let target = resolve(&url, &policies.webhook).await?;
         let error_target = match get(&[
             "x-rusticdoc-webhook-error-url",
             "gotenberg-webhook-error-url",
         ]) {
-            Some(e) => Some(resolve(&e, allow_private).await?),
+            Some(e) => Some(resolve(&e, &policies.webhook_error).await?),
             None => None,
         };
         let method = match get(&["x-rusticdoc-webhook-method", "gotenberg-webhook-method"]) {
@@ -227,7 +319,7 @@ impl Webhook {
     /// other delivery, and the extra headers through the same reservations.
     pub async fn from_gotenberg_headers(
         headers: &HeaderMap,
-        allow_private: bool,
+        policies: &UrlPolicies,
     ) -> Result<Option<Self>, ApiError> {
         let get = |name: &str| {
             headers
@@ -238,7 +330,7 @@ impl Webhook {
         };
         if get("gotenberg-webhook-url").is_none() {
             // The service's own webhook headers work here as anywhere.
-            return Self::from_headers(headers, allow_private).await;
+            return Self::from_headers(headers, policies).await;
         }
         let events_url = get("gotenberg-webhook-events-url");
         let error_url = get("gotenberg-webhook-error-url");
@@ -265,14 +357,14 @@ impl Webhook {
             "Gotenberg-Webhook-Error-Method",
             "gotenberg-webhook-error-method",
         )?;
-        let Some(mut hook) = Self::from_headers(headers, allow_private).await? else {
+        let Some(mut hook) = Self::from_headers(headers, policies).await? else {
             return Ok(None);
         };
         hook.method = method;
         hook.error_method = Some(error_method);
         hook.errors_to_error_url_only = true;
         if let Some(events_url) = events_url {
-            hook.events_target = Some(resolve(&events_url, allow_private).await?);
+            hook.events_target = Some(resolve(&events_url, &policies.webhook).await?);
         }
         hook.traceparent = headers
             .get("traceparent")
@@ -296,7 +388,8 @@ fn valid_traceparent(value: &str) -> bool {
 /// Checks the URL's shape, resolves its host, and refuses any address that
 /// is not global unicast unless allowed. The returned URL carries the
 /// normalised host, which is also the key the delivery client pins.
-pub async fn resolve(url: &str, allow_private: bool) -> Result<Target, ApiError> {
+pub async fn resolve(url: &str, policy: &UrlPolicy) -> Result<Target, ApiError> {
+    let allow_private = policy.allow_private;
     let mut parsed = reqwest::Url::parse(url)
         .map_err(|e| ApiError::bad_request(format!("webhook URL '{url}': {e}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -308,6 +401,13 @@ pub async fn resolve(url: &str, allow_private: bool) -> Result<Target, ApiError>
         return Err(ApiError::bad_request(format!(
             "webhook URL '{url}' must not carry credentials; use extra headers"
         )));
+    }
+    if !policy.permits(parsed.as_str()) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "url_not_allowed",
+            format!("URL '{}' is not allowed on this service", redact(url)),
+        ));
     }
     let raw_host = parsed
         .host_str()
@@ -475,6 +575,12 @@ pub async fn deliver(
     request_id: String,
     result: Result<Output, ApiError>,
 ) {
+    // The whole error goes to the log; what is delivered is what a client may
+    // read.
+    let result = result.map_err(|e| {
+        e.log();
+        e.public()
+    });
     let outcome = match &result {
         Ok(_) => serde_json::json!({
             "event": "webhook.success",
@@ -732,23 +838,55 @@ mod tests {
 
     #[tokio::test]
     async fn literal_and_named_private_targets_are_refused_unless_allowed() {
-        assert!(resolve("http://127.0.0.1:9000/x", false).await.is_err());
         assert!(
-            resolve("http://[::ffff:127.0.0.1]:9000/x", false)
+            resolve("http://127.0.0.1:9000/x", &UrlPolicy::private(false))
                 .await
                 .is_err()
         );
-        assert!(resolve("http://10.1.2.3/x", false).await.is_err());
-        assert!(resolve("http://localhost/x", false).await.is_err());
-        assert!(resolve("http://LOCALHOST./x", false).await.is_err());
-        assert!(resolve("http://api.internal/x", false).await.is_err());
-        assert!(resolve("ftp://hooks.example.com/x", false).await.is_err());
         assert!(
-            resolve("http://user:pw@hooks.example.com/x", true)
+            resolve(
+                "http://[::ffff:127.0.0.1]:9000/x",
+                &UrlPolicy::private(false)
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            resolve("http://10.1.2.3/x", &UrlPolicy::private(false))
                 .await
                 .is_err()
         );
-        let t = resolve("http://127.0.0.1:9000/x", true).await.unwrap();
+        assert!(
+            resolve("http://localhost/x", &UrlPolicy::private(false))
+                .await
+                .is_err()
+        );
+        assert!(
+            resolve("http://LOCALHOST./x", &UrlPolicy::private(false))
+                .await
+                .is_err()
+        );
+        assert!(
+            resolve("http://api.internal/x", &UrlPolicy::private(false))
+                .await
+                .is_err()
+        );
+        assert!(
+            resolve("ftp://hooks.example.com/x", &UrlPolicy::private(false))
+                .await
+                .is_err()
+        );
+        assert!(
+            resolve(
+                "http://user:pw@hooks.example.com/x",
+                &UrlPolicy::private(true)
+            )
+            .await
+            .is_err()
+        );
+        let t = resolve("http://127.0.0.1:9000/x", &UrlPolicy::private(true))
+            .await
+            .unwrap();
         assert_eq!(
             t.addrs,
             vec!["127.0.0.1:9000".parse::<SocketAddr>().unwrap()]
@@ -756,14 +894,43 @@ mod tests {
         assert_eq!(t.host, "127.0.0.1");
     }
 
+    fn lists(allow: &[&str], deny: &[&str], allow_private: bool) -> UrlPolicy {
+        let list = |patterns: &[&str]| patterns.iter().map(|p| Regex::new(p).unwrap()).collect();
+        UrlPolicy {
+            allow_private,
+            allow: list(allow),
+            deny: list(deny),
+        }
+    }
+
+    #[tokio::test]
+    async fn allow_and_deny_lists_add_to_the_private_rule() {
+        let forbidden = |policy: UrlPolicy, url: &'static str| async move {
+            resolve(url, &policy).await.unwrap_err().status == StatusCode::FORBIDDEN
+        };
+        let only_a = lists(&["^http://1\\.1\\.1\\.1/a"], &[], false);
+        assert!(forbidden(only_a.clone(), "http://1.1.1.1/b").await);
+        assert!(resolve("http://1.1.1.1/a", &only_a).await.is_ok());
+        // Deny wins over allow.
+        let both = lists(&[".+"], &["/secret"], false);
+        assert!(forbidden(both.clone(), "http://1.1.1.1/secret").await);
+        assert!(resolve("http://1.1.1.1/open", &both).await.is_ok());
+        // An allow list never lets a private address through.
+        let wide = lists(&[".+"], &[], false);
+        let err = resolve("http://127.0.0.1/x", &wide).await.unwrap_err();
+        assert!(err.body.message.contains("private"), "{}", err.body.message);
+    }
+
     #[tokio::test]
     async fn the_url_is_rebuilt_from_the_normalised_host() {
-        let t = resolve("http://LocalHost.:9000/path?x=1", true)
+        let t = resolve("http://LocalHost.:9000/path?x=1", &UrlPolicy::private(true))
             .await
             .unwrap();
         assert_eq!(t.host, "localhost");
         assert_eq!(t.url, "http://localhost:9000/path?x=1");
-        let t = resolve("http://[::1]:9000/p", true).await.unwrap();
+        let t = resolve("http://[::1]:9000/p", &UrlPolicy::private(true))
+            .await
+            .unwrap();
         assert_eq!(t.host, "::1");
         assert_eq!(t.url, "http://[::1]:9000/p");
     }
@@ -797,11 +964,14 @@ mod tests {
             "gotenberg-webhook-extra-http-headers",
             r#"{"Authorization":"Bearer t"}"#.parse().unwrap(),
         );
-        let hook = Webhook::from_headers(&h, true).await.unwrap().unwrap();
+        let hook = Webhook::from_headers(&h, &UrlPolicies::private(true))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(hook.method, Method::PUT);
         assert_eq!(hook.extra_headers.get("authorization").unwrap(), "Bearer t");
         assert!(
-            Webhook::from_headers(&HeaderMap::new(), false)
+            Webhook::from_headers(&HeaderMap::new(), &UrlPolicies::private(false))
                 .await
                 .unwrap()
                 .is_none()
@@ -812,7 +982,12 @@ mod tests {
             r#"{"Content-Length":"1"}"#,
         ] {
             h.insert("gotenberg-webhook-extra-http-headers", bad.parse().unwrap());
-            assert!(Webhook::from_headers(&h, true).await.is_err(), "{bad}");
+            assert!(
+                Webhook::from_headers(&h, &UrlPolicies::private(true))
+                    .await
+                    .is_err(),
+                "{bad}"
+            );
         }
     }
 }

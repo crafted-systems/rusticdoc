@@ -102,7 +102,7 @@ async fn health_version_metrics_and_openapi_are_open() {
         .oneshot(Request::get("/docs").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.status(), StatusCode::NOT_FOUND, "docs are opt-in");
 
     let res = router
         .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())

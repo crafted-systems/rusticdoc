@@ -880,6 +880,7 @@ mod tests {
             libreoffice: None,
             pdf: pdfops::MultiEngine::standard(None, None),
             forms: pdfops::MultiEngine::for_forms(None, None, &BTreeMap::new()),
+            office_routes_disabled: false,
         }
     }
 

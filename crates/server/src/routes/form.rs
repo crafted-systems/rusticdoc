@@ -130,7 +130,7 @@ impl Form {
         // arrive, so a response cannot be read past it.
         let mut budget = config.body_limit;
         for entry in entries {
-            let target = webhook::resolve(&entry.url, config.download_from_allow_private).await?;
+            let target = webhook::resolve(&entry.url, &state.url_policies.download).await?;
             let shown = webhook::redact(&entry.url);
             let client = webhook::client_for(&target, config.api_timeout).map_err(|e| {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "io_error", e.to_string())
