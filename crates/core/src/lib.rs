@@ -11,6 +11,7 @@ pub mod convert;
 pub mod error;
 pub mod fonts;
 pub mod job;
+pub mod limits;
 pub mod pdfform;
 pub mod pdfops;
 pub mod pipeline;

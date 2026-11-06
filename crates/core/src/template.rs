@@ -36,10 +36,14 @@ pub fn is_office_format(ext: &str) -> bool {
 /// Fills a template with `data` as the root and `ctx` under `ctx`. Office
 /// formats go through the `rusticdoc-template` engine, compiled once per
 /// content hash and cached; text formats are rendered whole.
+///
+/// `limit` is the most a text template may write; the render stops there.
+/// Office formats stop at their package limit instead.
 pub fn render(
     doc: &Document,
     data: &serde_json::Value,
     ctx: &serde_json::Value,
+    limit: usize,
 ) -> Result<Document> {
     let ext = doc.extension();
     let mut root = match data {
@@ -64,13 +68,36 @@ pub fn render(
     let source = std::str::from_utf8(&doc.bytes)
         .map_err(|_| Error::Template(format!("{} is not valid UTF-8", doc.name)))?;
     let env = environment();
-    let rendered = env
-        .render_str(
-            source,
-            minijinja::Value::from(minijinja::value::Serde(&root)),
-        )
-        .map_err(|e| Error::Template(describe(&e)))?;
+    let rendered = render_str(
+        &env,
+        source,
+        minijinja::Value::from(minijinja::value::Serde(&root)),
+        limit,
+    )?;
     Ok(Document::new(doc.name.clone(), rendered.into_bytes()))
+}
+
+/// Renders a template string, stopping at `limit` bytes of output.
+pub fn render_str(
+    env: &Environment<'_>,
+    source: &str,
+    ctx: minijinja::Value,
+    limit: usize,
+) -> Result<String> {
+    use rusticdoc_template::limit::{self, RenderFailure};
+    let template = env
+        .template_from_str(source)
+        .map_err(|e| Error::Template(describe(&e)))?;
+    match limit::render(&template, ctx, limit) {
+        Ok((output, _)) => Ok(output),
+        Err(RenderFailure::TooLarge(limit)) => Err(too_large(limit)),
+        Err(RenderFailure::Template(e)) => Err(Error::Template(describe(&e))),
+    }
+}
+
+/// The refusal for output past the limit.
+pub fn too_large(limit: usize) -> Error {
+    Error::InvalidRequest(format!("rendered template is over the {limit} byte limit"))
 }
 
 /// Every problem a template has against sample data, without rendering a
@@ -80,6 +107,7 @@ pub fn validate(
     doc: &Document,
     data: &serde_json::Value,
     ctx: &serde_json::Value,
+    limit: usize,
 ) -> Vec<rusticdoc_template::Diagnostic> {
     use rusticdoc_template::{Diagnostic, Severity};
     let ext = doc.extension();
@@ -91,7 +119,7 @@ pub fn validate(
         root.entry("ctx").or_insert_with(|| ctx.clone());
         return rusticdoc_template::validate(format, &doc.bytes, &serde_json::Value::Object(root));
     }
-    match render(doc, data, ctx) {
+    match render(doc, data, ctx, limit) {
         Ok(_) => Vec::new(),
         Err(e) => vec![Diagnostic {
             severity: Severity::Error,
@@ -250,6 +278,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const LIMIT: usize = crate::limits::DEFAULT_MAX_RENDER_BYTES;
+
     fn txt(s: &str) -> Document {
         Document::new("letter.txt", s.as_bytes().to_vec())
     }
@@ -260,7 +290,7 @@ mod tests {
             "Dear {{ customer.name }},\n{% for i in items %}- {{ i.name }}: {{ i.price | currency('EUR') }}\n{% endfor %}Total {{ items | sum(attribute='price') | currency('EUR') }}\nFrom {{ ctx.company }}",
         );
         let data = json!({"customer": {"name": "Ada"}, "items": [{"name": "Lamp", "price": 1234.5}, {"name": "Plug", "price": 0.5}]});
-        let out = render(&doc, &data, &json!({"company": "Crafted"})).unwrap();
+        let out = render(&doc, &data, &json!({"company": "Crafted"}), LIMIT).unwrap();
         let text = String::from_utf8(out.bytes.to_vec()).unwrap();
         assert_eq!(
             text,
@@ -271,7 +301,7 @@ mod tests {
     #[test]
     fn undefined_names_are_errors_with_a_line() {
         let doc = txt("line one\n{{ nobody.home }}");
-        let err = render(&doc, &json!({}), &json!({})).unwrap_err();
+        let err = render(&doc, &json!({}), &json!({}), LIMIT).unwrap_err();
         assert!(matches!(err, Error::Template(_)));
         assert!(err.to_string().contains("line 2"), "{err}");
     }
@@ -323,11 +353,23 @@ mod tests {
         // The tag is split across two runs, as Word does it.
         let body = r#"<w:p><w:r><w:t xml:space="preserve">Hi {{ cust</w:t></w:r><w:r><w:t>omer.name }}!</w:t></w:r></w:p>"#;
         let doc = Document::new("letter.docx", tiny_docx(body));
-        let out = render(&doc, &json!({"customer": {"name": "Ada"}}), &json!({})).unwrap();
+        let out = render(
+            &doc,
+            &json!({"customer": {"name": "Ada"}}),
+            &json!({}),
+            LIMIT,
+        )
+        .unwrap();
         let xml = docx_text(&out.bytes);
         assert!(strip_tags(&xml).contains("Hi Ada!"), "{xml}");
         // A second render of the same bytes hits the cache and still works.
-        let again = render(&doc, &json!({"customer": {"name": "Bob"}}), &json!({})).unwrap();
+        let again = render(
+            &doc,
+            &json!({"customer": {"name": "Bob"}}),
+            &json!({}),
+            LIMIT,
+        )
+        .unwrap();
         assert!(strip_tags(&docx_text(&again.bytes)).contains("Hi Bob!"));
     }
 
@@ -335,7 +377,7 @@ mod tests {
     fn docx_validation_lists_every_problem() {
         let body = r#"<w:p><w:r><w:t>{{ missing }} and {{ also }}</w:t></w:r></w:p>"#;
         let doc = Document::new("letter.docx", tiny_docx(body));
-        let problems = validate(&doc, &json!({}), &json!({}));
+        let problems = validate(&doc, &json!({}), &json!({}), LIMIT);
         assert!(problems.len() >= 2, "{problems:?}");
         assert!(problems.iter().all(|d| d.location.is_some()));
     }
@@ -348,6 +390,19 @@ mod tests {
             "-USD 1,234,567.89"
         );
         assert_eq!(currency(999.999, Some("".into())), "1,000.00");
+    }
+
+    /// A short template that prints a long value in a loop: 100 MB with fuel to
+    /// spare, so only the writer can stop it.
+    const WIDE: &str = r#"{% set x = "a" * 1000 %}{% for i in range(100000) %}{{ x }}{% endfor %}"#;
+
+    #[test]
+    fn text_output_stops_at_the_limit() {
+        let err = render(&txt(WIDE), &json!({}), &json!({}), 1 << 20).unwrap_err();
+        assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
+        assert!(err.to_string().contains("byte limit"), "{err}");
+        let problems = validate(&txt(WIDE), &json!({}), &json!({}), 1 << 20);
+        assert!(problems[0].message.contains("byte limit"), "{problems:?}");
     }
 
     #[test]

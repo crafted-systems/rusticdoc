@@ -165,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
                 &doc,
                 &data,
                 &serde_json::Value::Object(Default::default()),
+                config.max_render_bytes,
             );
             println!("{}", serde_json::to_string_pretty(&problems)?);
             if problems
@@ -289,6 +290,7 @@ fn pipeline(config: &Config) -> Pipeline {
         std::sync::Arc::new(Engines::from_config(config)),
         config.api_timeout,
     )
+    .with_max_output(config.max_render_bytes)
 }
 
 fn read_doc(path: &std::path::Path) -> anyhow::Result<Document> {
