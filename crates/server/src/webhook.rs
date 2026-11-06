@@ -174,7 +174,8 @@ impl Webhook {
                 .filter(|s| !s.is_empty())
         };
         if get("gotenberg-webhook-url").is_none() {
-            return Ok(None);
+            // The service's own webhook headers work here as anywhere.
+            return Self::from_headers(headers, allow_private).await;
         }
         let events_url = get("gotenberg-webhook-events-url");
         let error_url = get("gotenberg-webhook-error-url");

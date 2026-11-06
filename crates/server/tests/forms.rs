@@ -537,6 +537,18 @@ async fn trace_headers_are_echoed_and_cleaned() {
         .await
         .unwrap();
     assert!(header_of(&res, "gotenberg-trace").len() <= 128);
+
+    let router = app(AppState::new(config()));
+    let res = router
+        .oneshot(
+            Request::get("/version")
+                .header("X-Request-Id", "x".repeat(4000))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(header_of(&res, "x-request-id").len() <= 128);
 }
 
 #[tokio::test]
@@ -651,6 +663,23 @@ async fn webhooks_deliver_with_gotenbergs_headers_and_events() {
         body["message"],
         "The webhook middleware can only work with multipart/form-data routes that results in output files"
     );
+}
+
+#[tokio::test]
+async fn the_services_own_webhook_headers_work_on_these_routes() {
+    let mut c = config();
+    c.webhook_allow_private = true;
+    let router = app(AppState::new(c));
+    let one = fixtures::pages(1);
+    let res = router
+        .oneshot(form(
+            "/forms/pdfengines/flatten",
+            &[("files", Some("page_1.pdf"), &one)],
+            &[("X-Rusticdoc-Webhook-Url", "http://127.0.0.1:1/hook")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]

@@ -456,6 +456,14 @@ impl Config {
                 }
             }
         }
+        let trace_header = &self.compat.trace_header;
+        if trace_header.is_empty()
+            || !trace_header
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(format!("'{trace_header}' cannot be a header name"));
+        }
         if let Some(oidc) = &self.compat.oidc
             && (oidc.issuer.is_empty() || oidc.audience.is_empty())
         {
@@ -564,6 +572,13 @@ mod tests {
                 .insert("PDFENGINES_STAMP_ENGINES".into(), vec![bad.into()]);
             assert!(config.check().unwrap_err().contains(bad));
         }
+    }
+
+    #[test]
+    fn trace_headers_must_be_header_names() {
+        let mut config = Config::default();
+        config.compat.trace_header = "bad header".into();
+        assert!(config.check().is_err());
     }
 
     #[test]
