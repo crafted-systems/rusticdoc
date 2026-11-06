@@ -273,12 +273,7 @@ pub fn go_json_error(raw: &str) -> String {
             );
         }
     }
-    if !(first == '{'
-        || first == '['
-        || first == '"'
-        || first == '-'
-        || first.is_ascii_digit())
-    {
+    if !(first == '{' || first == '[' || first == '"' || first == '-' || first.is_ascii_digit()) {
         return format!(
             "invalid character {} looking for beginning of value",
             printable(first)
@@ -908,7 +903,10 @@ mod tests {
         let f = form(&[
             ("stampSource", "text"),
             ("stampExpression", "DRAFT"),
-            ("stampOptions", r##"{"scale":"0.5 abs","rot":"45","fillcolor":"#FF0000"}"##),
+            (
+                "stampOptions",
+                r##"{"scale":"0.5 abs","rot":"45","fillcolor":"#FF0000"}"##,
+            ),
         ]);
         let raw = read_overlays(&f, "stamp").unwrap();
         let bound = bind_overlays(raw, Vec::new(), "stamp").unwrap();

@@ -331,7 +331,6 @@ pub enum Op {
     Encrypt,
     ReadMetadata,
     WriteMetadata,
-    ExifMetadata,
     ReadBookmarks,
     WriteBookmarks,
     Embed,

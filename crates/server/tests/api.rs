@@ -192,10 +192,7 @@ async fn errors_are_json_with_a_kind() {
 
     // A convert with no LibreOffice configured is a 503, not a crash.
     let res = router
-        .oneshot(post_form(
-            "/v1/convert",
-            &[("files", Some("a.docx"), "PK")],
-        ))
+        .oneshot(post_form("/v1/convert", &[("files", Some("a.docx"), "PK")]))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);

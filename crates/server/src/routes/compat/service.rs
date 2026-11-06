@@ -162,22 +162,53 @@ fn flags(config: &Config) -> BTreeMap<&'static str, String> {
         .map(|(ip, port)| (ip.to_string(), port.to_string()))
         .unwrap_or_default();
     BTreeMap::from([
-        ("api-bind-ip", if bind_ip == "0.0.0.0" { String::new() } else { bind_ip }),
+        (
+            "api-bind-ip",
+            if bind_ip == "0.0.0.0" {
+                String::new()
+            } else {
+                bind_ip
+            },
+        ),
         ("api-body-limit", config.body_limit.to_string()),
         ("api-correlation-id-header", compat.trace_header.clone()),
-        ("api-disable-download-from", config.download_from_disabled.to_string()),
+        (
+            "api-disable-download-from",
+            config.download_from_disabled.to_string(),
+        ),
         ("api-disable-health-check-logging", "false".to_string()),
-        ("api-disable-debug-route-telemetry", compat.debug_telemetry_off.to_string()),
-        ("api-disable-health-check-route-telemetry", compat.health_telemetry_off.to_string()),
-        ("api-disable-root-route-telemetry", compat.root_telemetry_off.to_string()),
-        ("api-disable-version-route-telemetry", compat.version_telemetry_off.to_string()),
+        (
+            "api-disable-debug-route-telemetry",
+            compat.debug_telemetry_off.to_string(),
+        ),
+        (
+            "api-disable-health-check-route-telemetry",
+            compat.health_telemetry_off.to_string(),
+        ),
+        (
+            "api-disable-root-route-telemetry",
+            compat.root_telemetry_off.to_string(),
+        ),
+        (
+            "api-disable-version-route-telemetry",
+            compat.version_telemetry_off.to_string(),
+        ),
         ("api-download-from-allow-list", "[.+]".to_string()),
         ("api-download-from-deny-list", "[]".to_string()),
-        ("api-download-from-deny-private-ips", private(config.download_from_allow_private)),
+        (
+            "api-download-from-deny-private-ips",
+            private(config.download_from_allow_private),
+        ),
         ("api-download-from-deny-public-ips", "false".to_string()),
         ("api-download-from-max-retry", "0".to_string()),
-        ("api-enable-basic-auth", config.basic_auth.is_some().to_string()),
-        ("api-enable-debug-route", compat.enable_debug_route.to_string()),
+        (
+            "api-enable-basic-auth",
+            config.basic_auth.is_some().to_string(),
+        ),
+        (
+            "api-enable-debug-route",
+            compat.enable_debug_route.to_string(),
+        ),
         ("api-port", port),
         ("api-port-from-env", String::new()),
         ("api-root-path", config.root_path.clone()),
@@ -186,10 +217,16 @@ fn flags(config: &Config) -> BTreeMap<&'static str, String> {
         ("api-tls-cert-file", String::new()),
         ("api-tls-key-file", String::new()),
         ("api-trace-header", compat.trace_header.clone()),
-        ("gotenberg-build-debug-data", compat.build_debug_data.to_string()),
+        (
+            "gotenberg-build-debug-data",
+            compat.build_debug_data.to_string(),
+        ),
         ("gotenberg-graceful-shutdown-duration", "30s".to_string()),
         ("libreoffice-auto-start", "false".to_string()),
-        ("libreoffice-disable-routes", compat.libreoffice_disable_routes.to_string()),
+        (
+            "libreoffice-disable-routes",
+            compat.libreoffice_disable_routes.to_string(),
+        ),
         ("libreoffice-idle-shutdown-timeout", "0s".to_string()),
         ("libreoffice-max-queue-size", "0".to_string()),
         ("libreoffice-restart-after", "10".to_string()),
@@ -200,31 +237,73 @@ fn flags(config: &Config) -> BTreeMap<&'static str, String> {
         ("log-level", config.log_level.clone()),
         ("log-std-enable-gcp-fields", "false".to_string()),
         ("log-std-format", "auto".to_string()),
-        ("pdfengines-convert-engines", list("PDFENGINES_CONVERT_ENGINES", "[libreoffice-pdfengine]")),
-        ("pdfengines-disable-routes", compat.pdfengines_disable_routes.to_string()),
+        (
+            "pdfengines-convert-engines",
+            list("PDFENGINES_CONVERT_ENGINES", "[libreoffice-pdfengine]"),
+        ),
+        (
+            "pdfengines-disable-routes",
+            compat.pdfengines_disable_routes.to_string(),
+        ),
         ("pdfengines-engines", list("PDFENGINES_ENGINES", "[]")),
-        ("pdfengines-flatten-engines", list("PDFENGINES_FLATTEN_ENGINES", "[qpdf,lopdf]")),
-        ("pdfengines-merge-engines", list("PDFENGINES_MERGE_ENGINES", "[qpdf,pdfcpu,lopdf]")),
-        ("pdfengines-read-bookmarks-engines", list("PDFENGINES_READ_BOOKMARKS_ENGINES", "[lopdf,pdfcpu]")),
-        ("pdfengines-read-metadata-engines", list("PDFENGINES_READ_METADATA_ENGINES", "[qpdf-metadata]")),
-        ("pdfengines-split-engines", list("PDFENGINES_SPLIT_ENGINES", "[lopdf,qpdf,pdfcpu]")),
-        ("pdfengines-write-bookmarks-engines", list("PDFENGINES_WRITE_BOOKMARKS_ENGINES", "[lopdf,pdfcpu]")),
-        ("pdfengines-write-metadata-engines", list("PDFENGINES_WRITE_METADATA_ENGINES", "[qpdf-metadata]")),
+        (
+            "pdfengines-flatten-engines",
+            list("PDFENGINES_FLATTEN_ENGINES", "[qpdf,lopdf]"),
+        ),
+        (
+            "pdfengines-merge-engines",
+            list("PDFENGINES_MERGE_ENGINES", "[qpdf,pdfcpu,lopdf]"),
+        ),
+        (
+            "pdfengines-read-bookmarks-engines",
+            list("PDFENGINES_READ_BOOKMARKS_ENGINES", "[lopdf,pdfcpu]"),
+        ),
+        (
+            "pdfengines-read-metadata-engines",
+            list("PDFENGINES_READ_METADATA_ENGINES", "[qpdf-metadata]"),
+        ),
+        (
+            "pdfengines-split-engines",
+            list("PDFENGINES_SPLIT_ENGINES", "[lopdf,qpdf,pdfcpu]"),
+        ),
+        (
+            "pdfengines-write-bookmarks-engines",
+            list("PDFENGINES_WRITE_BOOKMARKS_ENGINES", "[lopdf,pdfcpu]"),
+        ),
+        (
+            "pdfengines-write-metadata-engines",
+            list("PDFENGINES_WRITE_METADATA_ENGINES", "[qpdf-metadata]"),
+        ),
         ("prometheus-collect-interval", "1s".to_string()),
-        ("prometheus-disable-collect", compat.prometheus_disabled.to_string()),
-        ("prometheus-disable-route-logging", compat.prometheus_telemetry_off.to_string()),
-        ("prometheus-disable-route-telemetry", compat.prometheus_telemetry_off.to_string()),
+        (
+            "prometheus-disable-collect",
+            compat.prometheus_disabled.to_string(),
+        ),
+        (
+            "prometheus-disable-route-logging",
+            compat.prometheus_telemetry_off.to_string(),
+        ),
+        (
+            "prometheus-disable-route-telemetry",
+            compat.prometheus_telemetry_off.to_string(),
+        ),
         ("prometheus-namespace", compat.prometheus_namespace.clone()),
         ("prometheus-metrics-path", compat.prometheus_path.clone()),
         ("webhook-allow-list", "[.+]".to_string()),
         ("webhook-client-timeout", "30s".to_string()),
         ("webhook-deny-list", "[]".to_string()),
-        ("webhook-deny-private-ips", private(config.webhook_allow_private)),
+        (
+            "webhook-deny-private-ips",
+            private(config.webhook_allow_private),
+        ),
         ("webhook-deny-public-ips", "false".to_string()),
         ("webhook-disable", compat.webhook_disabled.to_string()),
         ("webhook-error-allow-list", "[]".to_string()),
         ("webhook-error-deny-list", "[]".to_string()),
-        ("webhook-max-retry", config.webhook_attempts.saturating_sub(1).to_string()),
+        (
+            "webhook-max-retry",
+            config.webhook_attempts.saturating_sub(1).to_string(),
+        ),
         ("webhook-retry-max-wait", "30s".to_string()),
         ("webhook-retry-min-wait", "1s".to_string()),
     ])

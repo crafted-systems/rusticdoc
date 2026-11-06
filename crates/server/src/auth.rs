@@ -1,5 +1,6 @@
-//! API keys and basic auth. Nothing is required until a key or credentials
-//! are configured; health, metrics and the API description stay open.
+//! API keys, basic auth and OpenID Connect tokens. Nothing is required until
+//! one of them is configured; health, `/metrics` and the API description stay
+//! open.
 
 use axum::body::Body;
 use axum::extract::State;
@@ -15,8 +16,7 @@ pub async fn require(State(state): State<AppState>, req: Request<Body>, next: Ne
     let config = &state.config;
     let keys_set = !config.api_keys.is_empty();
     let basic_set = config.basic_auth.is_some();
-    let oidc_set = config.compat.oidc.is_some();
-    if !keys_set && !basic_set && !oidc_set {
+    if !keys_set && !basic_set && state.oidc.is_none() {
         return next.run(req).await;
     }
 
@@ -53,6 +53,23 @@ pub async fn require(State(state): State<AppState>, req: Request<Body>, next: Ne
             let expected = format!("{user}:{pass}");
             if constant_time_eq(expected.as_bytes(), pair.as_bytes()) {
                 return next.run(req).await;
+            }
+        }
+    }
+
+    if let Some(verifier) = &state.oidc {
+        // An authentication scheme is case-insensitive.
+        let token = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split_once(' '))
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+            .map(|(_, token)| token.trim().to_string());
+        if let Some(token) = token {
+            match verifier.verify(&token).await {
+                Ok(()) => return next.run(req).await,
+                Err(reason) => tracing::debug!(%reason, "bearer token refused"),
             }
         }
     }

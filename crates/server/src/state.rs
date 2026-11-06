@@ -14,6 +14,8 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub http: reqwest::Client,
     pub started: Instant,
+    /// Verifies bearer tokens when OpenID Connect is on.
+    pub oidc: Option<Arc<crate::oidc::Verifier>>,
     /// The loaded fonts, scanned on first use and on reload.
     pub fonts: Arc<tokio::sync::RwLock<Option<Arc<Vec<rusticdoc_core::fonts::FontInfo>>>>>,
 }
@@ -28,7 +30,13 @@ impl AppState {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest client");
+        let oidc = config
+            .compat
+            .oidc
+            .clone()
+            .map(|oidc| Arc::new(crate::oidc::Verifier::new(oidc)));
         Self {
+            oidc,
             config: Arc::new(config),
             engines,
             pipeline,

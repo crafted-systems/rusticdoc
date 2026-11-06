@@ -161,7 +161,10 @@ async fn many_pdfs_come_back_as_a_zip_with_their_names() {
         .clone()
         .oneshot(form(
             "/forms/pdfengines/rotate",
-            &[("files", Some("page_1.pdf"), &one), ("rotateAngle", None, b"90")],
+            &[
+                ("files", Some("page_1.pdf"), &one),
+                ("rotateAngle", None, b"90"),
+            ],
             &[("Gotenberg-Output-Filename", "C:\\Windows\\Temp\\foo")],
         ))
         .await
@@ -300,7 +303,10 @@ async fn bookmarks_take_a_list_or_a_map() {
     let res = router
         .oneshot(form(
             "/forms/pdfengines/bookmarks/write",
-            &[("files", Some("page_1.pdf"), &one), ("bookmarks", None, b"foo")],
+            &[
+                ("files", Some("page_1.pdf"), &one),
+                ("bookmarks", None, b"foo"),
+            ],
             &[],
         ))
         .await
@@ -334,7 +340,10 @@ async fn embeds_and_their_relationships() {
     assert_eq!(res.status(), StatusCode::OK);
     let bytes = bytes_of(res).await;
     let body = String::from_utf8_lossy(&bytes);
-    assert!(body.contains("/AFRelationship/Alternative") || body.contains("/AFRelationship /Alternative"));
+    assert!(
+        body.contains("/AFRelationship/Alternative")
+            || body.contains("/AFRelationship /Alternative")
+    );
 }
 
 #[tokio::test]
@@ -439,7 +448,11 @@ async fn metrics_settings() {
     c.compat.prometheus_namespace = "foo".into();
     c.compat.prometheus_path = "/custom/metrics".into();
     let router = app(AppState::new(c));
-    let res = router.clone().oneshot(get("/custom/metrics")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(get("/custom/metrics"))
+        .await
+        .unwrap();
     assert!(text(res).await.contains("foo_libreoffice_restarts_count"));
     let res = router.oneshot(get("/prometheus/metrics")).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
@@ -484,7 +497,13 @@ async fn root_path_covers_everything_with_or_without_the_slash() {
     let mut c = config();
     c.root_path = "/foo/".into();
     let router = app(AppState::new(c));
-    for path in ["/foo", "/foo/", "/foo/health", "/foo/version", "/foo/favicon.ico"] {
+    for path in [
+        "/foo",
+        "/foo/",
+        "/foo/health",
+        "/foo/version",
+        "/foo/favicon.ico",
+    ] {
         let res = router.clone().oneshot(get(path)).await.unwrap();
         assert!(res.status().is_success(), "{path}: {}", res.status());
     }
@@ -527,15 +546,17 @@ async fn webhooks_deliver_with_gotenbergs_headers_and_events() {
     type Seen = Arc<Mutex<Vec<(String, axum::http::HeaderMap, Vec<u8>)>>>;
     let seen: Seen = Arc::default();
     let record = |path: &'static str, seen: Seen| {
-        post(move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
-            let seen = seen.clone();
-            async move {
-                seen.lock()
-                    .unwrap()
-                    .push((path.to_string(), headers, body.to_vec()));
-                StatusCode::OK
-            }
-        })
+        post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock()
+                        .unwrap()
+                        .push((path.to_string(), headers, body.to_vec()));
+                    StatusCode::OK
+                }
+            },
+        )
     };
     let receiver = Router::new()
         .route("/hook", record("hook", seen.clone()))

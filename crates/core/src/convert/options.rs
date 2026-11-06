@@ -222,7 +222,10 @@ impl ConvertOptions {
         flag("EnableTextAccessForAccessibilityTools", self.pdfua);
         flag("EmbedStandardFonts", self.pdfua || self.pdfa.is_some());
         flag("FirstPageOnLeft", self.first_page_on_left);
-        flag("ResizeWindowToInitialPage", self.resize_window_to_initial_page);
+        flag(
+            "ResizeWindowToInitialPage",
+            self.resize_window_to_initial_page,
+        );
         flag("CenterWindow", self.center_window);
         flag("OpenInFullScreenMode", self.open_in_full_screen_mode);
         flag("DisplayPDFDocumentTitle", self.display_pdf_document_title);
