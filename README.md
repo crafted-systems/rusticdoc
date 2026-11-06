@@ -100,8 +100,9 @@ Environment variables, all optional:
 | `RUSTICDOC_RENDER_WORKER_BIN` | the running binary | The binary with the worker in it |
 | `RUSTICDOC_HEADER_TIMEOUT` | `10s` | How long a connection may wait for a complete set of request headers, including a silent new one or an idle keep-alive one |
 | `RUSTICDOC_STALL_TIMEOUT` | `30s` | How long a connection may stay blocked on its client: a response nobody reads, or a body a handler waits for that does not arrive. Time a handler spends working does not count. A slow body that keeps moving is allowed up to the request time limit |
+| `RUSTICDOC_RESPONSE_WRITE_TIMEOUT` | `5m` | How long writes may spend blocked in all, so a reader taking a little at a time, below the stall timeout, still loses its connection. It starts over once everything sent has left the send queue, so pipelining does not reset it |
 | `RUSTICDOC_MAX_CONNECTIONS` | `1024` | Connections served at once; more wait in the listen queue |
-| `RUSTICDOC_MAX_CONNECTIONS_PER_PEER` | `0` (off) | Connections at once from one address; more are closed. Leave it off behind a load balancer, where every connection has the same peer, and rate limit at the proxy instead |
+| `RUSTICDOC_MAX_CONNECTIONS_PER_PEER` | `0` (off) | Connections at once from one IPv4 address or IPv6 /64, since one client usually holds a whole /64; an IPv4-mapped address counts as its IPv4 address. More are closed. Leave it off behind a load balancer, where every connection has the same peer, and rate limit at the proxy instead |
 | `RUSTICDOC_OUTBOUND_PROXY` | none | Proxy for webhooks and `downloadFrom`. Proxy variables in the environment are otherwise ignored. With this set, DNS pinning no longer applies, because the proxy resolves names itself: it must enforce its own egress policy, including blocking private ranges. The URL and its resolved addresses are still checked first, and the service warns at start |
 | `RUSTICDOC_METRICS_PUBLIC` | `false` | Keep `/metrics` open when credentials are configured |
 | `RUSTICDOC_ENABLE_DOCS` | `false` | Serve `/docs`, which loads a third-party script |

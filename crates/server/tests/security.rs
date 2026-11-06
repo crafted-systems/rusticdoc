@@ -768,6 +768,7 @@ fn connection_limits(
         max_connections,
         max_connections_per_peer: 0,
         stall_timeout: Duration::from_secs(30),
+        write_timeout: Duration::from_secs(300),
         body_timeout: Duration::from_secs(30),
     }
 }
@@ -1063,6 +1064,7 @@ fn one_place(
         max_connections: 1,
         max_connections_per_peer: 0,
         stall_timeout: stall,
+        write_timeout: LONG,
         body_timeout: body,
     }
 }
@@ -1308,4 +1310,132 @@ async fn a_named_proxy_changes_nothing_about_the_private_address_check() {
             .any(|w| w.contains("DNS pinning") && w.contains("private ranges")),
         "{warnings:?}"
     );
+}
+
+// ------------------------------------------------------- readers that barely move
+
+/// A client that pipelines large responses and reads a little at a time, always
+/// sooner than the stall limit.
+async fn barely_reading(port: u16) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_recv_buffer_size(4096).unwrap();
+    let stream = socket
+        .connect(format!("127.0.0.1:{port}").parse().unwrap())
+        .await
+        .unwrap();
+    let (mut reader, mut writer) = stream.into_split();
+    tokio::spawn(async move {
+        let request = b"GET /openapi.json HTTP/1.1\r\nHost: x\r\n\r\n".repeat(20_000);
+        let _ = writer.write_all(&request).await;
+        tokio::time::sleep(LONG).await;
+    });
+    tokio::spawn(async move {
+        let mut chunk = vec![0u8; 64 * 1024];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    });
+}
+
+#[tokio::test]
+async fn a_reader_that_takes_a_little_at_a_time_loses_its_place_at_the_total() {
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: LONG,
+        max_connections: 1,
+        max_connections_per_peer: 0,
+        stall_timeout: LONG,
+        write_timeout: Duration::from_secs(2),
+        body_timeout: LONG,
+    };
+    let (port, _stop, _task) = running(limits).await;
+    barely_reading(port).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        served_within(port, Duration::from_secs(20)).await,
+        "the slow reader kept the only place"
+    );
+}
+
+/// A response of `size` bytes from a text template, through a real socket.
+fn large_render(size: usize) -> Vec<u8> {
+    let template = format!(r#"{{{{ "a" * {size} }}}}"#);
+    let parts: [Part<'_>; 1] = [("template", Some("t.txt"), template.as_bytes())];
+    let body = body_of(&parts);
+    let mut request = format!(
+        "POST /v1/render HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    request.extend_from_slice(&body);
+    request
+}
+
+#[tokio::test]
+async fn a_fast_large_download_is_not_affected() {
+    use tokio::io::AsyncWriteExt;
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: LONG,
+        max_connections: 1,
+        max_connections_per_peer: 0,
+        stall_timeout: Duration::from_secs(5),
+        write_timeout: Duration::from_secs(5),
+        body_timeout: LONG,
+    };
+    let (port, _stop, _task) = running(limits).await;
+    let size = 40 * 1024 * 1024;
+    let mut stream = connect(port).await;
+    stream.write_all(&large_render(size)).await.unwrap();
+    let out = answer(&mut stream).await;
+    assert!(out.starts_with(b"HTTP/1.1 200"));
+    assert!(out.len() > size, "{}", out.len());
+}
+
+#[tokio::test]
+async fn a_keep_alive_client_is_not_affected() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Far less total than the requests below would use if it never started over.
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: Duration::from_secs(5),
+        max_connections: 1,
+        max_connections_per_peer: 0,
+        stall_timeout: Duration::from_secs(5),
+        write_timeout: Duration::from_millis(50),
+        body_timeout: LONG,
+    };
+    let (port, _stop, _task) = running(limits).await;
+    let mut stream = connect(port).await;
+    let mut buf = vec![0u8; 256 * 1024];
+    for i in 0..200 {
+        stream
+            .write_all(b"GET /openapi.json HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        // Read to the end of this response: its headers name the length.
+        let expected = loop {
+            let read = stream.read(&mut buf).await.unwrap();
+            assert!(read > 0, "the connection closed at request {i}");
+            seen.extend_from_slice(&buf[..read]);
+            if let Some(end) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&seen[..end]).to_ascii_lowercase();
+                let length: usize = head
+                    .split("content-length: ")
+                    .nth(1)
+                    .and_then(|rest| rest.split("\r\n").next())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap();
+                break end + 4 + length;
+            }
+        };
+        while seen.len() < expected {
+            let read = stream.read(&mut buf).await.unwrap();
+            assert!(read > 0, "the connection closed at request {i}");
+            seen.extend_from_slice(&buf[..read]);
+        }
+        assert!(seen.starts_with(b"HTTP/1.1 200"), "request {i}");
+    }
 }

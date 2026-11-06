@@ -335,6 +335,9 @@ pub struct ConnectionLimits {
     /// How long a connection may stay blocked on its client: a write that does not
     /// finish, or a body a handler waits for that does not arrive.
     pub stall_timeout: Duration,
+    /// How long writes may spend blocked in all, until everything sent has gone,
+    /// however often each one moves.
+    pub write_timeout: Duration,
     /// How long reading one request's body may take, even while it moves.
     pub body_timeout: Duration,
 }
@@ -346,8 +349,26 @@ impl ConnectionLimits {
             max_connections: config.max_connections,
             max_connections_per_peer: config.max_connections_per_peer,
             stall_timeout: config.stall_timeout,
+            write_timeout: config.response_write_timeout,
             body_timeout: config.api_timeout,
         }
+    }
+}
+
+/// What the per-peer limit counts by: an IPv4 address, or an IPv6 /64, since one
+/// client usually holds a whole one. An IPv4-mapped address is its IPv4 address, so
+/// one host cannot count twice.
+pub fn peer_key(ip: std::net::IpAddr) -> std::net::IpAddr {
+    use std::net::{IpAddr, Ipv6Addr};
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
     }
 }
 
@@ -362,6 +383,7 @@ struct PeerPlace {
 
 impl PeerCounts {
     fn take(&self, ip: std::net::IpAddr, limit: usize) -> Option<PeerPlace> {
+        let ip = peer_key(ip);
         let mut counts = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let count = counts.entry(ip).or_insert(0);
         if *count >= limit {
@@ -447,7 +469,7 @@ pub async fn serve_on(
         let mut closed = closed.clone();
         tokio::spawn(async move {
             let _places = (place, peer_place);
-            let stream = stall::StallGuard::new(stream, limits.stall_timeout);
+            let stream = stall::StallGuard::new(stream, limits.stall_timeout, limits.write_timeout);
             let conn = hyper::server::conn::http1::Builder::new()
                 .timer(TokioTimer::new())
                 .header_read_timeout(limits.header_timeout)
@@ -498,4 +520,35 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
     tracing::info!("shutdown requested; finishing in-flight requests");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ip(s: &str) -> std::net::IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn one_ipv6_64_counts_as_one_peer() {
+        let peers = PeerCounts::default();
+        let first = peers.take(ip("2001:db8:1:2:aaaa::1"), 1).unwrap();
+        assert!(peers.take(ip("2001:db8:1:2:bbbb::2"), 1).is_none());
+        assert!(
+            peers.take(ip("2001:db8:1:3::1"), 1).is_some(),
+            "another /64"
+        );
+        drop(first);
+        assert!(peers.take(ip("2001:db8:1:2:cccc::3"), 1).is_some());
+    }
+
+    #[test]
+    fn an_ipv4_mapped_address_is_its_ipv4_address() {
+        let peers = PeerCounts::default();
+        let _first = peers.take(ip("203.0.113.9"), 1).unwrap();
+        assert!(peers.take(ip("::ffff:203.0.113.9"), 1).is_none());
+        assert_eq!(peer_key(ip("::ffff:203.0.113.9")), ip("203.0.113.9"));
+        assert!(peers.take(ip("203.0.113.10"), 1).is_some());
+    }
 }
