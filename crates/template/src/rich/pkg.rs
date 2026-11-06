@@ -44,6 +44,8 @@ pub struct Pkg<'a> {
     next_part: HashMap<(String, String), u32>,
     /// Bytes of generated markup so far.
     generated: u64,
+    /// Chart parts written, per placement rather than per filter call.
+    charts: usize,
 }
 
 /// The path of `to` as seen from the directory of `from`.
@@ -68,6 +70,7 @@ impl<'a> Pkg<'a> {
             next_name: 1,
             next_part: HashMap::new(),
             generated: 0,
+            charts: 0,
         }
     }
 
@@ -131,6 +134,15 @@ impl<'a> Pkg<'a> {
         // Charged before it is stored, so repeated placements of one chart
         // cannot pass the package limit unseen.
         self.charge(data.len())?;
+        if stem == "chart" {
+            self.charts += 1;
+            if self.charts > super::MAX_CHARTS {
+                return Err(TemplateError::new(format!(
+                    "at most {} charts are allowed in one render",
+                    super::MAX_CHARTS
+                )));
+            }
+        }
         let name = self.free_name(dir, stem, "xml");
         package::set(self.entries, &name, data.into_bytes());
         self.override_type(&name, content_type)?;

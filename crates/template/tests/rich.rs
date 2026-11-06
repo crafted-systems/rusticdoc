@@ -1177,6 +1177,29 @@ fn many_values_in_one_run_stay_fast() {
     assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
 }
 
+#[test]
+fn a_long_value_printed_in_a_loop_hits_the_print_budget() {
+    // Each print places the whole text; printing 100 KiB 3,000 times must not
+    // reach 300 MB of markup.
+    let doc = docx(&p(
+        "{% set c = t | color(\"#ff0000\") %}{% for i in range(3000) %}{{ c }}{% endfor %}",
+    ));
+    let err = render_err(Format::Docx, &doc, json!({ "t": "y".repeat(100 * 1024) }));
+    assert!(err.contains("package limit"), "{err}");
+}
+
+#[test]
+fn one_chart_printed_many_times_counts_each_placement() {
+    let doc = docx(&p(
+        "{% set c = rows | chart(type=\"bar\", x=\"month\", y=\"sales\") %}{% for i in range(201) %}{{ c }}{% endfor %}",
+    ));
+    let err = compile(Format::Docx, &doc)
+        .expect("compiles")
+        .render(&sales())
+        .expect_err("must fail");
+    assert!(err.message.contains("200 charts"), "{err}");
+}
+
 // --- chart ----------------------------------------------------------------
 
 fn sales() -> Value {
