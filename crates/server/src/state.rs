@@ -25,7 +25,8 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config) -> Self {
         let engines = Arc::new(Engines::from_config(&config));
-        let pipeline = Pipeline::new(engines.clone(), config.api_timeout);
+        let pipeline = Pipeline::new(engines.clone(), config.api_timeout)
+            .with_max_output(config.max_render_bytes);
         let http = reqwest::Client::builder()
             .user_agent(format!("rusticdoc/{}", rusticdoc_core::VERSION))
             .timeout(config.api_timeout)

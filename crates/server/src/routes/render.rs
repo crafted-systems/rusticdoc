@@ -482,8 +482,9 @@ pub async fn validate(
         "none"
     };
     let hash = template::template_hash(&template.bytes);
+    let limit = state.config.max_render_bytes;
     let diagnostics =
-        tokio::task::spawn_blocking(move || template::validate(&template, &data, &ctx))
+        tokio::task::spawn_blocking(move || template::validate(&template, &data, &ctx, limit))
             .await
             .map_err(|e| {
                 ApiError::new(

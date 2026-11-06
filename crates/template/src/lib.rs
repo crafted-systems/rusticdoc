@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod filters;
 mod formats;
+pub mod limit;
 mod package;
 mod program;
 mod rich;
@@ -154,6 +155,8 @@ pub struct Compiled {
     table: Vec<Tag>,
     source: Source,
     env: minijinja::Environment<'static>,
+    /// Most bytes one render may write: what the package could hold.
+    output_limit: usize,
 }
 
 impl std::fmt::Debug for Compiled {
@@ -220,11 +223,21 @@ impl Compiled {
         let tmpl = env
             .get_template(TEMPLATE_NAME)
             .map_err(|e| self.map_error(&e, source))?;
-        let captured = tmpl
-            .render_captured(Value::from(minijinja::value::Serde(data)))
-            .map_err(|e| self.map_error(&e, source))?;
+        // The package could never hold more than this, so a render that passes
+        // it stops here rather than growing without bound.
+        let (output, captured) = limit::render(
+            &tmpl,
+            Value::from(minijinja::value::Serde(data)),
+            self.output_limit,
+        )
+        .map_err(|failure| match failure {
+            limit::RenderFailure::TooLarge(limit) => TemplateError::new(format!(
+                "the rendered document passes the package limit of {limit} bytes"
+            )),
+            limit::RenderFailure::Template(e) => self.map_error(&e, source),
+        })?;
         let table = captured.state().get_extension::<Arc<rich::Table>>();
-        Ok((captured.output().to_string(), table.cloned()))
+        Ok((output, table.cloned()))
     }
 
     fn map_error(&self, e: &minijinja::Error, source: &Source) -> TemplateError {
@@ -415,6 +428,7 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
         table: tags,
         source,
         env,
+        output_limit: package::MAX_TOTAL_BYTES as usize,
     };
     Ok(Build {
         compiled,
@@ -438,10 +452,20 @@ pub fn compile(format: Format, bytes: &[u8]) -> Result<Compiled> {
 /// Compiles and test-renders against sample data, reporting every problem
 /// found rather than stopping at the first.
 pub fn validate(format: Format, bytes: &[u8], data: &serde_json::Value) -> Vec<Diagnostic> {
-    let b = match build(format, bytes) {
+    validate_within(format, bytes, data, package::MAX_TOTAL_BYTES as usize)
+}
+
+fn validate_within(
+    format: Format,
+    bytes: &[u8],
+    data: &serde_json::Value,
+    output_limit: usize,
+) -> Vec<Diagnostic> {
+    let mut b = match build(format, bytes) {
         Ok(b) => b,
         Err(e) => return vec![to_diag(e)],
     };
+    b.compiled.output_limit = output_limit;
     let compiled = &b.compiled;
     let mut diags = b.diags;
 
@@ -613,4 +637,47 @@ pub fn rich_environment(format: Format) -> minijinja::Environment<'static> {
         format.line_break(),
         rich::Mode::Check(format),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    /// A one-part DOCX whose text is `tag`.
+    fn docx(tag: &str) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{tag}</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        zip.start_file("word/document.xml", options).unwrap();
+        zip.write_all(xml.as_bytes()).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    const WIDE: &str = r#"{% set x = "a" * 1000 %}{% for i in range(100000) %}{{ x }}{% endfor %}"#;
+
+    #[test]
+    fn a_render_stops_at_the_output_limit() {
+        let mut compiled = compile(Format::Docx, &docx(WIDE)).unwrap();
+        compiled.output_limit = 1 << 20;
+        let err = compiled.render(&serde_json::json!({})).unwrap_err();
+        assert!(err.message.contains("package limit"), "{err}");
+    }
+
+    #[test]
+    fn the_package_limit_is_the_default() {
+        let compiled = compile(Format::Docx, &docx("x {{ a }}")).unwrap();
+        assert_eq!(compiled.output_limit as u64, package::MAX_TOTAL_BYTES);
+    }
+
+    #[test]
+    fn validation_stops_at_the_output_limit_too() {
+        let problems = validate_within(Format::Docx, &docx(WIDE), &serde_json::json!({}), 1 << 20);
+        assert!(
+            problems.iter().any(|d| d.message.contains("package limit")),
+            "{problems:?}"
+        );
+    }
 }

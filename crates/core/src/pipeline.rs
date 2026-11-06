@@ -70,7 +70,7 @@ pub const MAX_DOCUMENTS: usize = 1_000;
 pub struct Pipeline {
     engines: Arc<Engines>,
     timeout: Duration,
-    /// Largest rendered template accepted, in bytes.
+    /// Most bytes a text template may write.
     max_output: usize,
 }
 
@@ -79,7 +79,7 @@ impl Pipeline {
         Self {
             engines,
             timeout,
-            max_output: 256 * 1024 * 1024,
+            max_output: crate::limits::DEFAULT_MAX_RENDER_BYTES,
         }
     }
 
@@ -113,22 +113,16 @@ impl Pipeline {
         let ext = req.template.extension();
         let first = if req.templating && (has_data || template::is_text_template(&ext)) {
             // Rendering is CPU work: it runs off the async threads so the
-            // caller's timeout still fires, and its size is capped.
+            // caller's timeout still fires, and its output is capped as it is
+            // written.
             let (t, d, c) = (req.template.clone(), req.data.clone(), req.ctx.clone());
-            let rendered = tokio::task::spawn_blocking(move || template::render(&t, &d, &c))
+            let limit = self.max_output;
+            tokio::task::spawn_blocking(move || template::render(&t, &d, &c, limit))
                 .await
                 .map_err(|e| Error::Engine {
                     engine: "template",
                     message: e.to_string(),
-                })??;
-            if rendered.bytes.len() > self.max_output {
-                return Err(Error::InvalidRequest(format!(
-                    "rendered template is {} bytes, over the {} byte limit",
-                    rendered.bytes.len(),
-                    self.max_output
-                )));
-            }
-            rendered
+                })??
         } else {
             req.template.clone()
         };
