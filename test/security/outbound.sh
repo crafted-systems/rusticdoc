@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Proves that crafted documents make LibreOffice fetch nothing and read no
 # local files: remote images, linked sections, WEBSERVICE(), external cell
-# links and file:// references, in DOCX, FODT, FODS and HTML. A control
-# request from the same container must reach the listener, or the test
+# links and file:// references, in DOCX, PPTX, XLSX, ODP, FODT, FODS, FODP,
+# FODG, HTML, XHTML, SVG and RTF, through /forms/libreoffice/convert with and
+# without landscape and through /v1/convert. A control request from the same container must reach the listener, or the test
 # proves nothing. Usage: test/security/outbound.sh [image]
 set -u
 IMAGE=${1:-rusticdoc:local}
@@ -27,14 +28,20 @@ if ! grep -q '^/control$' hits.log; then
 fi
 : > hits.log
 status=0
-for f in ext.docx ext.html ext.fodt ext.fods; do
-    code=$(curl -s -m 60 -o "out-$f.pdf" -w '%{http_code}' -F "files=@$f" localhost:3155/forms/libreoffice/convert)
-    echo "$f http=$code"
+convert() { # file, label, path, extra curl arguments
+    f=$1; label=$2; path=$3; shift 3
+    code=$(curl -s -m 90 -o "out-$label-$f.pdf" -w '%{http_code}' -F "files=@$f" "$@" "localhost:3155$path")
+    echo "$label $f http=$code"
     [ "$code" = 200 ] || status=1
-    if grep -aq 'root:x:0' "out-$f.pdf"; then
-        echo "FAIL: $f leaked a local file"
+    if grep -aq 'root:x:0' "out-$label-$f.pdf"; then
+        echo "FAIL: $label $f leaked a local file"
         status=1
     fi
+}
+for f in ext.docx ext.html ext.fodt ext.fods ext.pptx ext.odp ext.fodp ext.fodg ext.svg ext.xhtml ext.rtf ext.xlsx; do
+    convert "$f" forms /forms/libreoffice/convert
+    convert "$f" landscape /forms/libreoffice/convert -F landscape=true
+    convert "$f" v1 /v1/convert
 done
 sleep 2
 if [ -s hits.log ]; then
