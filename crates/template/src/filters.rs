@@ -1,5 +1,5 @@
 //! The document filters: `currency`, `date` and `t`, and the minijinja
-//! environment that carries them.
+//! environment that carries them. The rich filters live in `crate::rich`.
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -8,6 +8,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use minijinja::value::Value;
 use minijinja::{AutoEscape, Environment, Error, ErrorKind, UndefinedBehavior};
 
+use crate::rich::{self, Mode};
 use crate::Settings;
 
 /// `{{ 1234.5 | currency("EUR") }}` gives `EUR 1,234.50`. Without a code the
@@ -141,15 +142,30 @@ fn write_xml_escaped(
 }
 
 /// The expression environment for a template with these settings. Output is
-/// XML-escaped; `breaks` is the markup a newline in a value becomes.
+/// XML-escaped; `breaks` is the markup a newline in a value becomes. The rich
+/// filters are present but refuse to run: there is no package to put their
+/// content in.
 pub fn environment_for(settings: &Settings, breaks: &'static str) -> Environment<'static> {
+    office_environment(settings, breaks, Mode::Text)
+}
+
+/// [`environment_for`] with the rich filters in the given mode.
+pub(crate) fn office_environment(
+    settings: &Settings,
+    breaks: &'static str,
+    mode: Mode,
+) -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_fuel(Some(5_000_000));
     env.set_auto_escape_callback(|_| AutoEscape::Custom(Cow::Borrowed("xml")));
     env.set_formatter(move |out, state, value| {
+        if let Some(token) = value.downcast_object_ref::<rich::Token>() {
+            return rich::write_token(out, token, mode);
+        }
         if !matches!(state.auto_escape(), AutoEscape::Custom(c) if c == "xml") {
-            return minijinja::escape_formatter(out, state, value);
+            // Turning escaping off must not let a value forge a marker.
+            return minijinja::escape_formatter(out, state, &rich::scrubbed(value));
         }
         if value.is_undefined() || value.is_none() {
             return Ok(());
@@ -173,6 +189,7 @@ pub fn environment_for(settings: &Settings, breaks: &'static str) -> Environment
             .cloned()
             .unwrap_or(key)
     });
+    rich::add_filters(&mut env, mode);
     env
 }
 

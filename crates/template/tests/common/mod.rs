@@ -512,3 +512,250 @@ pub fn run(cmd: &str, args: &[&str]) -> Option<(bool, String)> {
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr),
     ))
 }
+
+// --- Rich content ---------------------------------------------------------
+
+/// A real PNG of this size.
+pub fn png(width: u32, height: u32) -> Vec<u8> {
+    use image::ImageEncoder;
+    let pixels = vec![200u8; (width * height) as usize];
+    let mut out = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut out)
+        .write_image(&pixels, width, height, image::ExtendedColorType::L8)
+        .unwrap();
+    out
+}
+
+/// A real JPEG of this size.
+pub fn jpeg(width: u32, height: u32) -> Vec<u8> {
+    let pixels = vec![200u8; (width * height) as usize];
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut out)
+        .encode(&pixels, width, height, image::ExtendedColorType::L8)
+        .unwrap();
+    out
+}
+
+pub fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+pub fn data_uri(mime: &str, bytes: &[u8]) -> String {
+    format!("data:{mime};base64,{}", b64(bytes))
+}
+
+/// The raw bytes of a part, when it exists.
+pub fn bytes_of(package: &[u8], name: &str) -> Option<Vec<u8>> {
+    entries(package)
+        .into_iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, d)| d)
+}
+
+/// Panics unless every named part is byte-identical in both packages.
+pub fn assert_unchanged(before: &[u8], after: &[u8], names: &[&str]) {
+    for name in names {
+        assert_eq!(
+            bytes_of(before, name),
+            bytes_of(after, name),
+            "{name} changed"
+        );
+    }
+}
+
+/// An ODT whose content root has automatic styles to build on.
+pub fn odt_styled(styles: &str, body: &str) -> Vec<u8> {
+    odf_styled(
+        "application/vnd.oasis.opendocument.text",
+        "office:text",
+        styles,
+        body,
+    )
+}
+
+pub fn ods_styled(styles: &str, body: &str) -> Vec<u8> {
+    odf_styled(
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "office:spreadsheet",
+        styles,
+        body,
+    )
+}
+
+fn odf_styled(mime: &str, body_tag: &str, styles: &str, body: &str) -> Vec<u8> {
+    let content = format!(
+        "{XML_DECL}<office:document-content {ODF_NS}><office:automatic-styles>{styles}</office:automatic-styles><office:body><{body_tag}>{body}</{body_tag}></office:body></office:document-content>"
+    );
+    let manifest = format!(
+        "{XML_DECL}<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\"><manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"{mime}\"/><manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/></manifest:manifest>"
+    );
+    zip(&[
+        ("mimetype", mime.as_bytes()),
+        ("META-INF/manifest.xml", manifest.as_bytes()),
+        ("content.xml", content.as_bytes()),
+    ])
+}
+
+/// An XLSX like [`xlsx`] with a styles part holding one font, the two
+/// required fills and a second cell format.
+pub fn xlsx_styled(rows: &[String]) -> Vec<u8> {
+    let styles = format!(
+        "{XML_DECL}<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><fonts count=\"1\"><font><b/><sz val=\"14\"/><name val=\"Arial\"/></font></fonts><fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills><borders count=\"1\"><border/></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"2\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/><xf numFmtId=\"4\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/></cellXfs></styleSheet>"
+    );
+    let plain = xlsx(rows, &[]);
+    let mut out: Vec<(String, Vec<u8>)> = entries(&plain);
+    for (name, data) in &mut out {
+        if name == "xl/_rels/workbook.xml.rels" {
+            let text = String::from_utf8(data.clone()).unwrap().replace(
+                "</Relationships>",
+                &format!(
+                    "<Relationship Id=\"rId3\" Type=\"{R_NS}/styles\" Target=\"styles.xml\"/></Relationships>"
+                ),
+            );
+            *data = text.into_bytes();
+        }
+        if name == "[Content_Types].xml" {
+            let text = String::from_utf8(data.clone()).unwrap().replace(
+                "</Types>",
+                "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>",
+            );
+            *data = text.into_bytes();
+        }
+    }
+    out.push(("xl/styles.xml".to_string(), styles.into_bytes()));
+    let refs: Vec<(&str, &[u8])> = out
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    zip(&refs)
+}
+
+// --- LibreOffice ----------------------------------------------------------
+
+/// The images that have `soffice`, best first.
+const OFFICE_IMAGES: [&str; 2] = [
+    "rusticdoc:local",
+    "ghcr.io/crafted-systems/gotenberg-slim-office:latest",
+];
+const TOOLS_IMAGE: &str = "gotenberg/integration-tools:latest";
+
+fn docker_has(image: &str) -> bool {
+    matches!(run("docker", &["image", "inspect", image]), Some((true, _)))
+}
+
+fn office_image() -> Option<&'static str> {
+    OFFICE_IMAGES.iter().copied().find(|i| docker_has(i))
+}
+
+/// Whether the images the conversion tests need are present.
+pub fn libreoffice_available() -> bool {
+    office_image().is_some() && docker_has(TOOLS_IMAGE)
+}
+
+/// Converts `file` in `dir` with LibreOffice. The profile is kept on the
+/// host between the warm-up run and the conversion; without that first
+/// run, soffice exits with code 81.
+pub fn soffice(dir: &str, to: &str, file: &str) -> bool {
+    let Some(image) = office_image() else {
+        return false;
+    };
+    std::fs::create_dir_all(format!("{dir}/profile")).unwrap();
+    let mount = format!("{dir}:/w");
+    let profile = format!("{dir}/profile:/tmp/p");
+    let input = format!("/w/{file}");
+    let base = [
+        "run",
+        "--rm",
+        "--platform",
+        "linux/arm64",
+        "-v",
+        &mount,
+        "-v",
+        &profile,
+        "--entrypoint",
+        "/usr/lib/libreoffice/program/soffice.bin",
+        image,
+        "-env:UserInstallation=file:///tmp/p",
+        "--headless",
+    ];
+    if !std::path::Path::new(&format!("{dir}/profile/user")).exists() {
+        let mut warm = base.to_vec();
+        warm.push("--terminate_after_init");
+        run("docker", &warm);
+    }
+    let mut convert = base.to_vec();
+    convert.extend(["--convert-to", to, "--outdir", "/w", &input]);
+    matches!(run("docker", &convert), Some((true, _)))
+}
+
+fn pdf_tool(dir: &str, tool: &[&str], file: &str) -> String {
+    let mount = format!("{dir}:/w");
+    let pdf = format!("/w/{file}");
+    let mut args = vec![
+        "run",
+        "--rm",
+        "--platform",
+        "linux/arm64",
+        "-v",
+        &mount,
+        TOOLS_IMAGE,
+    ];
+    args.extend_from_slice(tool);
+    args.push(&pdf);
+    let (ok, text) = run("docker", &args).unwrap();
+    assert!(ok, "{tool:?} failed: {text}");
+    text
+}
+
+pub fn pdf_text(dir: &str, file: &str) -> String {
+    let mount = format!("{dir}:/w");
+    let pdf = format!("/w/{file}");
+    let args = [
+        "run",
+        "--rm",
+        "--platform",
+        "linux/arm64",
+        "-v",
+        &mount,
+        TOOLS_IMAGE,
+        "pdftotext",
+        "-layout",
+        &pdf,
+        "-",
+    ];
+    let (ok, text) = run("docker", &args).unwrap();
+    assert!(ok, "pdftotext failed: {text}");
+    text
+}
+
+/// `(width, height)` in pixels of every image `pdfimages -list` reports.
+pub fn pdf_images(dir: &str, file: &str) -> Vec<(u32, u32)> {
+    pdf_tool(dir, &["pdfimages", "-list"], file)
+        .lines()
+        .skip(2)
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            Some((cols.get(3)?.parse().ok()?, cols.get(4)?.parse().ok()?))
+        })
+        .collect()
+}
+
+/// The link targets in a PDF's annotations.
+pub fn pdf_links(dir: &str, file: &str) -> Vec<String> {
+    let bytes = std::fs::read(format!("{dir}/{file}")).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    Regex::new(r"/URI *\(([^)]*)\)")
+        .unwrap()
+        .captures_iter(&text)
+        .map(|c| c[1].to_string())
+        .collect()
+}
+
+/// The page count `pdfinfo` reports.
+pub fn pdf_pages(dir: &str, file: &str) -> u32 {
+    pdf_tool(dir, &["pdfinfo"], file)
+        .lines()
+        .find_map(|l| l.strip_prefix("Pages:")?.trim().parse().ok())
+        .unwrap_or(0)
+}
