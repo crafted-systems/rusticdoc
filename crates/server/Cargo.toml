@@ -30,7 +30,7 @@ tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 utoipa = { version = "6.0.0", features = ["axum_extras", "uuid"] }
 utoipa-scalar = { version = "0.4.0", features = ["axum"] }
 uuid = { version = "1.29.0", features = ["v4"] }
-zip = { version = "9.4.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 lopdf = "0.47.0"
