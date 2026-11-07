@@ -517,7 +517,7 @@ impl Store {
     /// mistake loses nothing else.
     pub async fn sync_fonts(&self, dir: &Path) -> StoreResult<SyncReport> {
         let _one_at_a_time = self.syncing.lock().await;
-        create_private_dir(dir)
+        create_owned_private_dir(dir)
             .map_err(|e| StoreError::Backend(format!("{}: {e}", dir.display())))?;
         let prefix = ObjectPath::from("fonts/meta");
         let listed: Vec<_> = self.objects.list(Some(&prefix)).try_collect().await?;
@@ -614,6 +614,33 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
         .create(path)
 }
 
+/// Like `create_private_dir`, but refuses a directory that is already there and
+/// is not this user's to control: a link, another user's, or writable by others. The
+/// default sits in the shared temp directory, where anyone could make it first
+/// and so choose the fonts LibreOffice loads.
+fn create_owned_private_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    create_private_dir(path)?;
+    let meta = std::fs::symlink_metadata(path)?;
+    let refuse = |why: &str| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{why}; remove it, or set RUSTICDOC_FONT_CACHE_DIR to a directory of your own"),
+        ))
+    };
+    if !meta.file_type().is_dir() {
+        return refuse("is a link or not a directory");
+    }
+    // SAFETY: geteuid takes nothing and cannot fail.
+    if meta.uid() != unsafe { libc::geteuid() } {
+        return refuse("belongs to another user");
+    }
+    if meta.permissions().mode() & 0o022 != 0 {
+        return refuse("can be written by other users");
+    }
+    Ok(())
+}
+
 /// The fonts already in the copy, by id. Leftovers of an interrupted write go.
 fn local_fonts(dir: &Path) -> std::io::Result<HashMap<String, PathBuf>> {
     let mut found = HashMap::new();
@@ -641,10 +668,62 @@ fn local_fonts(dir: &Path) -> std::io::Result<HashMap<String, PathBuf>> {
 /// Writes a font so that a worker starting now sees all of it or none of it.
 /// fontconfig passes over names that start with a dot.
 fn write_font(dir: &Path, id: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
     let temporary = dir.join(format!(".{id}.tmp"));
-    std::fs::write(&temporary, bytes)?;
+    // A new file only, never through a link: whatever is in the way fails the write.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&temporary)?;
+    file.write_all(bytes)?;
+    drop(file);
     std::fs::rename(
         &temporary,
         dir.join(format!("{id}.{}", font_extension(bytes))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn font_cache_must_be_private_and_ours() {
+        let root = tempfile::tempdir().unwrap();
+
+        let fresh = root.path().join("fresh");
+        create_owned_private_dir(&fresh).unwrap();
+        let mode = std::fs::metadata(&fresh).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        create_owned_private_dir(&fresh).unwrap();
+
+        let readable = root.path().join("readable");
+        std::fs::create_dir(&readable).unwrap();
+        std::fs::set_permissions(&readable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_owned_private_dir(&readable).unwrap();
+
+        let open = root.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(create_owned_private_dir(&open).is_err());
+
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&fresh, &link).unwrap();
+        assert!(create_owned_private_dir(&link).is_err());
+    }
+
+    #[test]
+    fn a_planted_link_is_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::write(&target, b"keep").unwrap();
+        let id = "a".repeat(64);
+        std::os::unix::fs::symlink(&target, dir.path().join(format!(".{id}.tmp"))).unwrap();
+        assert!(write_font(dir.path(), &id, b"font").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+    }
 }

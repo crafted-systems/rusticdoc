@@ -165,7 +165,7 @@ Environment variables, all optional:
 | `RUSTICDOC_MAX_TEMPLATE_BYTES` | `50MB` | Largest template that can be stored |
 | `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE` | `10000`, `5GB` | What one scope may hold. Replicas storing at the same moment can pass these by what is in flight |
 | `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE` | `2000`, `1GB` | What the store may hold in fonts, all of which every replica copies to disk |
-| `RUSTICDOC_FONT_CACHE_DIR` | the temp directory | This replica's copy of the stored fonts. Local to it, and rebuilt when it starts |
+| `RUSTICDOC_FONT_CACHE_DIR` | the temp directory | This replica's copy of the stored fonts. Local to it, and rebuilt when it starts. It must be a real directory owned by the service's user that no one else can write to; anything else stops the font sync and keeps the replica unready |
 | `RUSTICDOC_STORE_SYNC_INTERVAL` | `30s` | How often a replica looks for fonts added or deleted elsewhere |
 | `RUSTICDOC_WEBHOOK_SECRET` | none | Secret that callers' signing keys derive from. Unset, deliveries are not signed, and the service warns at start |
 | `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhooks to private addresses |
