@@ -53,7 +53,9 @@ pub fn sanitize_correlation_id(value: &str) -> Option<String> {
 fn telemetry_off(state: &AppState, path: &str) -> bool {
     let compat = &state.config.compat;
     match path {
-        "/health" => compat.health_telemetry_off,
+        // A readiness probe runs as often as a liveness one, and answers 503 for
+        // as long as a new replica waits for its fonts, which is no error.
+        "/health" | "/ready" => compat.health_telemetry_off,
         "/" => compat.root_telemetry_off,
         "/debug" => compat.debug_telemetry_off,
         "/version" => compat.version_telemetry_off,

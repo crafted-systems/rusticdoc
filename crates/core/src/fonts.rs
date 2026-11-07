@@ -26,13 +26,21 @@ pub struct FontInfo {
     pub file: String,
     /// True when it came from the mounted fonts directory.
     pub mounted: bool,
+    /// The stored font this face belongs to, for deleting it. Absent for fonts
+    /// in the image or the mounted directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
-/// Every face fontconfig would find: the system's and the mounted directory.
-pub fn list(fonts_dir: &Path) -> Vec<FontInfo> {
+/// Every face fontconfig would find: the system's, the mounted directory's, and
+/// those in the copy of the stored fonts, if there is one.
+pub fn list(fonts_dir: &Path, stored_dir: Option<&Path>) -> Vec<FontInfo> {
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
     db.load_fonts_dir(fonts_dir);
+    if let Some(dir) = stored_dir {
+        db.load_fonts_dir(dir);
+    }
     let mut out: Vec<FontInfo> = db
         .faces()
         .map(|face| {
@@ -54,6 +62,12 @@ pub fn list(fonts_dir: &Path) -> Vec<FontInfo> {
                     .and_then(|n| n.to_str())
                     .unwrap_or_default()
                     .to_string(),
+                id: path
+                    .as_ref()
+                    .filter(|p| stored_dir.is_some_and(|dir| p.starts_with(dir)))
+                    .and_then(|p| p.file_stem())
+                    .and_then(|stem| stem.to_str())
+                    .map(str::to_string),
                 mounted: path.is_some_and(|p| p.starts_with(fonts_dir)),
             }
         })
@@ -97,6 +111,173 @@ pub fn directory_signature(dir: &Path) -> String {
     walk(dir, 0, &mut rows);
     rows.sort_unstable();
     hex::encode(Sha256::digest(rows.join("\n").as_bytes()))
+}
+
+/// One face of an uploaded font, as read from the file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FontFace {
+    pub family: String,
+    pub style: String,
+    pub weight: u16,
+}
+
+/// A font ready to store: read, parsed, and named by its content.
+#[derive(Debug, Clone)]
+pub struct ParsedFont {
+    /// Hex SHA-256 of the file.
+    pub id: String,
+    /// The name it was uploaded under, without any directory.
+    pub file: String,
+    pub bytes: bytes::Bytes,
+    pub faces: Vec<FontFace>,
+}
+
+/// A file in an upload that was left out, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SkippedFile {
+    pub file: String,
+    pub reason: String,
+}
+
+/// What an upload held.
+#[derive(Debug, Default)]
+pub struct FontUpload {
+    pub fonts: Vec<ParsedFont>,
+    pub skipped: Vec<SkippedFile>,
+}
+
+/// Most entries read from one ZIP of fonts.
+const MAX_ZIP_ENTRIES: usize = 2_000;
+/// Largest font accepted. The largest common files, CJK collections, are under this.
+const MAX_FONT_BYTES: u64 = 128 * 1024 * 1024;
+/// Most bytes one ZIP may expand to, however small it is. This is memory.
+const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
+
+/// The faces a file holds, or `None` when it is not a font that can be read.
+pub fn faces_of(bytes: &[u8]) -> Option<Vec<FontFace>> {
+    if !is_font(bytes) {
+        return None;
+    }
+    let mut db = fontdb::Database::new();
+    db.load_font_data(bytes.to_vec());
+    let faces: Vec<FontFace> = db
+        .faces()
+        .filter_map(|face| {
+            let family = face.families.first()?.0.trim().to_string();
+            (!family.is_empty()).then(|| FontFace {
+                family,
+                style: format!("{:?}", face.style).to_ascii_lowercase(),
+                weight: face.weight.0,
+            })
+        })
+        .collect();
+    (!faces.is_empty()).then_some(faces)
+}
+
+fn parse_font(file: &str, bytes: bytes::Bytes) -> Result<ParsedFont> {
+    use sha2::{Digest, Sha256};
+    let faces = faces_of(&bytes)
+        .ok_or_else(|| Error::InvalidRequest(format!("'{file}' is not a font that can be read")))?;
+    Ok(ParsedFont {
+        id: hex::encode(Sha256::digest(&bytes)),
+        file: crate::job::safe_file_name(file, "font"),
+        bytes,
+        faces,
+    })
+}
+
+/// True for the extensions fontconfig is given. Others are reported, not guessed at.
+fn has_font_extension(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [".ttf", ".otf", ".ttc"].iter().any(|e| lower.ends_with(e))
+}
+
+/// Reads an upload: one font file, or a ZIP of them. A file named as a font that
+/// is not one fails the upload, so a broken package is noticed; anything else in
+/// a ZIP, such as a licence, is reported as skipped. Names in the archive are used
+/// only as labels, never as paths, and sizes are counted as bytes come out rather
+/// than taken from its headers.
+pub fn unpack_upload(doc: &Document) -> Result<FontUpload> {
+    if doc.bytes.len() as u64 > MAX_FONT_BYTES {
+        return Err(Error::InvalidRequest(format!(
+            "the upload is larger than {MAX_FONT_BYTES} bytes"
+        )));
+    }
+    if !doc.bytes.starts_with(b"PK") {
+        return Ok(FontUpload {
+            fonts: vec![parse_font(&doc.name, doc.bytes.clone())?],
+            skipped: Vec::new(),
+        });
+    }
+    let invalid =
+        |e: zip::result::ZipError| Error::InvalidRequest(format!("the ZIP cannot be read: {e}"));
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(doc.bytes.as_ref())).map_err(invalid)?;
+    if archive.len() > MAX_ZIP_ENTRIES {
+        return Err(Error::InvalidRequest(format!(
+            "the ZIP has more than {MAX_ZIP_ENTRIES} entries"
+        )));
+    }
+    let mut upload = FontUpload::default();
+    let mut seen = BTreeSet::new();
+    let mut total = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(invalid)?;
+        let path = entry.name().map_err(invalid)?.to_string();
+        let base = crate::job::safe_file_name(&path, "file");
+        let hidden = base.starts_with('.') || path.split(['/', '\\']).any(|p| p == "__MACOSX");
+        if entry.is_dir() || hidden {
+            continue;
+        }
+        let skip = |reason: &str| SkippedFile {
+            file: base.clone(),
+            reason: reason.to_string(),
+        };
+        if entry.is_symlink() {
+            upload.skipped.push(skip("a link, not a file"));
+            continue;
+        }
+        if !has_font_extension(&base) {
+            let lower = base.to_ascii_lowercase();
+            let web = [".woff", ".woff2", ".eot", ".pfb", ".pfa"];
+            upload
+                .skipped
+                .push(skip(if web.iter().any(|e| lower.ends_with(e)) {
+                    "this font format is not supported; use TTF, OTF or TTC"
+                } else {
+                    "not a font"
+                }));
+            continue;
+        }
+        let mut bytes = Vec::new();
+        (&mut entry)
+            .take(MAX_FONT_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| {
+                Error::InvalidRequest(format!("'{base}' cannot be read from the ZIP: {e}"))
+            })?;
+        if bytes.len() as u64 > MAX_FONT_BYTES {
+            return Err(Error::InvalidRequest(format!(
+                "'{base}' is larger than {MAX_FONT_BYTES} bytes"
+            )));
+        }
+        total += bytes.len() as u64;
+        if total > MAX_UPLOAD_BYTES {
+            return Err(Error::InvalidRequest(format!(
+                "the ZIP expands to more than {MAX_UPLOAD_BYTES} bytes"
+            )));
+        }
+        let font = parse_font(&base, bytes.into())?;
+        if seen.insert(font.id.clone()) {
+            upload.fonts.push(font);
+        }
+    }
+    if upload.fonts.is_empty() {
+        return Err(Error::InvalidRequest(
+            "the ZIP holds no TTF, OTF or TTC fonts".into(),
+        ));
+    }
+    Ok(upload)
 }
 
 /// True for a TrueType, OpenType or collection file, by its magic bytes.
@@ -264,6 +445,7 @@ mod tests {
 
     fn face(family: &str) -> FontInfo {
         FontInfo {
+            id: None,
             family: family.into(),
             style: "normal".into(),
             weight: 400,

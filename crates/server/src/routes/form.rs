@@ -222,25 +222,47 @@ impl Form {
         self.multi.get(name).cloned().unwrap_or_default()
     }
 
-    /// A field holding JSON, or an empty object when absent. A file part
-    /// named like the field, such as `data.json`, is accepted too.
+    /// A field holding JSON, or an empty object when absent. It may come as text
+    /// (`-F "data=<f.json"`), as a file part in that field (`-F data=@f.json`), or
+    /// as a file part with the field's name in any field (`data.json`). A file part
+    /// read here stops being an input, so read these before choosing a template.
     pub fn json(&mut self, name: &str) -> ApiResult<serde_json::Value> {
-        if let Some(text) = self.fields.get(name) {
+        let parts = self.by_field.remove(name).unwrap_or_default();
+        for part in &parts {
+            if let Some(pos) = self
+                .files
+                .iter()
+                .position(|f| f.name == part.name && f.bytes == part.bytes)
+            {
+                self.files.remove(pos);
+            }
+        }
+        let text = self.fields.get(name);
+        if parts.len() + usize::from(text.is_some()) > 1 {
+            return Err(ApiError::bad_request(format!(
+                "field '{name}' was sent more than once; send it as text or as one file"
+            )));
+        }
+        if let Some(text) = text {
             return serde_json::from_str(text).map_err(|e| {
                 ApiError::bad_request(format!("field '{name}' is not valid JSON: {e}"))
             });
         }
-        if let Some(pos) = self
+        let named = self
             .files
             .iter()
-            .position(|f| f.name == format!("{name}.json"))
-        {
-            let file = self.files.remove(pos);
-            return serde_json::from_slice(&file.bytes).map_err(|e| {
-                ApiError::bad_request(format!("file '{}' is not valid JSON: {e}", file.name))
-            });
-        }
-        Ok(serde_json::Value::Object(Default::default()))
+            .position(|f| f.name == format!("{name}.json"));
+        let file = match (parts.into_iter().next(), named) {
+            (Some(file), _) => file,
+            (None, Some(pos)) => self.files.remove(pos),
+            (None, None) => return Ok(serde_json::Value::Object(Default::default())),
+        };
+        serde_json::from_slice(&file.bytes).map_err(|e| {
+            ApiError::bad_request(format!(
+                "file '{}' sent as '{name}' is not valid JSON: {e}",
+                file.name
+            ))
+        })
     }
 
     pub fn bool(&self, name: &str) -> bool {
@@ -372,6 +394,84 @@ pub async fn zip(name: &str, outputs: &[Output], timeout: Duration) -> ApiResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn form_with(files: &[(&str, &str, &str)]) -> Form {
+        let mut form = Form::default();
+        for (field, name, body) in files {
+            form.add_file(field, Document::new(*name, body.as_bytes().to_vec()));
+        }
+        form
+    }
+
+    #[test]
+    fn a_file_in_the_field_is_read_whatever_its_name() {
+        let mut form = form_with(&[
+            ("data", "invoice.json", r#"{"a":1}"#),
+            ("ctx", "more.json", r#"{"b":2}"#),
+            ("template", "invoice.docx", "PK"),
+        ]);
+        assert_eq!(form.json("data").unwrap()["a"], 1);
+        assert_eq!(form.json("ctx").unwrap()["b"], 2);
+        assert_eq!(form.files.len(), 1, "only the template is left");
+        assert_eq!(form.files[0].name, "invoice.docx");
+    }
+
+    #[test]
+    fn a_file_named_for_the_field_still_counts_in_any_field() {
+        let mut form = form_with(&[
+            ("files", "data.json", r#"{"a":1}"#),
+            ("files", "t.docx", "PK"),
+        ]);
+        assert_eq!(form.json("data").unwrap()["a"], 1);
+        assert_eq!(form.files.len(), 1);
+        assert_eq!(form.files[0].name, "t.docx");
+    }
+
+    #[test]
+    fn an_identical_input_survives_the_data_file() {
+        let body = r#"{"a":1}"#;
+        let mut form = form_with(&[("files", "a.json", body), ("data", "a.json", body)]);
+        form.json("data").unwrap();
+        assert_eq!(form.files.len(), 1);
+    }
+
+    #[test]
+    fn data_that_is_not_json_or_sent_twice_is_refused() {
+        let mut form = form_with(&[("data", "invoice.docx", "PK")]);
+        let err = form.json("data").unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            err.body.message.contains("invoice.docx"),
+            "{}",
+            err.body.message
+        );
+
+        let mut form = form_with(&[("data", "a.json", "{}"), ("data", "b.json", "{}")]);
+        assert!(
+            form.json("data")
+                .unwrap_err()
+                .body
+                .message
+                .contains("more than once")
+        );
+
+        let mut form = form_with(&[("data", "a.json", "{}")]);
+        form.fields.insert("data".into(), "{}".into());
+        assert!(
+            form.json("data")
+                .unwrap_err()
+                .body
+                .message
+                .contains("more than once")
+        );
+    }
+
+    #[test]
+    fn no_data_is_an_empty_object() {
+        let mut form = form_with(&[("files", "report.docx", "PK")]);
+        assert_eq!(form.json("data").unwrap(), serde_json::json!({}));
+        assert_eq!(form.files.len(), 1);
+    }
 
     #[test]
     fn file_names_lose_their_directories() {

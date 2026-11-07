@@ -26,6 +26,27 @@ pub struct Config {
     pub pdfcpu_bin: Option<PathBuf>,
     /// Directory of extra fonts, mounted at runtime.
     pub fonts_dir: PathBuf,
+    /// Where uploaded templates and fonts live: `file:///path` or
+    /// `s3://bucket/prefix`. Without it those routes answer 501.
+    pub store: Option<String>,
+    /// Whose templates a caller sees.
+    pub store_scope: StoreScope,
+    /// Keys that may change the stored fonts, which every caller then renders with.
+    pub admin_keys: Vec<String>,
+    /// Largest template that can be stored.
+    pub max_template_bytes: usize,
+    /// Most templates one scope may hold.
+    pub max_templates: usize,
+    /// Most bytes of templates one scope may hold.
+    pub max_template_storage: u64,
+    /// Most fonts the store may hold.
+    pub max_stored_fonts: usize,
+    /// Most bytes of fonts the store may hold. Every replica copies them to disk.
+    pub max_font_storage: u64,
+    /// This replica's copy of the stored fonts, on its own disk.
+    pub font_cache_dir: PathBuf,
+    /// How often a replica looks for fonts added or deleted elsewhere.
+    pub store_sync_interval: Duration,
     /// Accepted API keys for `Authorization: Bearer` or `X-Api-Key`. Empty
     /// means no key is required.
     pub api_keys: Vec<String>,
@@ -43,6 +64,8 @@ pub struct Config {
     pub batch_limit: usize,
     /// Most bytes a text template, `batchName` or PDF form tag may write.
     pub max_render_bytes: usize,
+    /// Most temporary files one LibreOffice conversion may write.
+    pub libreoffice_max_disk: u64,
     /// Most file parts one form may hold.
     pub max_form_parts: usize,
     /// Webhook jobs that may run at once across the service.
@@ -202,6 +225,20 @@ impl Default for CompatConfig {
 }
 
 /// Bearer tokens accepted on the protected routes.
+/// The port the service listens on unless told otherwise.
+pub const DEFAULT_PORT: u16 = 9027;
+
+/// Whose templates a caller sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StoreScope {
+    /// Its own: one credential cannot read or delete another's. Replacing a key
+    /// leaves what the old key stored behind.
+    #[default]
+    Caller,
+    /// Everyone's: every credential reads and deletes the same templates.
+    Shared,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct OidcConfig {
     pub issuer: String,
@@ -213,7 +250,7 @@ pub struct OidcConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            bind: "0.0.0.0:3000".into(),
+            bind: format!("0.0.0.0:{DEFAULT_PORT}"),
             root_path: "/".into(),
             api_timeout: Duration::from_secs(30),
             body_limit: 64 * 1024 * 1024,
@@ -235,6 +272,16 @@ impl Default for Config {
                 "/usr/local/bin/pdfcpu",
             ]),
             fonts_dir: PathBuf::from("/fonts"),
+            store: None,
+            store_scope: StoreScope::Caller,
+            admin_keys: Vec::new(),
+            max_template_bytes: 50 * 1024 * 1024,
+            max_templates: 10_000,
+            max_template_storage: 5 * 1024 * 1024 * 1024,
+            max_stored_fonts: 2_000,
+            max_font_storage: 1024 * 1024 * 1024,
+            font_cache_dir: std::env::temp_dir().join("rusticdoc-stored-fonts"),
+            store_sync_interval: Duration::from_secs(30),
             api_keys: Vec::new(),
             basic_auth: None,
             webhook_secret: None,
@@ -243,6 +290,7 @@ impl Default for Config {
             cors_origins: Vec::new(),
             batch_limit: 100,
             max_render_bytes: crate::limits::DEFAULT_MAX_RENDER_BYTES,
+            libreoffice_max_disk: crate::limits::DEFAULT_LIBREOFFICE_MAX_DISK,
             max_form_parts: crate::limits::DEFAULT_MAX_FORM_PARTS,
             max_async_jobs: 32,
             max_async_jobs_per_caller: 8,
@@ -325,6 +373,76 @@ impl Config {
         if let Some(v) = get("FONTS_DIR") {
             c.fonts_dir = PathBuf::from(v);
         }
+        c.store = get("STORE");
+        match get("STORE_SCOPE").as_deref() {
+            None | Some("caller") => {}
+            Some("shared") => c.store_scope = StoreScope::Shared,
+            Some(other) => c.problems.push(format!(
+                "RUSTICDOC_STORE_SCOPE is '{other}'; use 'caller' or 'shared'"
+            )),
+        }
+        if let Some(v) = get("ADMIN_KEYS") {
+            c.admin_keys = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if c.admin_keys.is_empty() {
+                c.problems
+                    .push("RUSTICDOC_ADMIN_KEYS is set but holds no key".into());
+            }
+        }
+        if let Some(v) = get("MAX_TEMPLATE_BYTES") {
+            match parse_bytes(&v) {
+                Some(n) if n > 0 => c.max_template_bytes = n,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_TEMPLATE_BYTES: bad size '{v}'")),
+            }
+        }
+        if let Some(v) = get("MAX_TEMPLATES") {
+            match v.parse::<usize>() {
+                Ok(n) if n > 0 => c.max_templates = n,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_TEMPLATES: bad count '{v}'")),
+            }
+        }
+        if let Some(v) = get("MAX_TEMPLATE_STORAGE") {
+            match parse_bytes(&v) {
+                Some(n) if n > 0 => c.max_template_storage = n as u64,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_TEMPLATE_STORAGE: bad size '{v}'")),
+            }
+        }
+        if let Some(v) = get("MAX_STORED_FONTS") {
+            match v.parse::<usize>() {
+                Ok(n) if n > 0 => c.max_stored_fonts = n,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_STORED_FONTS: bad count '{v}'")),
+            }
+        }
+        if let Some(v) = get("MAX_FONT_STORAGE") {
+            match parse_bytes(&v) {
+                Some(n) if n > 0 => c.max_font_storage = n as u64,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_FONT_STORAGE: bad size '{v}'")),
+            }
+        }
+        if let Some(v) = get("FONT_CACHE_DIR") {
+            c.font_cache_dir = PathBuf::from(v);
+        }
+        if let Some(v) = get("STORE_SYNC_INTERVAL") {
+            match parse_duration(&v) {
+                Some(d) if !d.is_zero() => c.store_sync_interval = d,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_STORE_SYNC_INTERVAL: bad duration '{v}'")),
+            }
+        }
         if let Some(v) = get("API_KEYS") {
             c.api_keys = v
                 .split(',')
@@ -390,6 +508,9 @@ impl Config {
         if let Some(v) = get("MAX_RENDER_BYTES").and_then(|v| parse_bytes(&v)) {
             c.max_render_bytes = v;
         }
+        if let Some(v) = get("LIBREOFFICE_MAX_DISK").and_then(|v| parse_bytes(&v)) {
+            c.libreoffice_max_disk = v as u64;
+        }
         if let Some(v) = get("RENDER_MODE") {
             c.render_mode_set = true;
             c.render_mode = match v.as_str() {
@@ -450,7 +571,7 @@ impl Config {
             self.bind = format!(
                 "{}:{}",
                 ip.unwrap_or_else(|| "0.0.0.0".into()),
-                port.unwrap_or_else(|| "3000".into())
+                port.unwrap_or_else(|| DEFAULT_PORT.to_string())
             );
         }
         if let Some(v) = get("API_ROOT_PATH") {
@@ -650,6 +771,9 @@ impl Config {
     pub fn check(&self) -> Result<(), String> {
         if let Some(problem) = self.problems.first() {
             return Err(problem.clone());
+        }
+        if let Some(url) = &self.store {
+            crate::store::Store::open(url)?;
         }
         for (variable, engines) in &self.compat.engine_orders {
             for engine in engines {
@@ -919,6 +1043,50 @@ mod tests {
         assert_eq!(parse_go_bool("True"), Some(true));
         assert_eq!(parse_go_bool("0"), Some(false));
         assert_eq!(parse_go_bool("yes"), None);
+    }
+
+    #[test]
+    fn the_port_defaults_to_9027_and_either_variable_changes_it() {
+        assert_eq!(Config::default().bind, "0.0.0.0:9027");
+        assert_eq!(from(&[("API_BIND_IP", "127.0.0.1")]).bind, "127.0.0.1:9027");
+        assert_eq!(from(&[("API_PORT", "3000")]).bind, "0.0.0.0:3000");
+        assert_eq!(
+            from(&[("RUSTICDOC_BIND", "127.0.0.1:8000"), ("API_PORT", "3000")]).bind,
+            "127.0.0.1:8000"
+        );
+    }
+
+    #[test]
+    fn store_settings_are_read_and_bad_ones_stop_the_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("file://{}/store", dir.path().display());
+        let c = from(&[
+            ("RUSTICDOC_STORE", url.as_str()),
+            ("RUSTICDOC_STORE_SCOPE", "shared"),
+            ("RUSTICDOC_ADMIN_KEYS", "one, two"),
+            ("RUSTICDOC_MAX_TEMPLATES", "7"),
+            ("RUSTICDOC_MAX_TEMPLATE_BYTES", "1MB"),
+            ("RUSTICDOC_STORE_SYNC_INTERVAL", "5s"),
+        ]);
+        assert!(c.check().is_ok());
+        assert_eq!(c.store_scope, StoreScope::Shared);
+        assert_eq!(c.admin_keys, ["one", "two"]);
+        assert_eq!(c.max_templates, 7);
+        assert_eq!(c.max_template_bytes, 1024 * 1024);
+        assert_eq!(c.store_sync_interval, Duration::from_secs(5));
+        assert!(dir.path().join("store").is_dir());
+
+        for bad in [
+            &[("RUSTICDOC_STORE", "https://example.com")][..],
+            &[("RUSTICDOC_STORE", "s3://key:secret@bucket")],
+            &[("RUSTICDOC_STORE_SCOPE", "everyone")],
+            &[("RUSTICDOC_ADMIN_KEYS", " , ")],
+            &[("RUSTICDOC_MAX_TEMPLATES", "0")],
+            &[("RUSTICDOC_MAX_TEMPLATE_BYTES", "lots")],
+            &[("RUSTICDOC_STORE_SYNC_INTERVAL", "0s")],
+        ] {
+            assert!(from(bad).check().is_err(), "{bad:?}");
+        }
     }
 
     #[test]

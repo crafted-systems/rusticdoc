@@ -39,6 +39,14 @@ for line in sys.stdin:
         time.sleep(3600)
     if MODE == "slow":
         time.sleep(0.3)
+    flood_mark = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flooded")
+    if MODE == "flood" and not os.path.exists(flood_mark):
+        open(flood_mark, "w").write(os.path.dirname(req["output"]))
+        with open(req["output"] + ".tmp", "wb") as f:
+            for _ in range(2000):
+                f.write(b"x" * 1024 * 1024)
+                f.flush()
+                time.sleep(0.005)
     if MODE == "fail":
         print(json.dumps({{"id": req["id"], "ok": False, "error": "no filter for that"}}), flush=True)
         continue
@@ -342,4 +350,45 @@ async fn missing_bridge_is_an_engine_error() {
         .unwrap_err();
     assert!(matches!(err, Error::Engine { .. }), "{err}");
     assert_eq!(lo.health().await["busy"], 0);
+}
+
+#[tokio::test]
+async fn a_conversion_that_floods_the_disk_is_stopped_and_cleaned_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let lo = pool(&dir, "flood", 1).with_max_disk(8 * 1024 * 1024);
+    let started = Instant::now();
+    let err = lo
+        .convert(&docx(), Format::Pdf, None, Duration::from_secs(30))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
+    assert!(err.to_string().contains("report.docx"), "{err}");
+    assert!(err.is_client_error());
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "stopped at the limit, not the time limit: {:?}",
+        started.elapsed()
+    );
+    settle(&lo, 1).await;
+    let job_dir = std::fs::read_to_string(dir.path().join("flooded")).unwrap();
+    assert!(
+        !std::path::Path::new(&job_dir).exists(),
+        "the worker's files outlived it"
+    );
+    // The replacement takes the next job as if nothing had happened.
+    let out = lo
+        .convert(&docx(), Format::Pdf, None, Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(request(&out)["filter"], "pdf");
+}
+
+#[tokio::test]
+async fn a_large_input_does_not_count_against_the_disk_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let lo = pool(&dir, "slow", 1).with_max_disk(1024);
+    let big = Document::new("big.docx", vec![0u8; 4 * 1024 * 1024]);
+    lo.convert(&big, Format::Pdf, None, Duration::from_secs(10))
+        .await
+        .unwrap();
 }

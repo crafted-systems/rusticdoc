@@ -23,7 +23,7 @@ form.append("data", JSON.stringify({ customer: { name: "Ada" } }));
 form.append("steps", "convert,pdfa");
 form.append("pdfa", "PDF/A-2b");
 
-const res = await fetch("http://localhost:3000/v1/render", {
+const res = await fetch("http://localhost:9027/v1/render", {
   method: "POST",
   headers: { "X-Api-Key": process.env.RUSTICDOC_API_KEY! },
   body: form,

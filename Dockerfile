@@ -79,8 +79,7 @@ COPY --from=pdfcpu /out/pdfcpu /usr/bin/pdfcpu
 COPY --from=build /rusticdoc /usr/bin/rusticdoc
 COPY LICENSE /usr/share/doc/rusticdoc/LICENSE
 
-ENV RUSTICDOC_BIND=0.0.0.0:3000 \
-    RUSTICDOC_LIBREOFFICE_BIN=/usr/lib/libreoffice/program/soffice.bin \
+ENV RUSTICDOC_LIBREOFFICE_BIN=/usr/lib/libreoffice/program/soffice.bin \
     RUSTICDOC_QPDF_BIN=/usr/bin/qpdf \
     RUSTICDOC_PDFCPU_BIN=/usr/bin/pdfcpu \
     RUSTICDOC_FONTS_DIR=/fonts \
@@ -89,7 +88,7 @@ ENV RUSTICDOC_BIND=0.0.0.0:3000 \
 USER rusticdoc
 WORKDIR /home/rusticdoc
 VOLUME ["/fonts"]
-EXPOSE 3000
+EXPOSE 9027
 HEALTHCHECK --interval=30s --timeout=6s --start-period=20s --retries=3 CMD ["/usr/bin/rusticdoc", "health"]
 # As PID 1 it reaps and forwards signals itself, so that /proc/1/environ, which holds
 # the service's secrets, can be closed to the user LibreOffice runs as.

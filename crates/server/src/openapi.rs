@@ -5,7 +5,7 @@ use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder
 use utoipa::{Modify, OpenApi};
 
 use crate::error::ErrorBody;
-use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render};
+use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render, templates};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -35,7 +35,14 @@ use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render};
         pdfops::stamp,
         pdfops::facturx,
         pdfops::sign,
+        templates::upload,
+        templates::list,
+        templates::show,
+        templates::content,
+        templates::remove,
         fonts::list,
+        fonts::upload,
+        fonts::remove,
         fonts::reload,
         forms::fields,
         forms::fill,
@@ -47,6 +54,14 @@ use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render};
     ),
     components(schemas(
         ErrorBody,
+        templates::TemplateUploadForm,
+        templates::TemplateSchema,
+        templates::TemplateList,
+        fonts::FontUploadForm,
+        fonts::FontsStored,
+        fonts::StoredFontSchema,
+        fonts::FaceSchema,
+        fonts::SkippedSchema,
         render::RenderForm,
         render::Validation,
         convert::ConvertForm,
@@ -75,7 +90,8 @@ use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render};
         (name = "convert", description = "Documents in, converted documents out"),
         (name = "pdf", description = "PDF operations"),
         (name = "pdf-forms", description = "PDF templates: form fields, tags in annotations, overlays"),
-        (name = "fonts", description = "Loaded fonts and reloading a mounted directory"),
+        (name = "templates", description = "Store a template and render it by id from any replica"),
+        (name = "fonts", description = "List, upload and delete fonts, and reload a mounted directory"),
         (name = "service", description = "Health, version, metrics"),
     ),
     modifiers(&Security)

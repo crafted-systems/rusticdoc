@@ -1,0 +1,103 @@
+# rusticdoc on Kubernetes: several replicas on one S3-compatible bucket, which is the
+# only thing they share. Create the secret first, set the image, then apply:
+#
+#   kubectl create secret generic rusticdoc \
+#     --from-literal=api-keys=... --from-literal=admin-keys=... \
+#     --from-literal=webhook-secret=... \
+#     --from-literal=s3-access-key=... --from-literal=s3-secret-key=...
+#   kubectl apply -f deploy/kubernetes.yaml
+#
+# On EKS with a service account role, drop the two AWS key variables. For any store
+# other than AWS, set AWS_ENDPOINT, and AWS_ALLOW_HTTP if it is plain HTTP.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rusticdoc
+  labels: { app: rusticdoc }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: rusticdoc }
+  template:
+    metadata:
+      labels: { app: rusticdoc }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile: { type: RuntimeDefault }
+      # A conversion in progress gets the time it needs when a pod is replaced.
+      terminationGracePeriodSeconds: 90
+      containers:
+        - name: rusticdoc
+          image: ghcr.io/vmosoti/rusticdoc:latest
+          ports:
+            - { name: http, containerPort: 9027 }
+          env:
+            - { name: RUSTICDOC_STORE, value: "s3://my-bucket/rusticdoc" }
+            - { name: AWS_REGION, value: us-east-1 }
+            - { name: RUSTICDOC_FONT_CACHE_DIR, value: /var/cache/rusticdoc/fonts }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: rusticdoc, key: s3-access-key } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: rusticdoc, key: s3-secret-key } }
+            - name: RUSTICDOC_API_KEYS
+              valueFrom: { secretKeyRef: { name: rusticdoc, key: api-keys } }
+            - name: RUSTICDOC_ADMIN_KEYS
+              valueFrom: { secretKeyRef: { name: rusticdoc, key: admin-keys } }
+            - name: RUSTICDOC_WEBHOOK_SECRET
+              valueFrom: { secretKeyRef: { name: rusticdoc, key: webhook-secret } }
+          # Open without credentials, showing only the status. /ready waits for this
+          # pod's copy of the stored fonts, so it gets no documents before they arrive.
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 6
+          # Fits the service, two LibreOffice workers and four render workers at
+          # their limit. Lower it with RUSTICDOC_RENDER_WORKERS and _RENDER_MEMORY.
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { memory: 6Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: home, mountPath: /home/rusticdoc }
+            - { name: font-copy, mountPath: /var/cache/rusticdoc }
+      # All the pod's own: nothing here has to survive it or be shared.
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 2Gi }
+        - name: home
+          emptyDir: { sizeLimit: 512Mi }
+        - name: font-copy
+          emptyDir: { sizeLimit: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rusticdoc
+spec:
+  selector: { app: rusticdoc }
+  ports:
+    - { name: http, port: 9027, targetPort: http }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rusticdoc
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: rusticdoc }

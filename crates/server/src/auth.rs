@@ -71,6 +71,13 @@ pub async fn identify(state: &AppState, headers: &HeaderMap) -> Option<Principal
     {
         return Some(key_principal(presented));
     }
+    // An admin key is a credential wherever credentials are asked for.
+    if let Some(presented) = bearer.or(api_key)
+        && config.auth_configured()
+        && key_is_listed(&config.admin_keys, presented)
+    {
+        return Some(key_principal(presented));
+    }
 
     if let Some((user, pass)) = &config.basic_auth {
         let basic = headers
@@ -106,6 +113,41 @@ pub async fn identify(state: &AppState, headers: &HeaderMap) -> Option<Principal
         }
     }
     None
+}
+
+/// Refuses a request that may not change what every caller renders with. With
+/// credentials configured that takes one of `RUSTICDOC_ADMIN_KEYS`, and no other
+/// credential will do, however valid: a font decides what digits look like in
+/// everyone's documents. A service that requires no credentials has already told
+/// everyone they may do anything, unless it names admin keys.
+pub fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+    let config = &state.config;
+    if config.admin_keys.is_empty() {
+        if !config.auth_configured() {
+            return Ok(());
+        }
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "admin_required",
+            "changing fonts takes an admin key, and RUSTICDOC_ADMIN_KEYS is not set",
+        ));
+    }
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer ").map(str::trim));
+    let api_key = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    match bearer.or(api_key) {
+        Some(key) if key_is_listed(&config.admin_keys, key) => Ok(()),
+        _ => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "admin_required",
+            "changing fonts takes an admin key",
+        )),
+    }
 }
 
 /// Who a request said it was, for the log: the scheme and a digest prefix. A

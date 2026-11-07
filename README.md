@@ -4,6 +4,8 @@ A document engine in Rust: fills Office and PDF templates from JSON with `{{cust
 
 It takes templating from Carbone and conversion and PDF handling from Gotenberg, and covers documents only: no HTML or URL rendering through a browser. It ships as one hardened image with no Node, Java or Chromium. LibreOffice does the conversions, driven through a small Python bridge, and qpdf and pdfcpu back the PDF stage alongside the built-in engine. The design is in [rusticdoc: a document engine in Rust](https://claude.ai/artifact/4ZBnc3L7jTH1ov5TKH8qs3), and what is done against it is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
+Full documentation is at [rusticdoc.com/docs](https://rusticdoc.com/docs/), and its source is in [site/](site/).
+
 **Status: pre-release.** The templating, PDF, service and CLI work described here is built and tested. Generated Office files have only been opened in LibreOffice so far, not in Microsoft Office. [Known limits](#known-limits) lists this and the rest of what has not been checked.
 
 ## Run it
@@ -11,7 +13,7 @@ It takes templating from Carbone and conversion and PDF handling from Gotenberg,
 ```bash
 docker build -t rusticdoc .
 docker run -d --name rusticdoc --read-only --cap-drop ALL --security-opt no-new-privileges \
-  --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 -p 127.0.0.1:3000:3000 rusticdoc
+  --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 -p 127.0.0.1:9027:9027 rusticdoc
 ```
 
 `deploy/compose.yaml` does the same with memory, process and temporary file limits. With no credentials configured the service answers anyone and warns at every start, so set `RUSTICDOC_API_KEYS` before exposing it. See [Security](#security).
@@ -21,16 +23,16 @@ Fill a template and get a PDF:
 ```bash
 printf 'Dear {{ customer.name }},\nTotal: {{ total | currency("KES") }}\n' > letter.txt
 curl -F template=@letter.txt -F 'data={"customer":{"name":"Ada"},"total":1500}' -F steps=convert \
-  http://localhost:3000/v1/render -o letter.pdf
+  http://localhost:9027/v1/render -o letter.pdf
 ```
 
 Convert an upload, with Gotenberg's path:
 
 ```bash
-curl -F files=@report.docx http://localhost:3000/forms/libreoffice/convert -o report.pdf
+curl -F files=@report.docx http://localhost:9027/forms/libreoffice/convert -o report.pdf
 ```
 
-The API description is at `http://localhost:3000/openapi.json`. `RUSTICDOC_ENABLE_DOCS=true` also serves an interactive page at `/docs`; it is off by default because it loads a third-party script from a CDN on the API's origin, under a Content-Security-Policy that limits what the page can do.
+The API description is at `http://localhost:9027/openapi.json`. `RUSTICDOC_ENABLE_DOCS=true` also serves an interactive page at `/docs`; it is off by default because it loads a third-party script from a CDN on the API's origin, under a Content-Security-Policy that limits what the page can do.
 
 ## Templates
 
@@ -56,20 +58,56 @@ Send a `.pdf` to `/v1/render` as the template, or use `/v1/pdf/forms/fill`, to f
 
 ## Fonts
 
-Mount fonts at `/fonts` and call `POST /v1/fonts/reload`: no rebuild, no restart, and running conversions finish on the old set. `GET /v1/fonts` lists what is available. A request can also carry its own `fonts` files, which apply to that request only. The `x-fonts-used` response header names the fonts a converted document used.
+There are three ways to add fonts, and none needs a rebuild:
+
+- **Upload them.** `POST /v1/fonts` takes a ZIP of TTF, OTF or TTC files, or one such file, and needs a [store](#storage-and-running-many-containers) and an admin key. They reach every replica, and survive restarts.
+- **Mount them** at `/fonts` and call `POST /v1/fonts/reload`. Running conversions finish on the old set.
+- **Send them with a request** as `fonts` files, for that request alone.
+
+`GET /v1/fonts` lists what is available, with the `id` to delete an uploaded one by. The `x-fonts-used` response header names the fonts a converted document used.
+
+```bash
+curl -H "X-Api-Key: $ADMIN_KEY" -F file=@brand-fonts.zip http://localhost:9027/v1/fonts
+```
+
+## Storage and running many containers
+
+Stored templates and uploaded fonts need somewhere every container can reach, so name it. Until you do, these routes answer `501` and the service stores nothing, because a default on a container's own disk would work on one replica and return `404` on the next.
+
+```bash
+RUSTICDOC_STORE=s3://my-bucket/rusticdoc   # AWS S3 or a store compatible with it
+RUSTICDOC_STORE=file:///data/rusticdoc     # a volume every replica mounts: NFS, EFS, Azure Files
+```
+
+`make replicas` runs this against VersityGW, an S3 gateway, and a shared Docker volume; it has not been run against AWS itself.
+
+Use a bucket on Kubernetes. A volume has to be `ReadWriteMany`, which many clusters do not offer, and every replica must mount the same one: the service cannot tell if they do not. S3 credentials and the endpoint come from the `AWS_*` variables (`AWS_ENDPOINT` and `AWS_ALLOW_HTTP` for a store other than AWS), or from the pod's role, and never from the URL.
+
+| | Stored as | Reaches other replicas |
+|---|---|---|
+| **Templates** | `templates/<caller>/`, read from the store, content cached in memory | At once. A delete is also seen at once, because metadata is read on every request |
+| **Fonts** | `fonts/`, named by their hash, copied to each replica's `RUSTICDOC_FONT_CACHE_DIR` because LibreOffice needs files | The uploading replica at once, the others within `RUSTICDOC_STORE_SYNC_INTERVAL` |
+
+Replicas share nothing but the store: no messages, locks or leader. Everything written is immutable, so no coordination is needed. `/ready` answers `503` until a new replica has its fonts, so point the readiness probe at `/ready` and it gets no documents that would quietly come out in a fallback font. If the store goes away, renders by id answer `503`, replicas in service keep the fonts they have, and requests that send their template as a file keep working.
+
+[deploy/kubernetes.yaml](deploy/kubernetes.yaml) is a starting point: three hardened replicas, probes, and `emptyDir` for everything local. It has been run on minikube with an S3 gateway, not on a production cluster. Give each pod the memory it asks for: three squeezed into a 6 GB node were killed for memory and timed out on conversions. Back up the bucket and turn on its encryption yourself: this is the only copy, and templates can hold what your documents hold.
 
 ## API
 
 | Endpoint | Does |
 |---|---|
-| `POST /v1/render` | Template plus `data` JSON, then `steps` in order: `convert`, `pdfa`, `pdfua`, `merge`, `split`, `watermark`, `stamp`, `rotate`, `flatten`, `optimize`, `bookmarks`, `metadata`, `embed`, `factur-x`, `encrypt` |
-| `POST /v1/render/batch` | One template, once per element of an array in the data, returned as a ZIP |
-| `POST /v1/templates/validate` | Reports template errors against sample data without converting |
+| `POST /v1/render` | Template, as a file or a stored `templateId`, plus `data` JSON, then `steps` in order: `convert`, `pdfa`, `pdfua`, `merge`, `split`, `watermark`, `stamp`, `rotate`, `flatten`, `optimize`, `bookmarks`, `metadata`, `embed`, `factur-x`, `encrypt` |
+| `POST /v1/render/batch` | One template, as a file or a `templateId`, once per element of an array in the data, returned as a ZIP |
+| `POST /v1/templates` | Stores a template and returns its `id`, refusing bad syntax. Needs a store |
+| `GET /v1/templates`, `GET /v1/templates/{id}` | List them, a page at a time, and show one |
+| `GET /v1/templates/{id}/content`, `DELETE /v1/templates/{id}` | Download or delete one |
+| `POST /v1/templates/validate` | Reports template errors against sample data without converting. Takes a file or a `templateId` |
 | `POST /v1/convert` | Convert one or more files; several come back as a ZIP, or one PDF with `merge=true` |
 | `POST /v1/pdf/*` | `merge`, `split`, `rotate`, `flatten`, `optimize`, `encrypt`, `convert`, `watermark`, `stamp`, `overlay`, `sign`, `embed`, `factur-x`, `metadata/read`, `metadata/write`, `bookmarks/read`, `bookmarks/write`, `forms/fields`, `forms/fill` |
 | `GET /v1/fonts`, `POST /v1/fonts/reload` | List the fonts and pick up new ones |
+| `POST /v1/fonts`, `DELETE /v1/fonts/{id}` | Upload a ZIP of fonts, or delete one, for every caller and replica. Needs a store and an admin key |
 | `POST /forms/libreoffice/convert`, `POST /forms/pdfengines/*` | Gotenberg's API, see below |
-| `GET /health`, `/ready`, `/openapi.json` | Open. With credentials configured, `/health` and `/ready` show only the status to a caller without them |
+| `GET /health`, `/ready`, `/openapi.json` | Open. With credentials configured, `/health` and `/ready` show only the status to a caller without them. With a store, `/ready` waits for this replica's fonts |
 | `GET /metrics` | Open with no credentials configured; otherwise behind them unless `RUSTICDOC_METRICS_PUBLIC=true` |
 | `GET /v1/version` | Behind authentication |
 | `GET /docs` | Only with `RUSTICDOC_ENABLE_DOCS=true` |
@@ -115,12 +153,20 @@ Environment variables, all optional:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RUSTICDOC_BIND` | `0.0.0.0:3000` | Listen address |
+| `RUSTICDOC_BIND` | `0.0.0.0:9027` | Listen address |
 | `RUSTICDOC_API_TIMEOUT` | `30s` | Per request, including conversion; over it returns 503 |
 | `RUSTICDOC_BODY_LIMIT` | `64MB` | Largest upload |
 | `RUSTICDOC_WORKERS` | `2` | Concurrent LibreOffice conversions |
 | `RUSTICDOC_API_KEYS` | none | Comma-separated keys for `X-Api-Key` or `Authorization: Bearer`. With no authentication configured the service answers anyone, as Gotenberg's clients expect, and warns at every start. Half-configured authentication stops it from starting |
 | `RUSTICDOC_BASIC_AUTH_USERNAME`, `_PASSWORD` | none | Basic auth |
+| `RUSTICDOC_ADMIN_KEYS` | none | Comma-separated keys that may upload and delete fonts. With credentials configured and none of these, nobody may |
+| `RUSTICDOC_STORE` | none | `s3://bucket/prefix` or `file:///path`. See [storage](#storage-and-running-many-containers) |
+| `RUSTICDOC_STORE_SCOPE` | `caller` | `caller`: each credential sees only its own templates, so replacing a key leaves its templates behind. `shared`: every credential reads and deletes the same ones |
+| `RUSTICDOC_MAX_TEMPLATE_BYTES` | `50MB` | Largest template that can be stored |
+| `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE` | `10000`, `5GB` | What one scope may hold. Replicas storing at the same moment can pass these by what is in flight |
+| `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE` | `2000`, `1GB` | What the store may hold in fonts, all of which every replica copies to disk |
+| `RUSTICDOC_FONT_CACHE_DIR` | the temp directory | This replica's copy of the stored fonts. Local to it, and rebuilt when it starts |
+| `RUSTICDOC_STORE_SYNC_INTERVAL` | `30s` | How often a replica looks for fonts added or deleted elsewhere |
 | `RUSTICDOC_WEBHOOK_SECRET` | none | Secret that callers' signing keys derive from. Unset, deliveries are not signed, and the service warns at start |
 | `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhooks to private addresses |
 | `RUSTICDOC_DOWNLOAD_FROM_ALLOW_PRIVATE` | `false` | The same for `downloadFrom` |
@@ -128,6 +174,7 @@ Environment variables, all optional:
 | `RUSTICDOC_MAX_ASYNC_JOBS`, `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `32`, `8` | Webhook jobs running at once, in all and per caller |
 | `RUSTICDOC_BATCH_TIMEOUT` | `5m` | Overall limit for `/v1/render/batch` and a multi-file `/v1/convert`, synchronous or not |
 | `RUSTICDOC_MAX_FORM_PARTS` | `1000` | File parts one form may hold; text parts are capped at 2,000 |
+| `RUSTICDOC_LIBREOFFICE_MAX_DISK` | `512MB` | Most one conversion may write to disk. Past it the worker restarts and the request gets `400`. Allow `RUSTICDOC_WORKERS` times this in `/tmp` |
 | `RUSTICDOC_MAX_RENDER_BYTES` | `64MB` | Most a text template, `batchName` or PDF form tag may write. Office templates stop at the package limit of 256 MiB |
 | `RUSTICDOC_RENDER_MODE` | `isolated` under `serve` | `isolated` evaluates client templates in a worker process; `in-process` does not, and one template can then take the service down |
 | `RUSTICDOC_RENDER_MEMORY` | `1GB` | Address space of one render worker. A template past it gets `413` |
@@ -170,19 +217,21 @@ Generated from `openapi.json` with `make sdk-typescript`, `make sdk-python` or `
 ```bash
 make test      # unit and integration tests, no LibreOffice needed
 make lint      # rustfmt and clippy
-make run       # the service on 127.0.0.1:3000 with pretty logs
+make run       # the service on 127.0.0.1:9027 with pretty logs
 make openapi   # refresh openapi.json; CI checks it is current
 make docker    # the image
 ```
 
 The workspace has four crates: `rusticdoc-template` (the template engine), `rusticdoc-core` (pipeline, engines, the render worker), `rusticdoc-server` (axum API, auth, webhooks, metrics, OpenAPI) and `rusticdoc` (the CLI and `serve`). Tests run without LibreOffice or qpdf; conversion is exercised by the CI image smoke test.
 
-Three checks need Docker and the image:
+Four checks need Docker and the image:
 
 ```bash
 make parity      # Gotenberg's own scenarios against this image and the official one
 make outbound    # crafted documents must reach no network and read no local file
 make isolation   # secrets stay out of worker processes, and /proc stays closed
+make disk        # one conversion cannot fill the disk
+make replicas    # several containers on one store: a bucket, then a shared volume
 ```
 
 ## Security
@@ -194,6 +243,8 @@ What the service does by itself:
 - **Secrets stay out of children.** LibreOffice, Python, qpdf and pdfcpu start from an empty environment, and on Linux the service closes its own `/proc` entries to them. Do not run the image with `docker run --init`, which puts a process back at PID 1 that exposes the environment. Anyone who can `docker exec` into the container can still read it.
 - **Documents cannot reach out.** LibreOffice is configured to fetch nothing, and its web and CMIS content providers are removed from the image. `make outbound` checks this across formats.
 - **Webhooks and `downloadFrom` refuse private addresses**, pin the address they checked, and follow no redirects.
+- **Stored objects are guarded by who asks and what comes back.** A caller reaches only its own templates, and another's id answers `404`. Ids are checked in form before they touch a path, content is checked against its hash when read, and names inside a font ZIP are labels, never paths. ZIPs are capped by what actually comes out, and uploads and deletes are in the log with `log_type: audit`.
+- **Fonts take an admin key,** because a font decides what the digits look like in everyone's documents.
 
 What it leaves to you:
 
@@ -202,7 +253,7 @@ What it leaves to you:
 - Terminate TLS in front of it. The service speaks plain HTTP.
 - Rebuild the image regularly. A scan finds CVEs in Debian's packages, and those with a Debian fix arrive by rebuilding. `make docker` uses the digests pinned in the `Dockerfile`, which dependabot keeps fresh.
 
-A compromised LibreOffice still runs as the service's user, in the service's container. It cannot read the service's secrets or memory, but it can see other requests' temporary files while they exist. Treat the container as the boundary between tenants that do not trust each other, and run one per tenant if that matters.
+A compromised LibreOffice still runs as the service's user, in the service's container. It cannot read the service's secrets or memory, but it can see other requests' temporary files while they exist, and anything else that user can read: a `file://` store, or a web identity token mounted for a pod's S3 role. Prefer a bucket with keys in the environment where tenants do not trust each other. Treat the container as the boundary between tenants that do not trust each other, and run one per tenant if that matters.
 
 ## Known limits
 
@@ -212,6 +263,8 @@ A compromised LibreOffice still runs as the service's user, in the service's con
 - Text the service draws into a PDF, meaning field appearances and annotation values, is Latin only, in Helvetica. Other characters draw as `?`. Field values are stored in full, so a viewer that redraws the field still shows them.
 - A template that uses a font the service lacks is not reported. Check `GET /v1/fonts` and the `x-fonts-used` header.
 - Macros and OLE objects in a template are not stripped. LibreOffice will not run or fetch them when converting, but a request with no conversion step returns them in its output.
+- A stored template cannot be changed: store the new one and use its id. There are no versions or aliases yet.
+- Fonts are one set per deployment, not per caller, and only admin keys can change them, not basic auth or OpenID Connect users.
 - There is no golden-PDF corpus: output is checked by content, not compared byte for byte across architectures.
 - Repeating a whole sheet in XLSX or ODS is not supported, only rows within one, and neither is a row loop nested in another row block of the same sheet. ODS formulas are not re-based. Charts are not supported in ODF templates.
 - `data` counts against the render memory limit once parsed. At the default limit, a list of 8 million small numbers rendered and one of 16 million got `413`, so raise `RUSTICDOC_RENDER_MEMORY` for data that size.

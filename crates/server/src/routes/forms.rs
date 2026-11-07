@@ -33,7 +33,8 @@ pub struct FillForm {
     /// The PDF with form fields, and optionally tags in annotations.
     #[schema(value_type = String, format = Binary)]
     pub files: String,
-    /// JSON object; a field named `customer.name` takes that path.
+    /// JSON object, sent as text or as a file; a field named `customer.name` takes
+    /// that path.
     pub data: Option<serde_json::Value>,
     pub ctx: Option<serde_json::Value>,
     /// Fix the values into the page content.
@@ -95,10 +96,11 @@ pub async fn fill(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let mut form = Form::read(multipart, &state).await?;
-    let file = form.require_file("one PDF")?;
-    rusticdoc_core::pdfops::require_pdf(&file)?;
+    // First, because the first file left is the PDF.
     let mut data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let file = form.require_file("one PDF")?;
+    rusticdoc_core::pdfops::require_pdf(&file)?;
     if let serde_json::Value::Object(map) = &mut data {
         map.entry("ctx").or_insert(ctx);
     } else {

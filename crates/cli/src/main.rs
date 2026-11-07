@@ -46,8 +46,9 @@ enum Command {
     Openapi,
     /// Check a running service, for container health checks. Exits 0 when up.
     Health {
-        #[arg(long, default_value = "http://127.0.0.1:3000")]
-        url: String,
+        /// The service's address. By default, where this configuration serves.
+        #[arg(long)]
+        url: Option<String>,
     },
     /// Show the engines this machine has.
     Engines,
@@ -187,6 +188,18 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 .timeout(Duration::from_secs(5))
                 .no_proxy()
                 .build()?;
+            // Where this same configuration would serve, so a container told to use
+            // another port or root path still passes its own health check.
+            let url = url.unwrap_or_else(|| {
+                let port = config.bind.rsplit_once(':').map_or(
+                    rusticdoc_core::config::DEFAULT_PORT.to_string(),
+                    |(_, p)| p.to_string(),
+                );
+                format!(
+                    "http://127.0.0.1:{port}{}",
+                    config.root_path.trim_end_matches('/')
+                )
+            });
             let res = client
                 .get(format!("{}/health", url.trim_end_matches('/')))
                 .send()

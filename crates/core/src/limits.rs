@@ -16,6 +16,11 @@ pub const MAX_TEXT_PARTS: usize = 2_000;
 /// thousand copies of it.
 pub const MAX_OUTPUT_BYTES: usize = 512 * 1024 * 1024;
 
+/// Most temporary files one LibreOffice conversion may write, unless
+/// `RUSTICDOC_LIBREOFFICE_MAX_DISK` says otherwise. A loader or export filter can
+/// write without stopping, and the time limit alone lets that fill a disk.
+pub const DEFAULT_LIBREOFFICE_MAX_DISK: u64 = MAX_OUTPUT_BYTES as u64;
+
 /// Longest text of one stamp or watermark, in bytes. It is drawn once per page.
 pub const MAX_OVERLAY_TEXT: usize = 64 * 1024;
 

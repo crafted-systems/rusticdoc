@@ -20,8 +20,9 @@ pub(super) struct Launch {
     pub soffice: PathBuf,
     /// An initialised profile to copy, or `None` to start from an empty one.
     pub seed_profile: Option<PathBuf>,
-    /// The mounted fonts directory, added to the worker's fontconfig.
-    pub fonts_dir: Option<PathBuf>,
+    /// Directories of fonts added to the worker's fontconfig: the mounted one,
+    /// and the copy of the stored fonts.
+    pub font_dirs: Vec<PathBuf>,
     /// Fonts for this worker alone, written to its private directory. A
     /// worker with these serves one job and is thrown away.
     pub extra_fonts: Vec<(String, Vec<u8>)>,
@@ -85,13 +86,13 @@ pub(super) struct Worker {
 /// mounted directory and any fonts for this worker alone. File names are
 /// generated, never taken from the upload.
 async fn write_fontconfig(dir: &Path, launch: &Launch) -> Result<Option<PathBuf>> {
-    if launch.fonts_dir.is_none() && launch.extra_fonts.is_empty() {
+    if launch.font_dirs.is_empty() && launch.extra_fonts.is_empty() {
         return Ok(None);
     }
     let mut conf = String::from(
         "<?xml version=\"1.0\"?>\n<fontconfig>\n<include ignore_missing=\"yes\">/etc/fonts/fonts.conf</include>\n",
     );
-    if let Some(fonts_dir) = &launch.fonts_dir {
+    for fonts_dir in &launch.font_dirs {
         conf.push_str(&format!(
             "<dir>{}</dir>\n",
             xml_escape(&fonts_dir.display().to_string())

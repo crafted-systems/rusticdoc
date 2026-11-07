@@ -1,8 +1,8 @@
 IMAGE ?= rusticdoc:local
-PORT ?= 3000
+PORT ?= 9027
 GENERATOR ?= openapitools/openapi-generator-cli:v7.12.0
 
-.PHONY: build test lint fmt run openapi docker up down parity outbound isolation sdk sdk-typescript sdk-python sdk-go clean
+.PHONY: build test lint fmt run openapi docker up down parity outbound isolation disk replicas sdk sdk-typescript sdk-python sdk-go clean
 
 build:
 	cargo build --release -p rusticdoc
@@ -45,6 +45,13 @@ outbound:
 
 isolation:
 	test/security/isolation.sh $(IMAGE)
+
+disk:
+	test/security/disk.sh $(IMAGE)
+
+# Several containers on one store: a bucket, then a shared volume.
+replicas:
+	test/store/replicas.sh $(IMAGE)
 
 # SDKs: generated into sdk/<language> from openapi.json. Each is a starting
 # point to publish from its own package manager.

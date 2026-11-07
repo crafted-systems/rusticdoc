@@ -132,7 +132,7 @@ class Office:
                 "MacroExecutionMode": 0}
         if req.get("password"):
             load["Password"] = req["password"]
-        if req.get("landscape") or req.get("update_indexes"):
+        if req.get("landscape") or req.get("update_indexes") or req["filter"].lower() == "txt":
             load["ReadOnly"] = False  # the document is edited before export
         url = uno.systemPathToFileUrl(os.path.abspath(req["input"]))
         doc = self.desktop.loadComponentFromURL(url, "_blank", 0, props(load))
@@ -150,6 +150,8 @@ class Office:
                 set_landscape(doc, app)
             if req.get("update_indexes"):
                 update_indexes(doc)
+            if app in ("writer", "web") and req["filter"].lower() == "txt":
+                end_with_paragraph(doc)
             store = {"FilterName": target, "Overwrite": True}
             options = req.get("filter_options") or {}
             if options:
@@ -199,6 +201,21 @@ def update_indexes(doc):
                 indexes.getByIndex(i).update()
         except Exception:  # not a document with indexes
             return
+
+
+def end_with_paragraph(doc):
+    """Best effort: the text export never finishes a document whose last element
+    is a table. It writes the text over and over until the disk is full."""
+    try:
+        last = None
+        parts = doc.Text.createEnumeration()
+        while parts.hasMoreElements():
+            last = parts.nextElement()
+        if last is not None and last.supportsService("com.sun.star.text.TextTable"):
+            paragraph = doc.createInstance("com.sun.star.text.Paragraph")
+            doc.Text.insertTextContentAfter(paragraph, last)
+    except Exception:  # the disk limit in the pool still stops a runaway export
+        pass
 
 
 def page_count(doc, app):

@@ -14,7 +14,7 @@ services:
     # On this machine only unless told otherwise: with no keys set, the service
     # answers anyone who can reach it.
     ports:
-      - "${RUSTICDOC_PUBLISH_HOST:-127.0.0.1}:${RUSTICDOC_PORT:-3000}:3000"
+      - "${RUSTICDOC_PUBLISH_HOST:-127.0.0.1}:${RUSTICDOC_PORT:-9027}:9027"
     # Room for the service, two LibreOffice workers and four render workers at
     # their limit of 1 GiB each (RUSTICDOC_RENDER_WORKERS, RUSTICDOC_RENDER_MEMORY).
     # Raise it with those. Render workers are the first the kernel takes.
@@ -28,6 +28,17 @@ services:
       RUSTICDOC_LOG_LEVEL: ${RUSTICDOC_LOG_LEVEL:-info}
       RUSTICDOC_RENDER_MEMORY: ${RUSTICDOC_RENDER_MEMORY:-1GB}
       RUSTICDOC_RENDER_WORKERS: ${RUSTICDOC_RENDER_WORKERS:-4}
+      # Where uploaded templates and fonts live: s3://bucket/prefix with the AWS_*
+      # variables below, or file:///data with a volume mounted there. Empty stores
+      # nothing, and those routes answer 501.
+      RUSTICDOC_STORE: ${RUSTICDOC_STORE:-}
+      RUSTICDOC_ADMIN_KEYS: ${RUSTICDOC_ADMIN_KEYS:-}
+      # Passed on only if set here: an empty endpoint is not the same as none.
+      AWS_ENDPOINT:
+      AWS_ALLOW_HTTP:
+      AWS_REGION:
+      AWS_ACCESS_KEY_ID:
+      AWS_SECRET_ACCESS_KEY:
     volumes:
       - ${RUSTICDOC_FONTS:-./fonts}:/fonts:ro
     tmpfs:

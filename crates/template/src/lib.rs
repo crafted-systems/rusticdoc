@@ -455,21 +455,23 @@ pub fn validate(format: Format, bytes: &[u8], data: &serde_json::Value) -> Vec<D
     validate_within(format, bytes, data, package::MAX_TOTAL_BYTES as usize)
 }
 
-fn validate_within(
-    format: Format,
-    bytes: &[u8],
-    data: &serde_json::Value,
-    output_limit: usize,
-) -> Vec<Diagnostic> {
-    let mut b = match build(format, bytes) {
+/// What is wrong with a template whatever the data: a file that cannot be read,
+/// and tags that cannot parse. A value the data has yet to supply is no fault
+/// here, which is the difference from [`validate`], so this suits a template
+/// being stored for later.
+pub fn check_syntax(format: Format, bytes: &[u8]) -> Vec<Diagnostic> {
+    let b = match build(format, bytes) {
         Ok(b) => b,
         Err(e) => return vec![to_diag(e)],
     };
-    b.compiled.output_limit = output_limit;
-    let compiled = &b.compiled;
     let mut diags = b.diags;
+    syntax_diagnostics(&b.compiled, &mut diags);
+    dedup(&mut diags);
+    diags
+}
 
-    // Each tag on its own, so one bad tag does not hide the next.
+/// Parses each tag on its own, so one bad tag does not hide the next.
+fn syntax_diagnostics(compiled: &Compiled, diags: &mut Vec<Diagnostic>) {
     let probe_env = environment();
     let mut reported: Vec<Location> = Vec::new();
     for tag in &compiled.table {
@@ -492,6 +494,22 @@ fn validate_within(
             && !reported.is_empty()
             && !d.message.contains(": syntax error"))
     });
+}
+
+fn validate_within(
+    format: Format,
+    bytes: &[u8],
+    data: &serde_json::Value,
+    output_limit: usize,
+) -> Vec<Diagnostic> {
+    let mut b = match build(format, bytes) {
+        Ok(b) => b,
+        Err(e) => return vec![to_diag(e)],
+    };
+    b.compiled.output_limit = output_limit;
+    let compiled = &b.compiled;
+    let mut diags = b.diags;
+    syntax_diagnostics(compiled, &mut diags);
     dedup(&mut diags);
     if !b.renderable || diags.iter().any(|d| d.severity == Severity::Error) {
         return diags;

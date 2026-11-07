@@ -113,6 +113,116 @@ async fn health_version_metrics_and_openapi_are_open() {
 }
 
 #[tokio::test]
+async fn data_sent_as_a_file_fills_the_template_in_any_order() {
+    let template = (
+        "template",
+        Some("letter.txt"),
+        "Dear {{ customer.name }} of {{ ctx.company }}",
+    );
+    let data = (
+        "data",
+        Some("invoice.json"),
+        r#"{"customer":{"name":"Ada"}}"#,
+    );
+    let ctx = ("ctx", Some("company.json"), r#"{"company":"Crafted"}"#);
+    for parts in [
+        [template, data, ctx],
+        [data, ctx, template],
+        [ctx, template, data],
+    ] {
+        let res = app(AppState::new(config()))
+            .oneshot(post_form("/v1/render", &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(text(res).await, "Dear Ada of Crafted");
+    }
+}
+
+#[tokio::test]
+async fn data_sent_as_a_file_reaches_batch_and_validate() {
+    let res = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/render/batch",
+            &[
+                (
+                    "data",
+                    Some("people.json"),
+                    r#"{"people":[{"name":"Ada"},{"name":"Bob"}]}"#,
+                ),
+                ("template", Some("letter.txt"), "Dear {{ item.name }}"),
+                ("splitBy", None, "people"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/zip"
+    );
+
+    let res = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/templates/validate",
+            &[
+                ("data", Some("sample.json"), r#"{"name":"Ada"}"#),
+                ("template", Some("letter.txt"), "Dear {{ name }}"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = text(res).await;
+    assert!(body.contains("\"ok\":true"), "{body}");
+    assert!(
+        body.contains("\"format\":\"txt\""),
+        "the template, not the data: {body}"
+    );
+}
+
+#[tokio::test]
+async fn data_that_cannot_be_read_is_refused_and_not_ignored() {
+    let template = ("template", Some("letter.txt"), "Hello");
+    for (parts, expected) in [
+        (
+            [("data", Some("notes.txt"), "not json"), template],
+            "notes.txt",
+        ),
+        (
+            [("data", Some("a.json"), "{}"), ("data", None, "{}")],
+            "more than once",
+        ),
+    ] {
+        let res = app(AppState::new(config()))
+            .oneshot(post_form("/v1/render", &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = text(res).await;
+        assert!(body.contains(expected), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn html_templates_escape_values_over_the_api() {
+    let res = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("page.html"), "<p>{{ name }}</p>"),
+                ("data", None, r#"{"name":"<script>alert(1)</script>"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = text(res).await;
+    assert!(!body.contains("<script>"), "{body}");
+    assert!(body.contains("&lt;script&gt;"), "{body}");
+}
+
+#[tokio::test]
 async fn renders_a_text_template_with_data_and_ctx() {
     let router = app(AppState::new(config()));
     let res = router

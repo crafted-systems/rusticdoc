@@ -300,6 +300,8 @@ def free_port():
 
 def start_container(image, name, env, platform, network=None):
     port = free_port()
+    # Gotenberg's scenarios expect its port, and both images honour this.
+    env = {"API_PORT": "3000", **env}
     args = ["run", "-d", "--name", name, "--platform", platform, "-p", f"127.0.0.1:{port}:3000",
             "--add-host", "host.docker.internal:host-gateway"]
     if network:

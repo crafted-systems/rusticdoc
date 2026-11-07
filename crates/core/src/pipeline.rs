@@ -31,7 +31,14 @@ impl Engines {
     pub fn from_config(config: &Config) -> Self {
         Self {
             libreoffice: config.libreoffice_bin.clone().map(|bin| {
-                LibreOffice::new(bin, config.workers).with_fonts_dir(config.fonts_dir.clone())
+                let pool = LibreOffice::new(bin, config.workers)
+                    .with_max_disk(config.libreoffice_max_disk)
+                    .with_fonts_dir(config.fonts_dir.clone());
+                if config.store.is_some() {
+                    pool.with_fonts_dir(config.font_cache_dir.clone())
+                } else {
+                    pool
+                }
             }),
             pdf: MultiEngine::standard(config.qpdf_bin.clone(), config.pdfcpu_bin.clone())
                 .with_lists(

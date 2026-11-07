@@ -10,7 +10,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1; }
 trap cleanup EXIT
 docker run -d --name "$NAME" -e RUSTICDOC_API_KEYS=marker-api-key -e RUSTICDOC_WEBHOOK_SECRET=marker-secret \
-    -p 127.0.0.1:3156:3000 "$IMAGE" >/dev/null
+    -p 127.0.0.1:3156:9027 "$IMAGE" >/dev/null
 for _ in $(seq 1 60); do curl -sf -m 2 localhost:3156/health >/dev/null && break; sleep 1; done
 # Start the workers.
 printf 'hello' > /tmp/isolation-$$.txt

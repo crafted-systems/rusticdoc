@@ -42,6 +42,10 @@ const DEFAULT_MAX_JOBS: u64 = 10;
 /// How long a worker may take to start and accept its first connection.
 const DEFAULT_START_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How often a running conversion's files are measured. LibreOffice has been seen
+/// writing 90 MB a second, so a conversion passes its limit by little.
+const DISK_POLL: Duration = Duration::from_millis(100);
+
 /// Settings written into the seed profile: no macros, no link updates, no
 /// links from untrusted documents, so a crafted document cannot make
 /// LibreOffice fetch a URL or read a local file during conversion.
@@ -114,8 +118,10 @@ struct Settings {
     workers: usize,
     max_jobs: u64,
     start_timeout: Duration,
+    /// Most one conversion may add to its worker's directory.
+    max_disk: u64,
     /// Added to every worker's fontconfig.
-    fonts_dir: Option<PathBuf>,
+    font_dirs: Vec<PathBuf>,
 }
 
 struct Inner {
@@ -169,7 +175,8 @@ impl LibreOffice {
             workers,
             max_jobs,
             start_timeout: DEFAULT_START_TIMEOUT,
-            fonts_dir: None,
+            max_disk: crate::limits::DEFAULT_LIBREOFFICE_MAX_DISK,
+            font_dirs: Vec::new(),
         })
     }
 
@@ -207,6 +214,12 @@ impl LibreOffice {
         self.rebuild(|s| s.start_timeout = timeout)
     }
 
+    /// Most one conversion may write to disk. Past it the worker is killed and
+    /// the conversion refused.
+    pub fn with_max_disk(self, bytes: u64) -> Self {
+        self.rebuild(|s| s.max_disk = bytes.max(1))
+    }
+
     /// Runs `script` as the bridge instead of the embedded one and skips
     /// the LibreOffice profile warm-up, so the pool can be exercised
     /// without LibreOffice. Meant for tests.
@@ -214,9 +227,9 @@ impl LibreOffice {
         self.rebuild(|s| s.bridge = Some(script))
     }
 
-    /// Adds a directory of mounted fonts to every worker's fontconfig.
+    /// Adds a directory of fonts to every worker's fontconfig.
     pub fn with_fonts_dir(self, dir: PathBuf) -> Self {
-        self.rebuild(|s| s.fonts_dir = Some(dir))
+        self.rebuild(|s| s.font_dirs.push(dir))
     }
 
     /// Makes workers see a changed fonts directory: idle workers go now and
@@ -321,7 +334,16 @@ impl LibreOffice {
             update_indexes: options.update_indexes,
         };
         let started = Instant::now();
-        let result = match tokio::time::timeout(timeout, worker.call(&req)).await {
+        let max_disk = self.inner.settings.max_disk;
+        let worker_dir = worker.dir().to_path_buf();
+        let before = disk_use_off_thread(&worker_dir).await;
+        let call = async {
+            tokio::select! {
+                reply = worker.call(&req) => Some(reply),
+                () = disk_passes(&worker_dir, before.saturating_add(max_disk)) => None,
+            }
+        };
+        let result = match tokio::time::timeout(timeout, call).await {
             Err(_) => {
                 if dedicated {
                     worker.kill().await;
@@ -330,7 +352,18 @@ impl LibreOffice {
                 }
                 return Err(Error::Timeout(timeout));
             }
-            Ok(Err(e)) => {
+            Ok(None) => {
+                if dedicated {
+                    worker.kill().await;
+                } else {
+                    self.retire(worker, permit, "wrote too much to disk");
+                }
+                return Err(Error::InvalidRequest(format!(
+                    "converting '{}' wrote more than the limit of {max_disk} bytes to disk, so it was stopped",
+                    doc.name
+                )));
+            }
+            Ok(Some(Err(e))) => {
                 if dedicated {
                     worker.kill().await;
                 } else {
@@ -338,11 +371,11 @@ impl LibreOffice {
                 }
                 return Err(e);
             }
-            Ok(Ok(resp)) if !resp.ok => Err(Error::Engine {
+            Ok(Some(Ok(resp))) if !resp.ok => Err(Error::Engine {
                 engine: "libreoffice",
                 message: resp.error.unwrap_or_else(|| "unknown error".into()),
             }),
-            Ok(Ok(resp)) => {
+            Ok(Some(Ok(resp))) => {
                 tracing::debug!(
                     worker = worker.id,
                     pages = resp.pages,
@@ -479,6 +512,8 @@ impl LibreOffice {
         let pool = self.clone();
         tokio::spawn(async move {
             worker.kill().await;
+            // Frees the worker's files now; a replacement can take seconds to start.
+            drop(worker);
             match pool.start_worker().await {
                 Ok(fresh) => pool.inner.idle.lock().await.push(fresh),
                 Err(e) => tracing::warn!(error = %e, "LibreOffice worker could not be replaced"),
@@ -517,7 +552,7 @@ impl LibreOffice {
                         script,
                         soffice: settings.bin.clone(),
                         seed_profile,
-                        fonts_dir: settings.fonts_dir.clone(),
+                        font_dirs: settings.font_dirs.clone(),
                         extra_fonts: Vec::new(),
                     },
                     _dir: dir,
@@ -562,6 +597,46 @@ fn is_restart_request(message: &str) -> bool {
             .unwrap_or("")
     });
     code.and_then(|c| c.parse::<i32>().ok()) == Some(EXIT_RESTART_REQUESTED)
+}
+
+/// Bytes in the files under `dir`, without following links. Files may vanish
+/// during the walk, and those just do not count.
+fn disk_use(dir: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
+}
+
+async fn disk_use_off_thread(dir: &Path) -> u64 {
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || disk_use(&dir))
+        .await
+        .unwrap_or(0)
+}
+
+/// Returns once the files under `dir` pass `limit` bytes.
+async fn disk_passes(dir: &Path, limit: u64) {
+    loop {
+        tokio::time::sleep(DISK_POLL).await;
+        if disk_use_off_thread(dir).await > limit {
+            return;
+        }
+    }
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -623,6 +698,22 @@ mod tests {
     }
 
     #[test]
+    fn disk_use_counts_nested_files_and_not_links() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("a/b")).unwrap();
+        std::fs::write(dir.path().join("one"), vec![0; 10]).unwrap();
+        std::fs::write(dir.path().join("a/b/two"), vec![0; 5]).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::write(elsewhere.path().join("big"), vec![0; 1000]).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("link")).unwrap();
+        let links = std::fs::symlink_metadata(dir.path().join("link"))
+            .unwrap()
+            .len();
+        assert_eq!(disk_use(dir.path()), 15 + links);
+        assert_eq!(disk_use(&dir.path().join("missing")), 0);
+    }
+
+    #[test]
     fn copy_dir_copies_nested_files() {
         let src = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(src.path().join("a/b")).unwrap();
@@ -635,6 +726,6 @@ mod tests {
     #[test]
     fn bridge_script_is_embedded() {
         assert!(BRIDGE.contains("--socket-path"));
-        assert!(BRIDGE.lines().count() <= 275, "keep the bridge small");
+        assert!(BRIDGE.lines().count() <= 285, "keep the bridge small");
     }
 }

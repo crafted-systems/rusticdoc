@@ -41,6 +41,8 @@ pub struct Metrics {
     pub stage_seconds: Family<StageLabels, Histogram>,
     pub inflight: Family<StageLabels, Gauge>,
     pub webhooks: Family<OutcomeLabels, Counter>,
+    /// Runs of the stored-font sync: `ok`, `changed`, `failed`.
+    pub font_syncs: Family<OutcomeLabels, Counter>,
 }
 
 impl Default for Metrics {
@@ -60,6 +62,12 @@ impl Metrics {
         let stage_seconds = Family::<StageLabels, Histogram>::new_with_constructor(seconds);
         let inflight = Family::<StageLabels, Gauge>::default();
         let webhooks = Family::<OutcomeLabels, Counter>::default();
+        let font_syncs = Family::<OutcomeLabels, Counter>::default();
+        registry.register(
+            "store_font_syncs",
+            "Runs of the stored-font sync by outcome",
+            font_syncs.clone(),
+        );
         registry.register(
             "requests",
             "HTTP requests by route and status",
@@ -88,6 +96,7 @@ impl Metrics {
             stage_seconds,
             inflight,
             webhooks,
+            font_syncs,
         }
     }
 

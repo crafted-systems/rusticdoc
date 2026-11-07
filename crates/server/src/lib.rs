@@ -8,6 +8,7 @@
 pub mod admission;
 pub mod auth;
 pub mod error;
+pub mod fontsync;
 pub mod jobs;
 pub mod metrics;
 pub mod oidc;
@@ -266,6 +267,12 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
                 .to_string(),
         );
     }
+    if config.store.is_some() && !config.auth_configured() {
+        warnings.push(
+            "RUSTICDOC_STORE is set and no credentials are, so anyone who can reach this service can store, read and delete templates and fonts"
+                .to_string(),
+        );
+    }
     if config.render_mode == rusticdoc_core::config::RenderMode::InProcess {
         warnings.push(
             "RUSTICDOC_RENDER_MODE is in-process, so a client's template can exhaust this service's memory; use isolated unless every template is trusted"
@@ -306,8 +313,16 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
     tracing::info!(%bind, version = rusticdoc_core::VERSION, engines = %state.engines.describe(), "rusticdoc listening");
     // Start the LibreOffice workers now rather than on the first request,
     // so the first conversions are as fast as the rest.
+    let fonts_first = state.clone();
+    if state.store.is_some() {
+        fontsync::spawn(state.clone());
+    }
     if let Some(lo) = state.engines.libreoffice.clone() {
         tokio::spawn(async move {
+            // Workers read their fonts as they start, so start them on the right ones.
+            if fonts_first.store.is_some() {
+                let _ = fontsync::run_once(&fonts_first).await;
+            }
             match lo.warm_up().await {
                 Ok(()) => tracing::info!("LibreOffice workers warm"),
                 Err(e) => {

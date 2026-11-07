@@ -8,7 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use minijinja::{Environment, UndefinedBehavior};
+use minijinja::{AutoEscape, Environment, UndefinedBehavior};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
@@ -67,14 +67,33 @@ pub fn render(
     }
     let source = std::str::from_utf8(&doc.bytes)
         .map_err(|_| Error::Template(format!("{} is not valid UTF-8", doc.name)))?;
-    let env = environment();
+    let mut env = environment();
+    let escape = auto_escape(&ext);
+    let writes_json = escape == AutoEscape::Json;
+    env.set_auto_escape_callback(move |_| escape.clone());
     let rendered = render_str(
         &env,
         source,
         minijinja::Value::from(minijinja::value::Serde(&root)),
         limit,
     )?;
+    if writes_json && let Err(e) = serde_json::from_str::<serde::de::IgnoredAny>(&rendered) {
+        return Err(Error::Template(format!(
+            "{} does not render to valid JSON: {e}. Values are written as JSON, so remove any quotes around {{{{ name }}}}",
+            doc.name
+        )));
+    }
     Ok(Document::new(doc.name.clone(), rendered.into_bytes()))
+}
+
+/// How values are escaped in a text template of this format, so data cannot add
+/// markup or keys of its own. `{{ value | safe }}` writes a value as it is.
+fn auto_escape(ext: &str) -> AutoEscape {
+    match ext {
+        "html" | "htm" | "xml" | "svg" => AutoEscape::Html,
+        "json" => AutoEscape::Json,
+        _ => AutoEscape::None,
+    }
 }
 
 /// Renders a template string, stopping at `limit` bytes of output.
@@ -127,6 +146,28 @@ pub fn validate(
             location: None,
         }],
     }
+}
+
+/// What is wrong with a template whatever data it later gets. Formats that hold
+/// no tags have nothing to check.
+pub fn check_syntax(doc: &Document) -> Vec<rusticdoc_template::Diagnostic> {
+    use rusticdoc_template::{Diagnostic, Severity};
+    let ext = doc.extension();
+    if let Some(format) = rusticdoc_template::Format::from_extension(&ext) {
+        return rusticdoc_template::check_syntax(format, &doc.bytes);
+    }
+    if is_text_template(&ext) {
+        let source = String::from_utf8_lossy(&doc.bytes);
+        let env = environment();
+        if let Err(e) = env.template_from_str(&source) {
+            return vec![Diagnostic {
+                severity: Severity::Error,
+                message: e.to_string(),
+                location: None,
+            }];
+        }
+    }
+    Vec::new()
 }
 
 /// Most compiled templates kept in memory, by content hash.
@@ -299,6 +340,81 @@ mod tests {
             text,
             "Dear Ada,\n- Lamp: EUR 1,234.50\n- Plug: EUR 0.50\nTotal EUR 1,235.00\nFrom Crafted"
         );
+    }
+
+    fn filled(name: &str, source: &str, data: serde_json::Value) -> Result<String> {
+        let doc = Document::new(name, source.as_bytes().to_vec());
+        let out = render(&doc, &data, &json!({}), LIMIT)?;
+        Ok(String::from_utf8(out.bytes.to_vec()).unwrap())
+    }
+
+    #[test]
+    fn markup_formats_escape_values() {
+        let evil = json!({"x": "<script>alert('1')</script>&\""});
+        for name in ["a.html", "a.htm", "a.xml", "a.svg"] {
+            let out = filled(name, "<p title=\"{{ x }}\">{{ x }}</p>", evil.clone()).unwrap();
+            assert!(!out.contains("<script"), "{name}: {out}");
+            assert!(out.contains("&lt;script&gt;"), "{name}: {out}");
+            assert!(out.contains("&amp;&quot;\">"), "{name}: {out}");
+        }
+    }
+
+    #[test]
+    fn markup_can_be_let_through_on_purpose_and_is_not_escaped_twice() {
+        let data = json!({"x": "<b>&"});
+        assert_eq!(
+            filled("a.html", "{{ x | safe }}", data.clone()).unwrap(),
+            "<b>&"
+        );
+        assert_eq!(
+            filled("a.html", "{{ x | escape }}", data.clone()).unwrap(),
+            "&lt;b&gt;&amp;"
+        );
+        assert_eq!(
+            filled(
+                "a.html",
+                "{% autoescape false %}{{ x }}{% endautoescape %}",
+                data
+            )
+            .unwrap(),
+            "<b>&"
+        );
+    }
+
+    #[test]
+    fn plain_formats_write_values_as_they_are() {
+        for name in ["a.txt", "a.md", "a.csv"] {
+            let out = filled(name, "{{ x }}", json!({"x": "<b> & \"q\""})).unwrap();
+            assert_eq!(out, "<b> & \"q\"", "{name}");
+        }
+    }
+
+    #[test]
+    fn json_templates_write_values_as_json() {
+        let source = "{\"name\":{{ name }},\"n\":{{ n }},\"ok\":{{ ok }},\"list\":{{ list }},\"also\":{{ name | tojson }}}";
+        let evil = "a\",\"admin\":true,\"b\":\"";
+        let data = json!({"name": evil, "n": 1.5, "ok": true, "list": [1, "two"]});
+        let out = filled("a.json", source, data).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["name"], evil);
+        assert_eq!(parsed["also"], evil);
+        assert_eq!(parsed["n"], 1.5);
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["list"], json!([1, "two"]));
+        assert!(parsed.get("admin").is_none(), "{out}");
+    }
+
+    #[test]
+    fn a_quoted_value_in_a_json_template_is_a_clear_error() {
+        let err = filled(
+            "a.json",
+            "{\"name\":\"{{ name }}\"}",
+            json!({"name": "Ada"}),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Template(_)), "{err}");
+        assert!(err.to_string().contains("remove any quotes"), "{err}");
+        assert!(err.to_string().contains("{{ name }}"), "{err}");
     }
 
     #[test]

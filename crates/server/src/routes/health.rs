@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -58,6 +60,23 @@ async fn status(state: &AppState) -> Health {
         Some(lo) => lo.health().await,
         None => serde_json::Value::Null,
     };
+    let mut details = serde_json::json!({
+        "libreoffice": {
+            "status": if state.engines.libreoffice.is_some() { "up" } else { "down" },
+            "timestamp": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            "pool": pool,
+        }
+    });
+    // Only with a store: Gotenberg's clients read this object.
+    if let Some(store) = &state.store {
+        details["store"] = serde_json::json!({
+            "location": store.description(),
+            "fontsSynced": state.fonts_synced.load(Ordering::Acquire),
+        });
+    }
     Health {
         status: "up",
         uptime_seconds: state.started.elapsed().as_secs(),
@@ -65,23 +84,22 @@ async fn status(state: &AppState) -> Health {
             libreoffice: state.engines.libreoffice.is_some(),
             qpdf: state.engines.pdf.names().contains(&"qpdf"),
         },
-        details: serde_json::json!({
-            "libreoffice": {
-                "status": if state.engines.libreoffice.is_some() { "up" } else { "down" },
-                "timestamp": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
-                "pool": pool,
-            }
-        }),
+        details,
     }
 }
 
-/// Readiness: the same as liveness today, kept separate so a warm-up can be
-/// added without clients changing.
+/// Readiness: liveness, and with a store, this replica's copy of the stored fonts
+/// being complete. A load balancer should send no documents here before that,
+/// because they would quietly come out in a fallback font.
 #[utoipa::path(get, path = "/ready", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
 pub async fn ready(state: State<AppState>, headers: HeaderMap) -> Response {
+    if state.store.is_some() && !state.fonts_synced.load(Ordering::Acquire) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "status": "syncing" })),
+        )
+            .into_response();
+    }
     health(state, headers).await
 }
 

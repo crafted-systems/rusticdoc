@@ -8,10 +8,11 @@ pub mod health;
 pub mod pdf;
 pub mod pdfops;
 pub mod render;
+pub mod templates;
 
 use axum::Router;
 use axum::http::{HeaderValue, header};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use rusticdoc_core::Config;
 use tower_http::set_header::SetResponseHeaderLayer;
 use utoipa::OpenApi;
@@ -27,7 +28,17 @@ pub fn router(config: &Config) -> Router<AppState> {
         .route("/v1/render", post(render::render))
         .route("/v1/templates/validate", post(render::validate))
         .route("/v1/version", get(health::version))
-        .route("/v1/fonts", get(fonts::list))
+        .route(
+            "/v1/templates",
+            post(templates::upload).get(templates::list),
+        )
+        .route(
+            "/v1/templates/{id}",
+            get(templates::show).delete(templates::remove),
+        )
+        .route("/v1/templates/{id}/content", get(templates::content))
+        .route("/v1/fonts", get(fonts::list).post(fonts::upload))
+        .route("/v1/fonts/{id}", delete(fonts::remove))
         .route("/fonts", get(fonts::list))
         .route("/v1/fonts/reload", post(fonts::reload))
         .route("/fonts/reload", post(fonts::reload));

@@ -27,6 +27,14 @@ pub struct AppState {
     pub fonts: Arc<tokio::sync::RwLock<Option<Arc<Vec<rusticdoc_core::fonts::FontInfo>>>>>,
     /// The fonts directory's signature and when a reload last ran.
     pub fonts_reload: Arc<tokio::sync::Mutex<Option<(String, Instant)>>>,
+    /// Uploaded templates and fonts, when `RUSTICDOC_STORE` names a place.
+    pub store: Option<Arc<rusticdoc_core::store::Store>>,
+    /// True once this replica's copy of the stored fonts is complete, which is
+    /// what `/ready` waits for: documents rendered before it would silently use
+    /// a fallback font.
+    pub fonts_synced: Arc<std::sync::atomic::AtomicBool>,
+    /// One font upload at a time: unpacking holds a whole package in memory.
+    pub font_uploads: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -60,6 +68,14 @@ impl AppState {
             ),
             admission: crate::admission::Admission::new(config.max_inflight_bytes),
             oidc,
+            store: config.store.as_deref().map(|url| {
+                Arc::new(
+                    rusticdoc_core::store::Store::open(url)
+                        .expect("the store is checked before the service starts"),
+                )
+            }),
+            fonts_synced: Default::default(),
+            font_uploads: Arc::new(tokio::sync::Semaphore::new(1)),
             config: Arc::new(config),
             engines,
             pipeline,

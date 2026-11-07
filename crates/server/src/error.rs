@@ -57,6 +57,33 @@ impl From<Error> for ApiError {
     }
 }
 
+impl From<rusticdoc_core::store::StoreError> for ApiError {
+    /// Details of a store's failure name its bucket and endpoint, so they go to
+    /// the log and the client gets the kind.
+    fn from(e: rusticdoc_core::store::StoreError) -> Self {
+        use rusticdoc_core::store::StoreError;
+        match e {
+            StoreError::NotFound => Self::new(StatusCode::NOT_FOUND, "not_found", "no such object"),
+            StoreError::Backend(detail) => {
+                tracing::error!(error = %detail, "store failed");
+                Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "store_unavailable",
+                    "the store cannot be reached; try again",
+                )
+            }
+            StoreError::Integrity(detail) => {
+                tracing::error!(error = %detail, "store returned something other than was written");
+                Self::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "store_integrity",
+                    "the stored object failed its integrity check",
+                )
+            }
+        }
+    }
+}
+
 impl From<axum::extract::multipart::MultipartError> for ApiError {
     fn from(e: axum::extract::multipart::MultipartError) -> Self {
         Self::bad_request(format!("multipart form: {}", e.body_text()))

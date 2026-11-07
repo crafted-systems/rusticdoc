@@ -59,10 +59,12 @@ jobs:
           cache-to: type=gha,mode=max
       - name: smoke
         run: |
-          docker run -d --name rd -p 3000:3000 rusticdoc:ci
-          for i in $(seq 1 60); do curl -sf localhost:3000/health && break; sleep 1; done
+          docker run -d --name rd -p 9027:9027 rusticdoc:ci
+          for i in $(seq 1 60); do curl -sf localhost:9027/health && break; sleep 1; done
           printf 'Hello {{ name }}' > t.txt
-          curl -sf -F template=@t.txt -F 'data={"name":"CI"}' -F steps=convert localhost:3000/v1/render -o out.pdf
+          curl -sf -F template=@t.txt -F 'data={"name":"CI"}' -F steps=convert localhost:9027/v1/render -o out.pdf
           head -c 4 out.pdf | grep -q PDF
           docker logs rd | tail -5
           docker rm -f rd
+      - name: several replicas on one store
+        run: test/store/replicas.sh rusticdoc:ci

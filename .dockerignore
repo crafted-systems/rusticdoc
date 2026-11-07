@@ -4,3 +4,4 @@ target
 scan-reports
 *.md
 !README.md
+site

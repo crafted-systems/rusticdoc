@@ -53,7 +53,7 @@
         "tags": [
           "service"
         ],
-        "summary": "Readiness: the same as liveness today, kept separate so a warm-up can be\nadded without clients changing.",
+        "summary": "Readiness: liveness, and with a store, this replica's copy of the stored fonts\nbeing complete. A load balancer should send no documents here before that,\nbecause they would quietly come out in a fallback font.",
         "operationId": "ready",
         "responses": {
           "200": {
@@ -167,6 +167,83 @@
             "basic": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,\nor one such file. Takes an admin key. They are in use on this replica when this\nreturns, and on the others within `syncIntervalSeconds`.",
+        "operationId": "uploadFonts",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/FontUploadForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FontsStored"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not fonts, or too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs an admin key, or the store is full",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/v1/fonts/reload": {
@@ -217,6 +294,79 @@
           },
           {
             "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/fonts/{id}": {
+      "delete": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Deletes a stored font. Takes an admin key. It leaves this replica when this\nreturns, and the others within the sync interval. Documents that name it fall\nback to another font.",
+        "operationId": "deleteFont",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The font's id, from `GET /v1/fonts`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "403": {
+            "description": "Needs an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stored font",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
           }
         ]
       }
@@ -1502,6 +1652,185 @@
         ]
       }
     },
+    "/v1/templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Lists this caller's templates, oldest first.",
+        "operationId": "listTemplates",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many to return, up to 200. Default 50.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`nextCursor` from the page before.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateList"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Stores a template and returns its id. Syntax is checked now, without data, so a\nbroken template is refused here rather than at its first render. The content\nnever changes: to change a template, store the new one and use its id.",
+        "operationId": "uploadTemplate",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateUploadForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateSchema"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a template format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This caller's quota is used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template has syntax errors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
     "/v1/templates/validate": {
       "post": {
         "tags": [
@@ -1532,6 +1861,216 @@
           },
           "400": {
             "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/{id}": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "One template's details.",
+        "operationId": "getTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The template's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateSchema"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Deletes a template. Every replica stops serving it at once.",
+        "operationId": "deleteTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The template's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/{id}/content": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Downloads a template as it was uploaded.",
+        "operationId": "downloadTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The template's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
             "content": {
               "application/json": {
                 "schema": {
@@ -1773,6 +2312,27 @@
           }
         }
       },
+      "FaceSchema": {
+        "type": "object",
+        "required": [
+          "family",
+          "style",
+          "weight"
+        ],
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "style": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "FacturxForm": {
         "type": "object",
         "required": [
@@ -1847,7 +2407,7 @@
         "properties": {
           "ctx": {},
           "data": {
-            "description": "JSON object; a field named `customer.name` takes that path."
+            "description": "JSON object, sent as text or as a file; a field named `customer.name` takes\nthat path."
           },
           "files": {
             "type": "string",
@@ -1893,6 +2453,13 @@
             "type": "string",
             "description": "The file's base name."
           },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stored font this face belongs to, for deleting it. Absent for fonts\nin the image or the mounted directory."
+          },
           "mounted": {
             "type": "boolean",
             "description": "True when it came from the mounted fonts directory."
@@ -1903,6 +2470,50 @@
           "weight": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "FontUploadForm": {
+        "type": "object",
+        "description": "The multipart form `POST /v1/fonts` accepts.",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "A ZIP of TTF, OTF or TTC files, or one such file."
+          }
+        }
+      },
+      "FontsStored": {
+        "type": "object",
+        "description": "What an upload stored.",
+        "required": [
+          "fonts",
+          "skipped",
+          "syncIntervalSeconds"
+        ],
+        "properties": {
+          "fonts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoredFontSchema"
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedSchema"
+            },
+            "description": "Files in the ZIP that were left out, and why."
+          },
+          "syncIntervalSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "In use on this replica now, and on the others within this many seconds.",
             "minimum": 0
           }
         }
@@ -2053,10 +2664,10 @@
         ],
         "properties": {
           "ctx": {
-            "description": "JSON object visible as `ctx`."
+            "description": "JSON object visible as `ctx`, sent as text or as a file."
           },
           "data": {
-            "description": "JSON object the template sees as its root."
+            "description": "JSON object the template sees as its root, sent as text or as a file."
           },
           "files": {
             "type": "array",
@@ -2100,7 +2711,14 @@
           "template": {
             "type": "string",
             "format": "binary",
-            "description": "The template. Text formats are filled today; Office formats are\nconverted as they are until phase 1."
+            "description": "The template file. Send this or `templateId`."
+          },
+          "templateId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of a stored template, from `POST /v1/templates`. Send this or\n`template`. Files in the form are then only further inputs, for `merge`."
           },
           "to": {
             "type": [
@@ -2197,6 +2815,21 @@
           }
         }
       },
+      "SkippedSchema": {
+        "type": "object",
+        "required": [
+          "file",
+          "reason"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "SplitForm": {
         "type": "object",
         "required": [
@@ -2231,6 +2864,124 @@
               "null"
             ],
             "description": "For `pages`: one file holding every range instead of one per range."
+          }
+        }
+      },
+      "StoredFontSchema": {
+        "type": "object",
+        "description": "A stored font.",
+        "required": [
+          "id",
+          "file",
+          "size",
+          "faces",
+          "uploadedAt"
+        ],
+        "properties": {
+          "faces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FaceSchema"
+            }
+          },
+          "file": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "The hex SHA-256 of the file, so storing it twice changes nothing."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "uploadedAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          }
+        }
+      },
+      "TemplateList": {
+        "type": "object",
+        "description": "One page of templates.",
+        "required": [
+          "templates"
+        ],
+        "properties": {
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page. Absent on the last."
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateSchema"
+            }
+          }
+        }
+      },
+      "TemplateSchema": {
+        "type": "object",
+        "description": "A stored template.",
+        "required": [
+          "id",
+          "name",
+          "format",
+          "size",
+          "sha256",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "format": {
+            "type": "string",
+            "example": "docx"
+          },
+          "id": {
+            "type": "string",
+            "description": "Pass as `templateId` to `/v1/render`, `/v1/render/batch` or `/v1/templates/validate`.",
+            "example": "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"
+          },
+          "name": {
+            "type": "string",
+            "example": "invoice.docx"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Hex SHA-256 of the content."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TemplateUploadForm": {
+        "type": "object",
+        "description": "The multipart form `POST /v1/templates` accepts.",
+        "required": [
+          "template"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A name for it, in place of the file's. The extension stays the file's."
+          },
+          "template": {
+            "type": "string",
+            "format": "binary",
+            "description": "The template: DOCX, XLSX, PPTX, ODT, ODS, ODP, PDF or a text format."
           }
         }
       },
@@ -2326,8 +3077,12 @@
       "description": "PDF templates: form fields, tags in annotations, overlays"
     },
     {
+      "name": "templates",
+      "description": "Store a template and render it by id from any replica"
+    },
+    {
       "name": "fonts",
-      "description": "Loaded fonts and reloading a mounted directory"
+      "description": "List, upload and delete fonts, and reload a mounted directory"
     },
     {
       "name": "service",

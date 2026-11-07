@@ -13,7 +13,7 @@ use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::metrics::StageLabels;
 use crate::routes::form::{Form, request_id};
 use crate::routes::forms::{finish, finish_within};
-use crate::routes::gotenberg;
+use crate::routes::{gotenberg, templates};
 use crate::state::AppState;
 use crate::webhook::{self, Hook, Webhook};
 
@@ -21,14 +21,17 @@ use crate::webhook::{self, Hook, Webhook};
 #[derive(ToSchema)]
 #[allow(dead_code)]
 pub struct RenderForm {
-    /// The template. Text formats are filled today; Office formats are
-    /// converted as they are until phase 1.
+    /// The template file. Send this or `templateId`.
     #[schema(value_type = String, format = Binary)]
-    pub template: String,
-    /// JSON object the template sees as its root.
+    pub template: Option<String>,
+    /// The id of a stored template, from `POST /v1/templates`. Send this or
+    /// `template`. Files in the form are then only further inputs, for `merge`.
+    #[schema(rename = "templateId")]
+    pub template_id: Option<String>,
+    /// JSON object the template sees as its root, sent as text or as a file.
     #[schema(example = json!({"customer": {"name": "Ada"}}))]
     pub data: Option<serde_json::Value>,
-    /// JSON object visible as `ctx`.
+    /// JSON object visible as `ctx`, sent as text or as a file.
     pub ctx: Option<serde_json::Value>,
     /// Comma-separated steps in order: `convert`, `pdfa`, `metadata`,
     /// `encrypt`, `merge`.
@@ -82,37 +85,48 @@ pub async fn render(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let mut form = Form::read(multipart, &state).await?;
-    let template = match form
-        .files
-        .iter()
-        .position(|f| f.name != "data.json" && f.name != "ctx.json")
-    {
-        Some(pos) => form.files.remove(pos),
+    // First, because the first file left is the template.
+    let data = form.json("data")?;
+    let ctx = form.json("ctx")?;
+    let stored = templates::named_in(&mut form, &state, &principal).await?;
+    let from_store = stored.is_some();
+    let template = match stored {
+        Some(template) => template,
         None => match form
-            .field("templateHash")
-            .map(str::trim)
-            .filter(|h| !h.is_empty())
+            .files
+            .iter()
+            .position(|f| f.name != "data.json" && f.name != "ctx.json")
         {
-            // Stateless by contract: a miss is a 404 and the client sends
-            // the file again.
-            Some(hash) => template::recall(&principal.0, hash).ok_or_else(|| {
-                ApiError::new(
-                    axum::http::StatusCode::NOT_FOUND,
-                    "template_not_cached",
-                    "no template with that hash is cached; send the file",
-                )
-            })?,
-            None => {
-                return Err(ApiError::bad_request(
-                    "no template in the form; send it as a file part, or a 'templateHash'",
-                ));
-            }
+            Some(pos) => form.files.remove(pos),
+            None => match form
+                .field("templateHash")
+                .map(str::trim)
+                .filter(|h| !h.is_empty())
+            {
+                // Stateless by contract: a miss is a 404 and the client sends
+                // the file again.
+                Some(hash) => template::recall(&principal.0, hash).ok_or_else(|| {
+                    ApiError::new(
+                        axum::http::StatusCode::NOT_FOUND,
+                        "template_not_cached",
+                        "no template with that hash is cached; send the file",
+                    )
+                })?,
+                None => {
+                    return Err(ApiError::bad_request(
+                        "no template in the form; send it as a file part, a 'templateId' or a 'templateHash'",
+                    ));
+                }
+            },
         },
     };
-    template::remember(&principal.0, &template);
+    // A stored template is there to be asked for by id, and a delete has to end it.
+    if !from_store {
+        template::remember(&principal.0, &template);
+    }
     let mut req = RenderRequest::new(template);
-    req.data = form.json("data")?;
-    req.ctx = form.json("ctx")?;
+    req.data = data;
+    req.ctx = ctx;
     let mut options = gotenberg::convert_options(&form)?;
     // Here PDF/A and PDF/UA happen where the step list says, not on every
     // conversion.
@@ -227,6 +241,7 @@ pub async fn run(
 )]
 pub async fn batch(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
@@ -234,20 +249,25 @@ pub async fn batch(
     // The route's time limit is the batch's; reading the form gets the usual one.
     let read = Form::read(multipart, &state);
     let mut form = webhook::within(state.config.api_timeout, read).await?;
-    let template = match form
-        .files
-        .iter()
-        .position(|f| f.name != "data.json" && f.name != "ctx.json")
-    {
-        Some(pos) => form.files.remove(pos),
-        None => {
-            return Err(ApiError::bad_request(
-                "no template in the form; send it as a file part",
-            ));
-        }
-    };
+    // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let stored = templates::named_in(&mut form, &state, &principal).await?;
+    let template = match stored {
+        Some(template) => template,
+        None => match form
+            .files
+            .iter()
+            .position(|f| f.name != "data.json" && f.name != "ctx.json")
+        {
+            Some(pos) => form.files.remove(pos),
+            None => {
+                return Err(ApiError::bad_request(
+                    "no template in the form; send it as a file part or a 'templateId'",
+                ));
+            }
+        },
+    };
     let steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
     let split_by = form
         .field("splitBy")
@@ -437,12 +457,17 @@ pub struct Validation {
 )]
 pub async fn validate(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     multipart: Multipart,
 ) -> ApiResult<Json<Validation>> {
     let mut form = Form::read(multipart, &state).await?;
-    let template = form.require_file("a template file")?;
+    // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let template = match templates::named_in(&mut form, &state, &principal).await? {
+        Some(template) => template,
+        None => form.require_file("a template file, or a 'templateId',")?,
+    };
     let format = template.extension();
     let engine = if template::is_office_format(&format) {
         "office"

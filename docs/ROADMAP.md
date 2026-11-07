@@ -42,10 +42,11 @@ An OWASP review found 20 issues, 6 of them High, and all are fixed. Automated re
 | 40 concurrent 60 MB uploads | Service killed, out of memory | Refused cleanly at a 1.31 GiB peak, service up |
 | 100 MB value printed in a loop | Service killed, out of memory | `400`, service up |
 | 840,000 same-named form parts | No answer in 150 s | `400` in 6 ms |
+| Document that makes LibreOffice write without stopping | 512 MB of `/tmp` filled in under 15 s | `400` at the disk limit, space freed, other conversions unaffected |
 | Stylesheet link in a converted HTML file | Fetched by LibreOffice | No request leaves the container |
 | Service secrets in `/proc/1/environ` | Readable by LibreOffice | Permission denied |
 
-`make outbound` and `make isolation` keep the last two true. Still open:
+`make outbound` and `make isolation` keep the last two true, and `make disk` the row above them. Still open:
 
 - Many clients together can fill the connection and memory budgets for as long as the timeouts allow. Rate limiting at a proxy is the answer, and the README says so.
 - A compromised LibreOffice runs as the service's user. It cannot read the service's secrets or memory, but it can see other requests' temporary files.
@@ -61,10 +62,21 @@ An OWASP review found 20 issues, 6 of them High, and all are fixed. Automated re
 5. Embed fonts for text drawn into PDFs, so Arabic and CJK values show.
 6. Report fonts a template uses that the service lacks, and strip macros and OLE objects from templates.
 
+## API gaps worth closing
+
+The store made these possible, and none is built:
+
+1. **Template versions or aliases**, so an application asks for `invoice` rather than an id that changes with every edit.
+2. **`GET /v1/jobs/{id}`, with results kept for a time.** Webhooks need a receiver the caller can host; polling does not.
+3. **`GET /v1/templates/{id}/variables`**, listing the tags a template uses, so an application can build or check its data.
+4. **A JSON request body for `POST /v1/render`**, since a render by id has no files to send.
+5. **Admin rights for basic auth and OpenID Connect users**, and tenants that survive replacing a key.
+6. **`POST /v1/templates/{id}/preview`**, rendering sample data to an image.
+
 ## Conventions
 
 - Every request is one multipart POST; `steps` lists the pipeline in order.
 - Gotenberg's form paths behave as Gotenberg does, with their own handlers beside `/v1/*`, so its clients and the parity harness keep working.
 - Engines sit behind the core's `Engines` and are found at start; an absent engine fails its step with 503, never the service.
-- Nothing is stored. Templates are cached by content hash in memory only.
+- Nothing is stored until `RUSTICDOC_STORE` names a place. Everything written there is immutable, and replicas share nothing else.
 - No attribution trailers in commits.

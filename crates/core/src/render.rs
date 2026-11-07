@@ -53,6 +53,8 @@ enum Op {
     Render { name: String, limit: usize },
     /// Blobs: the file, the data, the context.
     Validate { name: String, limit: usize },
+    /// A template being stored. Blobs: the file.
+    Syntax { name: String },
     /// A template string, for `batchName`. Blobs: the source, the context.
     Text { limit: usize },
     /// A PDF form. Blobs: the file, the data.
@@ -225,6 +227,14 @@ fn evaluate(blobs: &[Vec<u8>]) -> Result<(ReplyMeta, Vec<u8>)> {
             let doc = Document::new(name, blob_bytes(blobs, 1));
             let found =
                 template::validate(&doc, &blob_json(blobs, 2)?, &blob_json(blobs, 3)?, limit);
+            plain(serde_json::to_vec(&found).map_err(|e| Error::Engine {
+                engine: "template",
+                message: e.to_string(),
+            })?)
+        }
+        Op::Syntax { name } => {
+            let doc = Document::new(name, blob_bytes(blobs, 1));
+            let found = template::check_syntax(&doc);
             plain(serde_json::to_vec(&found).map_err(|e| Error::Engine {
                 engine: "template",
                 message: e.to_string(),
@@ -409,6 +419,28 @@ impl Renderer {
         };
         let (data, ctx) = encode_pair(data, ctx).await?;
         let (_, payload) = session.call(&op, &[&doc.bytes, &data, &ctx]).await?;
+        serde_json::from_slice(&payload).map_err(|e| Error::Engine {
+            engine: "template",
+            message: format!("unexpected validation reply: {e}"),
+        })
+    }
+
+    /// Looks for what is wrong with a template whatever its data, where its
+    /// renders would run: reading a client's file is what the workers are for.
+    pub async fn check_syntax(
+        &self,
+        doc: &Document,
+        timeout: Duration,
+    ) -> Result<Vec<rusticdoc_template::Diagnostic>> {
+        let mut session = self.session(timeout).await?;
+        if session.worker.is_none() {
+            let doc = doc.clone();
+            return blocking(timeout, move |_| Ok(template::check_syntax(&doc))).await;
+        }
+        let op = Op::Syntax {
+            name: doc.name.clone(),
+        };
+        let (_, payload) = session.call(&op, &[&doc.bytes]).await?;
         serde_json::from_slice(&payload).map_err(|e| Error::Engine {
             engine: "template",
             message: format!("unexpected validation reply: {e}"),

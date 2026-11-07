@@ -18,7 +18,7 @@ LISTENER=$!
 cleanup() { kill "$LISTENER" 2>/dev/null; docker rm -f "$NAME" >/dev/null 2>&1; rm -rf "$WORK"; }
 trap cleanup EXIT
 sleep 1
-docker run -d --name "$NAME" --add-host host.docker.internal:host-gateway -p 127.0.0.1:3155:3000 "$IMAGE" >/dev/null
+docker run -d --name "$NAME" --add-host host.docker.internal:host-gateway -p 127.0.0.1:3155:9027 "$IMAGE" >/dev/null
 for _ in $(seq 1 60); do curl -sf -m 2 localhost:3155/health >/dev/null && break; sleep 1; done
 
 docker exec "$NAME" python3 -c 'import urllib.request as u; u.urlopen("http://host.docker.internal:3199/control")' >/dev/null
@@ -42,6 +42,10 @@ for f in ext.docx ext.html ext.fodt ext.fods ext.pptx ext.odp ext.fodp ext.fodg 
     convert "$f" forms /forms/libreoffice/convert
     convert "$f" landscape /forms/libreoffice/convert -F landscape=true
     convert "$f" v1 /v1/convert
+done
+# The text export opens a document for editing, so it gets its own pass.
+for f in ext.docx ext.html ext.fodt ext.rtf linked.docx; do
+    convert "$f" txt /v1/convert -F to=txt
 done
 sleep 2
 if [ -s hits.log ]; then
