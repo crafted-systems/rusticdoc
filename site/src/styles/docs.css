@@ -1,0 +1,152 @@
+/* The docs use the same theme as the rest of the site. Starlight's colours are
+   mapped onto the shared tokens, which switch between light and dark themselves. */
+:root {
+  --sl-font: var(--font-body);
+  --sl-font-mono: var(--font-mono);
+  --sl-text-h1: 2.4rem;
+  --sl-text-h2: 1.6rem;
+  --sl-text-h3: 1.25rem;
+  --sl-text-h4: 1.08rem;
+  --sl-line-height: 1.65;
+  --sl-sidebar-width: 17.5rem;
+
+  --sl-color-white: var(--ink);
+  --sl-color-gray-1: light-dark(#1b2a47, #dfe7f6);
+  --sl-color-gray-2: var(--body);
+  --sl-color-gray-3: var(--ink-soft);
+  --sl-color-gray-4: light-dark(#64728a, #8d9bb6);
+  --sl-color-gray-5: var(--line-strong);
+  --sl-color-gray-6: var(--line);
+  --sl-color-gray-7: var(--mist);
+  --sl-color-black: var(--card);
+
+  --sl-color-accent-low: var(--blue-wash);
+  --sl-color-accent: var(--blue);
+  --sl-color-accent-high: var(--blue-deep);
+  --sl-color-text: var(--body);
+  --sl-color-text-accent: var(--blue-deep);
+  --sl-color-text-invert: #ffffff;
+  --sl-color-bg: var(--card);
+  --sl-color-bg-nav: var(--card);
+  --sl-color-bg-sidebar: var(--card);
+  --sl-color-bg-inline-code: var(--blue-wash);
+  --sl-color-bg-accent: var(--blue);
+  --sl-color-hairline-light: var(--line);
+  --sl-color-hairline: var(--line);
+  --sl-color-hairline-shade: var(--line-strong);
+
+  --sl-color-blue-low: var(--blue-wash);
+  --sl-color-blue: var(--blue-deep);
+  --sl-color-blue-high: var(--blue-deep);
+  --sl-color-green-low: var(--green-wash);
+  --sl-color-green: var(--green);
+  --sl-color-green-high: var(--green);
+  --sl-color-orange-low: var(--amber-wash);
+  --sl-color-orange: var(--amber);
+  --sl-color-orange-high: var(--amber);
+  --sl-color-red-low: var(--red-wash);
+  --sl-color-red: var(--red);
+  --sl-color-red-high: var(--red);
+  --sl-color-purple-low: var(--violet-wash);
+  --sl-color-purple: var(--violet);
+  --sl-color-purple-high: var(--violet);
+
+  --sl-shadow-sm: 0 1px 2px var(--shadow-soft);
+  --sl-shadow-md: var(--shadow-card);
+  --sl-shadow-lg: 0 24px 60px -24px var(--shadow-wide);
+}
+::backdrop { --sl-color-backdrop-overlay: light-dark(rgb(70 90 130 / 0.45), rgb(3 8 20 / 0.7)); }
+
+body { background: transparent; }
+
+/* Top bar and sidebar */
+header.header {
+  background: var(--glass);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+}
+.site-title { font-weight: 600; font-size: 1.2rem; color: var(--ink); gap: 0.5rem; }
+.site-title img { height: 1.75rem; width: auto; }
+.sidebar-pane { background: var(--glass); border-inline-end: 1px solid var(--line); }
+@media (max-width: 49.99rem) {
+  .sidebar-pane { background: var(--card); }
+}
+.sidebar-content { --sl-sidebar-item-padding-inline: 0.75rem; }
+.sidebar-content a { position: relative; border-radius: var(--r-small); color: var(--sl-color-gray-2); }
+.sidebar-content a:hover { background: var(--blue-wash); color: var(--blue-deep); }
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+  background: var(--blue-wash);
+  color: var(--blue-deep);
+  font-weight: 600;
+}
+.sidebar-content a[aria-current='page']::before {
+  content: ''; position: absolute; left: 0; top: 0.35rem; bottom: 0.35rem; width: 3px; border-radius: 0; background: var(--blue);
+}
+.sidebar-content .large { color: var(--ink-soft); font-size: var(--sl-text-sm); font-weight: 500; }
+.sidebar-content summary { border-radius: var(--r-small); }
+.sidebar-content ul ul { border-inline-start-color: var(--line); }
+
+.social-icons::after { display: none; }
+
+/* The page runs full width beside the sidebar */
+.main-frame main { background: var(--glass); }
+.content-panel + .content-panel { border-top-color: var(--line); }
+.sl-markdown-content h1, .sl-markdown-content h2, .sl-markdown-content h3, .sl-markdown-content h4,
+h1#_top { font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+h1#_top { font-weight: 650; letter-spacing: -0.02em; }
+.sl-markdown-content strong { font-weight: 650; color: var(--ink); }
+.sl-markdown-content a { color: var(--blue-deep); }
+.sl-markdown-content a:hover { color: var(--ink); }
+.sl-markdown-content li::marker { color: var(--blue); }
+
+/* On this page */
+.right-sidebar { border-inline-start-color: var(--line); }
+starlight-toc a[aria-current='true'], starlight-toc a[aria-current='true']:hover { color: var(--blue-deep); font-weight: 600; }
+mobile-starlight-toc nav, mobile-starlight-toc .toggle { border-color: var(--line); }
+
+/* Inline code */
+.sl-markdown-content :not(pre) > code {
+  background: var(--blue-wash); color: var(--blue-deep);
+  border: 0; border-radius: var(--r-small); padding: 0.1em 0.35em; font-size: 0.86em; font-weight: 500;
+}
+
+/* Tables */
+.sl-markdown-content table {
+  display: block; overflow-x: auto; width: fit-content; max-width: 100%;
+  border: 1px solid var(--line); border-radius: var(--r-card); border-collapse: separate; border-spacing: 0;
+  background: var(--card);
+}
+.sl-markdown-content th, .sl-markdown-content td { border: 0; border-bottom: 1px solid var(--line); padding: 0.6rem 0.9rem; }
+.sl-markdown-content tr:last-child td { border-bottom: 0; }
+.sl-markdown-content th { background: var(--mist); color: var(--ink-soft); font-weight: 600; font-size: var(--sl-text-sm); }
+.sl-markdown-content td code { white-space: nowrap; }
+
+/* Asides */
+.starlight-aside {
+  border: 1px solid var(--sl-color-asides-border);
+  border-radius: var(--r-card);
+  background: var(--sl-color-asides-bg, var(--blue-wash));
+  padding: 0.9rem 1.1rem;
+}
+.starlight-aside--note { --sl-color-asides-text-accent: var(--blue-deep); --sl-color-asides-border: var(--blue-edge); background: var(--blue-wash); }
+.starlight-aside--tip { --sl-color-asides-text-accent: var(--green); --sl-color-asides-border: var(--green-edge); background: var(--green-wash); }
+.starlight-aside--caution { --sl-color-asides-text-accent: var(--amber); --sl-color-asides-border: var(--amber-edge); background: var(--amber-wash); }
+.starlight-aside--danger { --sl-color-asides-text-accent: var(--red); --sl-color-asides-border: var(--red-edge); background: var(--red-wash); }
+
+/* Controls */
+button[data-open-modal] {
+  background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--r-small); color: var(--ink-soft); padding-inline: 0.85rem;
+}
+button[data-open-modal]:hover { border-color: var(--blue); color: var(--blue-deep); }
+button[data-open-modal] kbd { background: var(--blue-wash); border-radius: var(--r-small); }
+.pagination-links a { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
+.pagination-links a:hover { border-color: var(--blue); }
+.pagination-links .link-title { color: var(--ink); font-weight: 600; }
+.sl-menu-button { background-color: var(--card); border: 1px solid var(--line-strong); box-shadow: none; color: var(--ink); }
+.sl-menu-button:hover { border-color: var(--blue); }
+dialog[aria-label] { border-radius: var(--r-panel); }
+.sl-menu-button { border-radius: var(--r-small); }
+.sl-badge, .sl-markdown-content .card, starlight-tabs [role='tab'], .sl-link-card { border-radius: var(--r-small); }

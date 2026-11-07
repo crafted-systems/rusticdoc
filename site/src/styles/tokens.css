@@ -1,0 +1,70 @@
+/* One theme in two modes: frosted panels on a blue field, one saturated blue for
+   actions, green and amber for state. Each colour is light-dark(light, dark), and
+   the data-theme attribute picks the mode. Without it, the device setting does. */
+:root {
+  color-scheme: light dark;
+
+  --field: light-dark(#e9f0fc, #0a1324);
+  --bloom: light-dark(#c9dcfb, #17356b);
+  --bloom-soft: light-dark(#d5e4fc, #122a57);
+  --mist: light-dark(#f4f8ff, #12203c);
+  --glass: light-dark(rgb(255 255 255 / 0.74), rgb(21 33 60 / 0.74));
+  --glass-edge: light-dark(rgb(255 255 255 / 0.9), rgb(140 175 240 / 0.14));
+  --card: light-dark(#ffffff, #17253f);
+  --paper: #ffffff;
+  --line: light-dark(#e0e8f5, #2a3b5e);
+  --line-strong: light-dark(#c8d6ec, #3f5786);
+  --tint: light-dark(#f5f8ff, #1b2c4c);
+
+  --ink: light-dark(#0f1b33, #eaf0fb);
+  --ink-soft: light-dark(#4f5d76, #a9b6cf);
+  --body: light-dark(#2c3b57, #cdd7ea);
+
+  /* --blue is a fill that carries white text; --blue-deep is blue text. */
+  --blue: #1668f5;
+  --blue-press: #0f56d6;
+  --blue-deep: light-dark(#0f56d6, #8ebbff);
+  --blue-wash: light-dark(#e8f0fe, #17315f);
+  --blue-edge: light-dark(#bcd3fb, #2f5597);
+
+  --green: light-dark(#0c7a40, #6ddca2);
+  --green-fill: #0c8a48;
+  --green-wash: light-dark(#e1f6ea, #103c2b);
+  --green-edge: light-dark(#aee3c4, #1d6345);
+  --amber: light-dark(#a84a08, #f7b872);
+  --amber-wash: light-dark(#fdf0e2, #432a10);
+  --amber-edge: light-dark(#f4d2ad, #7a4d1c);
+  --red: light-dark(#b3261e, #ffa49d);
+  --red-wash: light-dark(#fdeaea, #47191b);
+  --red-edge: light-dark(#f3c0bc, #80302f);
+  --teal: light-dark(#0b6e68, #74e0d6);
+  --teal-wash: light-dark(#dff5f3, #0f3b3c);
+  --violet: light-dark(#4f3fd1, #bdb5ff);
+  --violet-wash: light-dark(#ebe9fe, #2a2763);
+
+  --code-bg: light-dark(#f7faff, #101b31);
+  --code-bar: light-dark(#eef4fe, #17253f);
+  --code-comment: light-dark(#566680, #96a6c2);
+
+  --shadow-soft: light-dark(rgb(30 64 130 / 0.05), rgb(0 0 0 / 0.3));
+  --shadow-wide: light-dark(rgb(30 64 130 / 0.22), rgb(0 0 0 / 0.55));
+  --shadow-panel: 0 1px 2px var(--shadow-soft), 0 18px 40px -22px var(--shadow-wide);
+  --shadow-card: 0 1px 2px var(--shadow-soft), 0 10px 24px -16px var(--shadow-wide);
+
+  --r-panel: 4px;
+  --r-card: 3px;
+  --r-small: 2px;
+  --font-body: 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+
+html { background: var(--field); }
+body::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(60rem 40rem at 90% -10%, var(--bloom) 0%, transparent 62%),
+    radial-gradient(52rem 36rem at 6% 108%, var(--bloom-soft) 0%, transparent 64%),
+    radial-gradient(46rem 30rem at 45% 50%, var(--mist) 0%, transparent 72%);
+}

@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Source of public/og.png. See the site README for the command that renders it. -->
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: 'Space Grotesk'; src: url(../node_modules/@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2); font-weight: 300 700; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    font-family: 'Space Grotesk'; color: #0f1b33; position: relative;
+    background:
+      radial-gradient(760px 520px at 92% -10%, #c9dcfb 0%, transparent 62%),
+      radial-gradient(640px 460px at 4% 110%, #d5e4fc 0%, transparent 64%),
+      #e9f0fc;
+  }
+  .brand { position: absolute; left: 72px; top: 62px; display: flex; align-items: center; gap: 14px; font-size: 34px; font-weight: 600; }
+  .brand img { width: 44px; height: 44px; }
+  h1 { position: absolute; left: 72px; top: 150px; width: 560px; margin: 0; font-size: 82px; line-height: 1.04; font-weight: 650; letter-spacing: -0.02em; }
+  .note { position: absolute; left: 72px; bottom: 62px; font-size: 28px; font-weight: 500; color: #0f56d6; background: #fff; border-radius: 4px; padding: 10px 26px; }
+  .panel { position: absolute; left: 690px; top: 62px; width: 620px; height: 620px; background: #fff; border: 1px solid #e0e8f5; border-radius: 6px; overflow: hidden; box-shadow: 0 30px 60px -28px rgb(30 64 130 / 0.45); }
+  .panel img { width: 100%; display: block; }
+</style>
+<div class="brand"><img src="../public/favicon.svg" alt="">rusticdoc</div>
+<h1>Fill Office and PDF templates from JSON.</h1>
+<div class="note">Self-hosted and open source</div>
+<div class="panel"><img src="../src/assets/invoice-filled.png" alt=""></div>

@@ -1,0 +1,62 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="Security: rusticdoc" description="How rusticdoc handles hostile documents, what it was tested against, and what stays your responsibility." path="/security/">
+  <header class="page-head">
+    <h1>Hostile documents are the normal case</h1>
+    <p>A document service reads complicated files from people it doesn't know. rusticdoc is built to contain what those files try to do, and this page also says where that protection stops.</p>
+  </header>
+  <section class="band">
+    <div class="wrap">
+      <div class="prose">
+        <h2>What it was tested against</h2>
+        <p>An OWASP review found 20 issues, 6 of them high severity, and all are fixed. Automated review of those fixes found more gaps, and those are fixed too. These attacks were run at full size against a container limited to 3 GiB.</p>
+      </div>
+      <div class="table-scroll" role="region" aria-label="Attack results" tabindex="0">
+        <table class="results">
+          <thead><tr><th scope="col">Attack</th><th scope="col">Before</th><th scope="col">Now</th></tr></thead>
+          <tbody>
+            <tr><td>40 doublings of a template variable</td><td>Service killed, out of memory</td><td><code>413</code> in under a second, service up</td></tr>
+            <tr><td>40 concurrent 60 MB uploads</td><td>Service killed, out of memory</td><td>Refused cleanly at a 1.31 GiB peak, service up</td></tr>
+            <tr><td>100 MB value printed in a loop</td><td>Service killed, out of memory</td><td><code>400</code>, service up</td></tr>
+            <tr><td>840,000 same-named form parts</td><td>No answer in 150 seconds</td><td><code>400</code> in 6 ms</td></tr>
+            <tr><td>Document that makes LibreOffice write without stopping</td><td>512 MB of <code>/tmp</code> filled in under 15 seconds</td><td><code>400</code> at the disk limit, space freed, other conversions unaffected</td></tr>
+            <tr><td>Stylesheet link in a converted HTML file</td><td>Fetched by LibreOffice</td><td>No request leaves the container</td></tr>
+            <tr><td>Service secrets in <code>/proc/1/environ</code></td><td>Readable by LibreOffice</td><td>Permission denied</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose spaced">
+        <p><code>make outbound</code> and <code>make isolation</code> keep the last two true, <code>make disk</code> keeps the row above them true, and you can run all three yourself.</p>
+        <h2>What the service does</h2>
+        <ul>
+          <li><strong>Runs client templates in a worker process</strong> with no environment and limits on memory, CPU and files. A template that exhausts its limit gets <code>413</code>, and the service keeps running.</li>
+          <li><strong>Caps input before it expands,</strong> including request bodies, form parts, template output, font ZIPs and what one conversion may write to disk.</li>
+          <li><strong>Escapes values by file type,</strong> so data can't add markup to Office, HTML, XML and SVG templates, or keys to JSON ones.</li>
+          <li><strong>Keeps secrets out of child processes.</strong> LibreOffice, qpdf and pdfcpu start from an empty environment.</li>
+          <li><strong>Stops documents reaching out.</strong> LibreOffice is configured to fetch nothing, and its web content providers are removed from the image.</li>
+          <li><strong>Refuses private addresses</strong> for webhooks and <code>downloadFrom</code>, pins the address it checked and follows no redirects.</li>
+          <li><strong>Signs webhooks per caller,</strong> so one tenant can't send another's receiver something that verifies.</li>
+          <li><strong>Runs hardened by default:</strong> as a non-root user, and it works with a read-only root filesystem and every capability dropped.</li>
+        </ul>
+        <h2>What's left to you</h2>
+        <ul>
+          <li><strong>Set credentials.</strong> With none configured, the service answers anyone who can reach it, and warns at every start. This matches what Gotenberg's clients expect.</li>
+          <li><strong>Terminate TLS in front of it.</strong> The service speaks plain HTTP.</li>
+          <li><strong>Rate limit at a proxy.</strong> The limits bound what one client holds, but many clients together can still fill them for as long as the timeouts allow.</li>
+          <li><strong>Rebuild the image regularly</strong> to pick up Debian's fixes.</li>
+          <li><strong>Back up and encrypt your bucket.</strong> It holds the only copy of stored templates.</li>
+        </ul>
+        <h2>Where protection stops</h2>
+        <ul>
+          <li>A compromised LibreOffice runs as the service's user. It can't read the service's secrets or memory, but it can see other requests' temporary files while they exist. Treat the container as the boundary between tenants that don't trust each other, and run one per tenant if that matters.</li>
+          <li><strong>Escaping covers text and quoted attributes.</strong> It doesn't make a value safe in a <code>&lt;script&gt;</code> or <code>&lt;style&gt;</code> block, in an unquoted attribute or as a URL, and <code>.csv</code> and <code>.md</code> templates aren't escaped at all. Check such values in your application.</li>
+          <li>The render memory limit has only been shown to hold on Linux.</li>
+          <li>Macros and OLE objects in a template aren't stripped. LibreOffice won't run them when converting, but a request with no conversion step returns them in its output.</li>
+          <li>Trivy reports 691 findings in the image's Debian packages, 1 critical and 108 high, none with a Debian fix at the time of the scan. One further advisory, with no severity, is in a module <code>pdfcpu</code> builds against, and whether <code>pdfcpu</code> reaches it hasn't been checked.</li>
+        </ul>
+        <p class="more"><a href="/docs/operate/security/">Read the full security guide</a></p>
+      </div>
+    </div>
+  </section>
+</Base>

@@ -1,0 +1,113 @@
+---
+import '../styles/fonts.css';
+import '../styles/tokens.css';
+import '../styles/site.css';
+import ThemeProvider from '../components/ThemeProvider.astro';
+import ThemeSwitch from '../components/ThemeSwitch.astro';
+import Logo from '../components/Logo.astro';
+import { REPO } from '../site';
+
+interface Props {
+  title: string;
+  description: string;
+  path: string;
+}
+const { title, description, path } = Astro.props;
+const canonical = new URL(path, Astro.site).href;
+const image = new URL('/og.png', Astro.site).href;
+const nav = [
+  { href: '/docs/', label: 'Docs' },
+  { href: '/compare/', label: 'Compare' },
+  { href: '/security/', label: 'Security' },
+  { href: '/status/', label: 'Status' },
+];
+const footer = [
+  {
+    title: 'Use it',
+    links: [
+      { href: '/docs/start/quickstart/', label: 'Quickstart' },
+      { href: '/docs/templates/syntax/', label: 'Template syntax' },
+      { href: '/docs/reference/api/', label: 'HTTP API' },
+      { href: '/docs/reference/cli/', label: 'CLI' },
+    ],
+  },
+  {
+    title: 'Run it',
+    links: [
+      { href: '/docs/operate/docker/', label: 'Docker' },
+      { href: '/docs/operate/kubernetes/', label: 'Kubernetes' },
+      { href: '/docs/operate/observability/', label: 'Logs and metrics' },
+      { href: '/security/', label: 'Security' },
+    ],
+  },
+  {
+    title: 'Move to it',
+    links: [
+      { href: '/docs/guides/from-gotenberg/', label: 'From Gotenberg' },
+      { href: '/docs/guides/from-carbone/', label: 'From Carbone' },
+      { href: '/compare/', label: 'Compare all three' },
+    ],
+  },
+  {
+    title: 'Project',
+    links: [
+      { href: '/status/', label: 'What’s proven' },
+      { href: '/docs/project/changelog/', label: 'Changelog' },
+      { href: '/docs/project/roadmap/', label: 'Roadmap' },
+      { href: REPO, label: 'GitHub' },
+      { href: `${REPO}/issues`, label: 'Report a problem' },
+    ],
+  },
+];
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={image} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#e9f0fc" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a1324" />
+    <ThemeProvider />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="rusticdoc home">
+        <Logo />
+        <span>rusticdoc</span>
+      </a>
+      <nav aria-label="Main">
+        {nav.map((item) => <a href={item.href} aria-current={path.startsWith(item.href) ? 'page' : undefined}>{item.label}</a>)}
+        <ThemeSwitch />
+        <a class="nav-outline" href={REPO}>GitHub</a>
+        <a class="nav-action" href="/docs/start/quickstart/">Quickstart</a>
+      </nav>
+    </header>
+    <main id="main"><slot /></main>
+    <footer class="colophon">
+      <div class="colophon-inner">
+        <div class="colophon-brand">
+          <a class="brand" href="/" aria-label="rusticdoc home"><Logo /><span>rusticdoc</span></a>
+          <p>Fill Office and PDF templates from JSON, in one container you run yourself. Open source under the <a href={`${REPO}/blob/main/LICENSE`}>Apache-2.0 licence</a>.</p>
+        </div>
+        {footer.map((col) => (
+          <nav class="colophon-col" aria-label={col.title}>
+            <h2>{col.title}</h2>
+            <ul>{col.links.map((l) => <li><a href={l.href}>{l.label}</a></li>)}</ul>
+          </nav>
+        ))}
+      </div>
+    </footer>
+  </body>
+</html>

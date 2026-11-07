@@ -1,0 +1,41 @@
+---
+import { Image } from 'astro:assets';
+import template from '../assets/invoice-template.png';
+import filled from '../assets/invoice-filled.png';
+---
+<figure class="sheet" data-sheet data-view="template">
+  <div class="sheet-switch" role="group" aria-label="Which version to show">
+    <button type="button" data-show="template" aria-pressed="true">Template</button>
+    <button type="button" data-show="filled" aria-pressed="false">Filled</button>
+  </div>
+  <figcaption>
+    This is real output. The blue marks show where the tags are; they aren't in the file.
+    Download the <a href="/samples/invoice-template.docx">template</a>, the <a href="/samples/invoice.json">data</a> or the <a href="/samples/invoice.pdf">PDF</a>.
+  </figcaption>
+  <div class="sheet-paper">
+    <Image class="sheet-layer" data-layer="template" src={template} widths={[480, 800, 1200]} sizes="(min-width: 960px) 640px, 92vw" loading="eager"
+      alt="An invoice template in Word, with tags such as seller.name, customer.name and a loop over items where the values will go." />
+    <Image class="sheet-layer sheet-filled" data-layer="filled" src={filled} widths={[480, 800, 1200]} sizes="(min-width: 960px) 640px, 92vw" loading="eager"
+      alt="The same invoice filled in: Mawingu Coffee Co. bills Amani Otieno KES 36,300.00 for three items, with a QR code to pay." />
+    <p class="sheet-toast" aria-hidden="true">Invoice filled</p>
+  </div>
+</figure>
+<script>
+  const sheet = document.querySelector<HTMLElement>('[data-sheet]');
+  if (sheet) {
+    const buttons = [...sheet.querySelectorAll<HTMLButtonElement>('[data-show]')];
+    let touched = false;
+    const show = (view: string) => {
+      sheet.dataset.view = view;
+      for (const b of buttons) b.setAttribute('aria-pressed', String(b.dataset.show === view));
+      sheet.querySelector('[data-layer="filled"]')?.setAttribute('aria-hidden', String(view !== 'filled'));
+      sheet.querySelector('[data-layer="template"]')?.setAttribute('aria-hidden', String(view !== 'template'));
+    };
+    for (const b of buttons) b.addEventListener('click', () => { touched = true; show(b.dataset.show ?? 'template'); });
+    show('template');
+    // Once, on arrival: the marks clear and the document prints.
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setTimeout(() => { if (!touched) show('filled'); }, 1400);
+    }
+  }
+</script>

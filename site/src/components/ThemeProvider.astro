@@ -1,0 +1,13 @@
+---
+// Runs before the first paint, so a page never flashes the wrong mode. The key is
+// Starlight's, and the marketing pages share it, so a choice holds across the site.
+---
+<script is:inline>
+  (() => {
+    let stored = '';
+    try { stored = localStorage.getItem('starlight-theme') || ''; } catch {}
+    document.documentElement.dataset.theme =
+      stored === 'light' || stored === 'dark' ? stored
+      : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  })();
+</script>

@@ -1,0 +1,15 @@
+{
+  "seller": { "name": "Mawingu Coffee Co.", "address": "12 Example Road, Nairobi" },
+  "number": "INV-2041",
+  "issued": "2026-11-06",
+  "due": "2026-12-06",
+  "currency": "KES",
+  "customer": { "name": "Amani Otieno", "address": "48 Sample Avenue, Mombasa" },
+  "items": [
+    { "name": "Single-origin beans, 1 kg", "qty": 12, "price": 2400 },
+    { "name": "Paper filters, box of 100", "qty": 6, "price": 950 },
+    { "name": "Delivery to Mombasa", "qty": 1, "price": 1800 }
+  ],
+  "total": 36300,
+  "payment_url": "https://pay.example.com/INV-2041"
+}

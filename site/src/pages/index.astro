@@ -1,0 +1,478 @@
+---
+import Base from '../layouts/Base.astro';
+import Sheet from '../components/Sheet.astro';
+import Icon from '../components/Icon.astro';
+import Logo from '../components/Logo.astro';
+import { IMAGE, REPO } from '../site';
+
+// Light highlighting for the snippets: comments, template tags and strings.
+const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const hl = (src: string) =>
+  src
+    .split('\n')
+    .map((line) => {
+      if (line.trimStart().startsWith('#')) return `<span class="c">${escape(line)}</span>`;
+      // One pass, so a later rule never matches inside markup an earlier one added.
+      return line.replace(/(\{\{.*?\}\}|\{%.*?%\})|("[^"]*")|([^{"]+|[{"])/g, (_, tag, str, rest) =>
+        tag ? `<span class="t">${escape(tag)}</span>` : str ? `<span class="s">${escape(str)}</span>` : escape(rest));
+    })
+    .join('\n');
+
+const steps = 'convert pdfa pdfua merge split watermark stamp rotate flatten optimize bookmarks metadata embed factur-x encrypt'.split(' ');
+
+const blocks = [
+  {
+    id: 'fill',
+    icon: 'braces',
+    label: 'Fill',
+    line: 'Tags, loops and filters',
+    title: 'Tags that survive Word',
+    text: 'Tags keep the document’s own formatting, even where Word splits one across runs. Where a loop’s tags sit decides what repeats: text, table rows, paragraphs, sheet rows or slides.',
+    points: ['Money and dates, formatted your way', 'Conditions, sums and sorting', 'Translations from one template'],
+    code: `# A table row in invoice-template.docx, a tag per cell
+{% for item in items %}{{ item.name }}
+{{ item.qty }}
+{{ item.price | currency(currency) }}{% endfor %}
+
+# Elsewhere in the same document
+Issued {{ issued | date("%d %B %Y") }}
+{% if total > 100000 %}Payment due in 14 days{% endif %}`,
+    href: '/docs/templates/syntax/',
+    more: 'Template syntax',
+  },
+  {
+    id: 'insert',
+    icon: 'image',
+    label: 'Insert',
+    line: 'Images, codes and charts',
+    title: 'More than text',
+    text: 'Filters place a logo, a QR code or barcode, a link, coloured text, a native chart or a safe subset of HTML where the tag stands.',
+    points: ['Native charts in DOCX, PPTX and XLSX', 'QR, Code 128 and other barcodes', 'A safe subset of HTML'],
+    code: `{{ logo | image(width=120) }}
+{{ payment_url | barcode("qr", size=90) }}
+{{ sku | barcode("code128") }}
+{{ payment_url | link("Pay now") }}
+{{ status | color("#c00") }}`,
+    href: '/docs/templates/rich-content/',
+    more: 'Rich content',
+  },
+  {
+    id: 'convert',
+    icon: 'file',
+    label: 'Convert',
+    line: 'PDF or another format',
+    title: 'Conversion with the network unplugged',
+    text: 'LibreOffice turns the filled file into a PDF or another Office format. It can’t reach the network or run macros while it works. Send several files and get them back merged or as a ZIP.',
+    points: ['Office, OpenDocument, HTML and text', 'PDF/A and PDF/UA on export', 'A warm pool, so no cold start'],
+    code: `# Fill and convert in one call
+curl http://localhost:9027/v1/render \\
+  -F template=@invoice-template.docx \\
+  -F "data=<invoice.json" \\
+  -F steps=convert -o invoice.pdf
+
+# Or convert files you already have
+curl http://localhost:9027/v1/convert \\
+  -F files=@report.docx -F files=@deck.pptx \\
+  -F merge=true -o bundle.pdf`,
+    href: '/docs/guides/convert/',
+    more: 'Conversion',
+  },
+  {
+    id: 'finish',
+    icon: 'layers',
+    label: 'Finish',
+    line: 'Steps you list, in order',
+    title: 'A pipeline in one field',
+    text: 'List the steps, and each one works on the result of the last. Stamp it, set its metadata and encrypt it, without another library in your app.',
+    points: steps,
+    pills: true,
+    code: `curl http://localhost:9027/v1/render \\
+  -F template=@invoice-template.docx \\
+  -F "data=<invoice.json" \\
+  -F steps=convert,stamp,metadata,encrypt \\
+  -F stampSource=text -F stampExpression=PAID \\
+  -F 'metadata={"Title":"Invoice INV-2041"}' \\
+  -F userPassword=open-sesame -o invoice.pdf`,
+    href: '/docs/guides/pipeline/',
+    more: 'The pipeline',
+  },
+  {
+    id: 'batch',
+    icon: 'copy',
+    label: 'Batch',
+    line: 'One file per record',
+    title: 'A letter for every customer',
+    text: 'Send one template and a list. You get one finished file per element, named from the data, in a single ZIP.',
+    points: ['Names from a tag, such as the customer', 'The same steps on every file', 'An overall time limit, not per file'],
+    code: `curl http://localhost:9027/v1/render/batch \\
+  -F template=@letter.docx \\
+  -F "data=<customers.json" -F splitBy=customers \\
+  -F 'batchName={{ item.name }}' \\
+  -F steps=convert -o letters.zip`,
+    href: '/docs/templates/batch/',
+    more: 'Batch rendering',
+  },
+  {
+    id: 'deliver',
+    icon: 'send',
+    label: 'Deliver',
+    line: 'Response or webhook',
+    title: 'Answer now, deliver later',
+    text: 'Get the document in the response. Or add a webhook header: the service answers at once and posts the document to your URL when it’s ready.',
+    points: ['Signed with a key per caller', 'The request id from your logs', 'Private addresses refused by default'],
+    code: `curl http://localhost:9027/v1/render \\
+  -H "X-Rusticdoc-Webhook-Url: https://receiver.example.com/documents" \\
+  -H "X-Rusticdoc-Webhook-Error-Url: https://receiver.example.com/failures" \\
+  -F template=@invoice-template.docx \\
+  -F "data=<invoice.json" -F steps=convert`,
+    href: '/docs/guides/webhooks/',
+    more: 'Webhooks',
+  },
+] as const;
+
+const stack = [
+  { icon: 'code', title: 'Any HTTP client', text: 'Multipart forms in, files out. An OpenAPI description covers every route.', href: '/docs/reference/api/' },
+  { icon: 'send', title: 'Signed webhooks', text: 'Each caller’s deliveries verify with that caller’s own key.', href: '/docs/guides/webhooks/' },
+  { icon: 'bucket', title: 'S3 or a shared volume', text: 'Stored templates and fonts, shared by every replica.', href: '/docs/operate/many-containers/' },
+  { icon: 'chart', title: 'Prometheus metrics', text: 'Requests, stage timings and webhook outcomes at /metrics.', href: '/docs/operate/observability/' },
+  { icon: 'list', title: 'JSON logs', text: 'Access and audit lines, with the request id on every one.', href: '/docs/operate/observability/' },
+  { icon: 'key', title: 'Your sign-in', text: 'API keys, basic auth or tokens from OpenID Connect.', href: '/docs/guides/authentication/' },
+  { icon: 'pulse', title: 'Kubernetes probes', text: '/ready waits until a new replica has its fonts.', href: '/docs/operate/kubernetes/' },
+  { icon: 'swap', title: 'Gotenberg clients', text: '/forms/* answers the way Gotenberg 8.39 does.', href: '/docs/guides/from-gotenberg/' },
+] as const;
+
+const faq = [
+  {
+    q: 'Is every feature in the open-source build?',
+    a: 'Yes. Everything on this site is in the Apache-2.0 build, including images, barcodes, charts, HTML, PDF forms and webhooks. There is no paid edition.',
+  },
+  {
+    q: 'Can it turn web pages into PDFs?',
+    a: 'No. rusticdoc has no browser. LibreOffice can convert a simple HTML file, but pages that need a browser’s layout or JavaScript belong on Gotenberg with Chromium.',
+  },
+  {
+    q: 'Does it need internet access?',
+    a: 'Not to render. Only webhooks and downloadFrom make outbound requests, and RUSTICDOC_OUTBOUND_PROXY can send them through your proxy. LibreOffice can’t reach the network at all.',
+  },
+  {
+    q: 'Is it ready for production?',
+    a: 'Version 0.1 is the first release. The service, CLI and template engine are built and tested, but some outputs haven’t been opened in Word, Excel or Acrobat yet. The status page lists what has and hasn’t been checked.',
+  },
+  {
+    q: 'Which scripts and languages can templates use?',
+    a: 'Office templates show whatever the installed fonts cover, and you can upload more fonts as a ZIP. Text the service draws into a PDF itself, such as a stamp or a form value, is Latin only for now.',
+  },
+  {
+    q: 'Is there an SDK?',
+    a: 'Not yet. Any HTTP client works, since every request is one multipart form, and the OpenAPI description is there to generate a client from.',
+  },
+];
+---
+<Base title="rusticdoc: fill Office and PDF templates from JSON" description="Write a template in Word or Excel, send it with JSON, and get a finished PDF back. Self-hosted, open source, in one container." path="/">
+  <section class="hero">
+    <h1>Fill Office and PDF templates from&nbsp;JSON.</h1>
+    <p class="lede">Write the template in Word, Excel or PowerPoint. One request fills the tags, converts the result to PDF and finishes it, in a single container on your own servers.</p>
+    <p class="actions">
+      <a class="button" href="/docs/start/quickstart/">Read the quickstart</a>
+      <a class="button secondary" href={REPO}>View on GitHub</a>
+    </p>
+  </section>
+
+  <section class="stage" aria-label="How one request turns a template and data into a finished invoice">
+    <div class="stage-in">
+      <article class="file">
+        <h2 class="file-name"><Icon name="file" />invoice-template.docx</h2>
+        <pre class="file-body" set:html={hl(`{{ seller.name }}      Invoice {{ number }}
+Billed to {{ customer.name }}
+
+{% for item in items %}{{ item.name }}
+  {{ item.qty }} × {{ item.price }}{% endfor %}
+
+Total due {{ total | currency(currency) }}
+{{ payment_url | barcode("qr", size=90) }}`)} />
+      </article>
+      <article class="file">
+        <h2 class="file-name"><Icon name="braces" />invoice.json</h2>
+        <pre class="file-body" set:html={hl(`{
+  "number": "INV-2041",
+  "customer": { "name": "Amani Otieno" },
+  "items": [ 3 items ],
+  "total": 36300
+}`)} />
+      </article>
+    </div>
+    <div class="stage-run">
+      <div class="run">
+        <p class="run-head"><span class="verb">POST</span> /v1/render</p>
+        <ol class="run-steps">
+          <li><strong>Fill</strong><span>Tags, loops, the QR code</span></li>
+          <li><strong>Convert</strong><span>LibreOffice, offline</span></li>
+          <li><strong>Finish</strong><span>The steps you list</span></li>
+        </ol>
+      </div>
+    </div>
+    <div class="stage-out">
+      <h2 class="file-name"><Icon name="file" />invoice.pdf</h2>
+      <Sheet />
+    </div>
+  </section>
+
+  <section class="formats" aria-label="Formats">
+    <div class="format-row">
+      <h2>Templates in</h2>
+      <ul>{['DOCX', 'XLSX', 'PPTX', 'ODT', 'ODS', 'ODP', 'PDF forms', 'HTML', 'Markdown', 'CSV', 'XML'].map((f) => <li>{f}</li>)}</ul>
+    </div>
+    <div class="format-row">
+      <h2>Documents out</h2>
+      <ul>{['PDF', 'PDF/A', 'PDF/UA', 'Factur-X', 'Office formats', 'A ZIP of many'].map((f) => <li>{f}</li>)}</ul>
+    </div>
+  </section>
+
+  <section class="band split-compare">
+    <header class="section-head">
+      <h2>Document generation without document code</h2>
+      <p>The layout stays in a file someone can edit, and your application sends data.</p>
+    </header>
+    <div class="vs">
+      <div class="vs-side before">
+        <h3>Generating documents in code</h3>
+        <ol class="flow" aria-label="Five parts to build and run">
+          <li>Your app</li>
+          <li>HTML and CSS template</li>
+          <li>Headless browser</li>
+          <li>PDF library</li>
+          <li>Storage or email</li>
+        </ol>
+        <ul class="vs-list">
+          <li>The layout lives in code, so a changed sentence needs a developer and a release.</li>
+          <li>A browser runs beside your app just to print HTML.</li>
+          <li>Each extra, such as PDF/A or a watermark, is another library to wire in.</li>
+        </ul>
+      </div>
+      <div class="vs-side after">
+        <h3><Logo size={22} /> With rusticdoc</h3>
+        <ol class="flow" aria-label="Three parts">
+          <li>Your app</li>
+          <li class="main">One request: a template and its data</li>
+          <li class="done">The finished document</li>
+        </ol>
+        <ul class="vs-list">
+          <li><strong>Ordinary documents.</strong> Whoever owns the invoice edits it in Word.</li>
+          <li><strong>One request.</strong> Fill, convert and finish in one call, or by webhook.</li>
+          <li><strong>No browser.</strong> LibreOffice converts, and can’t reach the network while it does.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <header class="section-head">
+      <h2>Made for documents people sign, file and pay</h2>
+    </header>
+    <div class="uses">
+      <article class="use">
+        <p class="use-tab">Invoices</p>
+        <h3>Invoices that can be paid</h3>
+        <p>Fill the Word invoice your finance team already uses, print a QR code to pay, and embed Factur-X XML for e-invoicing.</p>
+        <code set:html={hl('{{ payment_url | barcode("qr", size=90) }}')} />
+      </article>
+      <article class="use">
+        <p class="use-tab">Reports</p>
+        <h3>Reports from a spreadsheet</h3>
+        <p>Fill rows in an Excel sheet with its formulas still working, add a native chart, then convert the workbook to PDF.</p>
+        <code set:html={hl('{% for r in rows %}{{ r.month }}  {{ r.sales }}{% endfor %}')} />
+      </article>
+      <article class="use">
+        <p class="use-tab">Forms</p>
+        <h3>PDF forms you were given</h3>
+        <p>Fill the fields of an existing PDF form from JSON, then flatten it so nobody can change the values.</p>
+        <code set:html={hl('-F template=@application.pdf -F steps=flatten')} />
+      </article>
+    </div>
+  </section>
+
+  <section class="band blocks" data-tabs>
+    <header class="section-head">
+      <h2>Building blocks that compose into one request</h2>
+      <p>Use one, or chain them all. Every block works the same in the HTTP API and the CLI.</p>
+    </header>
+    <div class="tablist" role="tablist" aria-label="Building blocks">
+      {blocks.map((b, i) => (
+        <button type="button" role="tab" id={`tab-${b.id}`} aria-controls={`panel-${b.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1}>
+          <Icon name={b.icon} />
+          <strong>{b.label}</strong>
+          <span>{b.line}</span>
+        </button>
+      ))}
+    </div>
+    {blocks.map((b, i) => (
+      <div class="tabpanel" role="tabpanel" id={`panel-${b.id}`} aria-labelledby={`tab-${b.id}`} hidden={i !== 0}>
+        <div class="tabpanel-text">
+          <h3>{b.title}</h3>
+          <p>{b.text}</p>
+          {'pills' in b ? (
+            <p class="pill-list">{b.points.map((p) => <code>{p}</code>)}</p>
+          ) : (
+            <ul class="ticks">{b.points.map((p) => <li>{p}</li>)}</ul>
+          )}
+          <p class="more"><a href={b.href}>{b.more}</a></p>
+        </div>
+        <div class="terminal" role="region" aria-label={`${b.label} example`} tabindex="0">
+          <p class="terminal-bar" aria-hidden="true"><i></i><i></i><i></i></p>
+          <pre><code set:html={hl(b.code)} /></pre>
+        </div>
+      </div>
+    ))}
+  </section>
+
+  <section class="band">
+    <header class="section-head">
+      <h2>Run it your way</h2>
+      <p>One image and one binary. Replicas share nothing but a bucket.</p>
+    </header>
+    <div class="ways">
+      <article class="way">
+        <h3>One container</h3>
+        <p>Everything the service needs is in one hardened image. No Node, Java or Chromium.</p>
+        <code>docker run -p 127.0.0.1:9027:9027 {IMAGE}</code>
+        <a class="way-link" href="/docs/operate/docker/">Run it in Docker <Icon name="arrow" /></a>
+      </article>
+      <article class="way">
+        <h3>Many replicas</h3>
+        <p>Point every replica at one S3 bucket or shared volume. Upload a template to one, and render it from any.</p>
+        <code>RUSTICDOC_STORE=s3://my-bucket/rusticdoc</code>
+        <a class="way-link" href="/docs/operate/many-containers/">Run many containers <Icon name="arrow" /></a>
+      </article>
+      <article class="way">
+        <h3>The command line</h3>
+        <p>The same binary renders on your machine or in a CI job, with no server. Converting needs LibreOffice installed.</p>
+        <code>rusticdoc render letter.txt --data data.json --steps convert -o letter.pdf</code>
+        <a class="way-link" href="/docs/reference/cli/">Use the CLI <Icon name="arrow" /></a>
+      </article>
+    </div>
+  </section>
+
+  <section class="band">
+    <header class="section-head">
+      <h2>Fits the stack you already run</h2>
+    </header>
+    <ul class="stack">
+      {stack.map((s) => (
+        <li>
+          <a href={s.href}>
+            <span class="tile"><Icon name={s.icon} /></span>
+            <strong>{s.title}</strong>
+            <span>{s.text}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  <section class="band">
+    <div class="two wide-right">
+      <header class="section-head left">
+        <h2>Built to take documents from strangers</h2>
+        <p>A document service reads hostile files by design. These attacks were run at full size against a container limited to 3 GiB, before and after the fixes.</p>
+        <p class="more"><a href="/security/">What it protects, and what’s left to you</a></p>
+      </header>
+      <div class="table-scroll flush" role="region" aria-label="Attack results" tabindex="0">
+        <table class="results">
+          <thead><tr><th scope="col">Attack</th><th scope="col">Before</th><th scope="col">Now</th></tr></thead>
+          <tbody>
+            <tr><td>40 doublings of a template variable</td><td>Killed, out of memory</td><td><code>413</code> in under a second</td></tr>
+            <tr><td>40 concurrent 60 MB uploads</td><td>Killed, out of memory</td><td>Refused at a 1.31 GiB peak</td></tr>
+            <tr><td>840,000 same-named form parts</td><td>No answer in 150 s</td><td><code>400</code> in 6 ms</td></tr>
+            <tr><td>Stylesheet link in a converted HTML file</td><td>Fetched by LibreOffice</td><td>No request leaves</td></tr>
+            <tr><td>Service secrets in <code>/proc/1/environ</code></td><td>Readable by LibreOffice</td><td>Permission denied</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <header class="section-head">
+      <h2>Moving from another tool</h2>
+    </header>
+    <div class="moves">
+      <article class="move">
+        <h3>From Gotenberg 8</h3>
+        <p>The <code>/forms/*</code> routes answer the way Gotenberg 8.39 does, with its file names, headers and error text. Replayed against both images, 310 of Gotenberg’s own 326 scenarios behave the same. The other 16 select PDFtk or expect Chromium.</p>
+        <p>There’s no browser, so keep Gotenberg for turning web pages into PDFs.</p>
+        <a class="way-link" href="/docs/guides/from-gotenberg/">Read the migration guide <Icon name="arrow" /></a>
+      </article>
+      <article class="move">
+        <h3>From Carbone</h3>
+        <p>You keep your Office files and rewrite their tags: <code>{'{d.customer.name}'}</code> becomes <code>{'{{ customer.name }}'}</code>. Images, barcodes, colours, charts and HTML are all in the open-source build.</p>
+        <a class="way-link" href="/docs/guides/from-carbone/">Read the template guide <Icon name="arrow" /></a>
+        <a class="way-link" href="/compare/">Compare all three <Icon name="arrow" /></a>
+      </article>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="two faq-wrap">
+      <header class="section-head left">
+        <h2>Questions</h2>
+        <p>Something else? <a href={`${REPO}/issues`}>Ask on GitHub</a>.</p>
+      </header>
+      <div class="faq">
+        {faq.map((f) => (
+          <details>
+            <summary>{f.q}</summary>
+            <p>{f.a}</p>
+          </details>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="closing">
+    <div class="closing-text">
+      <h2>Fill your first template</h2>
+      <p>The quickstart goes from nothing to a filled invoice in a few commands, with a sample template and data to download.</p>
+      <p class="actions">
+        <a class="button" href="/docs/start/quickstart/">Read the quickstart</a>
+        <a class="button secondary" href="/status/">See what’s unproven</a>
+      </p>
+    </div>
+    <div class="terminal" role="region" aria-label="Quickstart commands" tabindex="0">
+      <p class="terminal-bar" aria-hidden="true"><i></i><i></i><i></i></p>
+      <pre><code set:html={hl(`# Start the service
+docker run -d -p 127.0.0.1:9027:9027 \\
+  ${IMAGE}
+
+# Fill the sample invoice and convert it
+curl http://localhost:9027/v1/render \\
+  -F template=@invoice-template.docx \\
+  -F "data=<invoice.json" \\
+  -F steps=convert -o invoice.pdf`)} /></pre>
+    </div>
+  </section>
+</Base>
+
+<script>
+  // Tabs: arrow keys move between them, as the ARIA pattern describes.
+  for (const root of document.querySelectorAll<HTMLElement>('[data-tabs]')) {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const select = (tab: HTMLButtonElement, focus = false) => {
+      for (const t of tabs) {
+        const on = t === tab;
+        t.setAttribute('aria-selected', String(on));
+        t.tabIndex = on ? 0 : -1;
+        const panel = document.getElementById(t.getAttribute('aria-controls') ?? '');
+        if (panel) panel.hidden = !on;
+      }
+      if (focus) tab.focus();
+    };
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => select(tab));
+      tab.addEventListener('keydown', (e) => {
+        const n = tabs.length;
+        const to = e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i - 1 + n) % n : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1;
+        if (to >= 0) { e.preventDefault(); select(tabs[to], true); }
+      });
+    });
+  }
+</script>

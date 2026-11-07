@@ -1,0 +1,53 @@
+---
+import Base from '../layouts/Base.astro';
+const Y = 'Yes';
+const rows: [string, string, string, string][] = [
+  ['Fills templates from JSON', Y, 'No', Y],
+  ['Tag style', '<code>{{ customer.name }}</code>', 'Not applicable', '<code>{d.customer.name}</code>'],
+  ['Images, barcodes, colours, charts and HTML in templates', 'Included', 'Not applicable', 'Paid Enterprise feature'],
+  ['Office documents to PDF', 'Yes, with LibreOffice', 'Yes, with LibreOffice', 'Yes'],
+  ['Web pages and HTML to PDF through a browser', 'No: there is no browser in the image', 'Yes, with Chromium', 'See its documentation'],
+  ['Merge, watermark, encrypt and attach to PDFs', 'Included', 'Included', 'Paid Enterprise feature'],
+  ['PDF/A and PDF/UA', 'Included', 'Included', 'Included'],
+  ['Cryptographic PDF signatures', 'No: it places a signature image only', 'Yes', 'Paid Enterprise feature, "PDF Signature"'],
+  ['Stored templates over an API', 'Included', 'Not applicable', 'Included, "Template Manager"'],
+  ['Hosted service', 'No', 'No', 'Yes, Carbone Cloud, including a free tier'],
+  ['Visual template editor', 'No: write templates in Word or LibreOffice', 'Not applicable', 'Yes, Designer Studio'],
+  ['Licence', 'Apache-2.0', 'MIT', 'Community under its own licence, which restricts hosted and competing use; Enterprise is paid'],
+  ['Maturity', 'First release, little production use', 'Established and widely deployed', 'Established commercial product'],
+];
+---
+<Base title="Compare rusticdoc, Gotenberg and Carbone" description="What rusticdoc, Gotenberg and Carbone each do, and when to choose each one." path="/compare/">
+  <header class="page-head">
+    <h1>rusticdoc, Gotenberg and Carbone</h1>
+    <p>Each one does a different job well. Here's how to choose, and what each includes.</p>
+  </header>
+  <section class="band">
+    <div class="wrap">
+      <div class="prose">
+        <h2>Which one to choose</h2>
+        <ul>
+          <li><strong>Choose Gotenberg</strong> to turn web pages or HTML into PDFs, to sign PDFs cryptographically, or if you need a tool that's been proven in production for years.</li>
+          <li><strong>Choose Carbone</strong> if you want a hosted API, a visual template editor, commercial support or AI document generation.</li>
+          <li><strong>Choose rusticdoc</strong> to fill Office and PDF templates on your own servers, with images, barcodes, charts and PDF finishing under one open-source licence, and you can accept a first release.</li>
+        </ul>
+      </div>
+      <h2 class="spaced">Side by side</h2>
+      <div class="table-scroll" role="region" aria-label="Comparison of rusticdoc, Gotenberg and Carbone" tabindex="0">
+        <table class="compare">
+          <thead><tr><th scope="col"><span class="sr">Feature</span></th><th scope="col">rusticdoc 0.1</th><th scope="col">Gotenberg</th><th scope="col">Carbone</th></tr></thead>
+          <tbody>
+            {rows.map(([name, a, b, c]) => (
+              <tr><th scope="row">{name}</th><td set:html={a} /><td set:html={b} /><td set:html={c} /></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="sources">Checked on 6 November 2026 against <a href="https://github.com/gotenberg/gotenberg">Gotenberg's repository</a> and <a href="https://carbone.io/pricing.html">Carbone's pricing page</a>. Both products change, so check their own documentation before you decide. "Paid Enterprise feature" and "Included" describe Carbone's self-hosted plans as that page lists them. If something here is wrong, <a href="https://github.com/vmosoti/rusticdoc/issues">open an issue</a>.</p>
+      <div class="prose spaced">
+        <h2>Compatibility</h2>
+        <p>rusticdoc answers Gotenberg 8.39's <code>/forms/*</code> routes. It hasn't been tested against the changes in Gotenberg 9. See <a href="/docs/guides/from-gotenberg/">Moving from Gotenberg 8</a> and <a href="/docs/guides/from-carbone/">Moving from Carbone</a>.</p>
+      </div>
+    </div>
+  </section>
+</Base>

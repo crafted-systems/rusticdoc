@@ -1,0 +1,3092 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "rusticdoc",
+    "description": "Fills Office and PDF templates from JSON, converts documents with LibreOffice, and runs PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Liveness. With credentials configured, a caller without them sees the status\nand nothing else.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Service status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Prometheus text format. With credentials configured it needs them too, unless\n`RUSTICDOC_METRICS_PUBLIC` is set.",
+        "operationId": "metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus text format",
+            "content": {
+              "text/plain": {}
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Readiness: liveness, and with a store, this replica's copy of the stored fonts\nbeing complete. A load balancer should send no documents here before that,\nbecause they would quietly come out in a fallback font.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "description": "Service status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/convert": {
+      "post": {
+        "tags": [
+          "convert"
+        ],
+        "summary": "Converts uploads with LibreOffice and runs any post-processing fields.\nSeveral files come back as a ZIP, or as one PDF with `merge=true`.",
+        "operationId": "convert",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The converted file, or a ZIP of them",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An engine is unavailable or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/fonts": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Lists the fonts LibreOffice and the PDF stage can use.",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "The loaded fonts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FontSchema"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,\nor one such file. Takes an admin key. They are in use on this replica when this\nreturns, and on the others within `syncIntervalSeconds`.",
+        "operationId": "uploadFonts",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/FontUploadForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FontsStored"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not fonts, or too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs an admin key, or the store is full",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/fonts/reload": {
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Rescans the fonts directory and restarts idle LibreOffice workers, so a\nnew font needs no container restart. Busy workers restart after their\ncurrent job.",
+        "operationId": "reload",
+        "responses": {
+          "200": {
+            "description": "What is loaded now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reloaded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Reloaded moments ago",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A worker could not restart",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/fonts/{id}": {
+      "delete": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Deletes a stored font. Takes an admin key. It leaves this replica when this\nreturns, and the others within the sync interval. Documents that name it fall\nback to another font.",
+        "operationId": "deleteFont",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The font's id, from `GET /v1/fonts`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "403": {
+            "description": "Needs an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stored font",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/bookmarks/read": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Reads the outline of each PDF sent, keyed by file name.",
+        "operationId": "bookmarks_read",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per file name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/bookmarks/write": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Replaces the outline.",
+        "operationId": "bookmarks_write",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/BookmarksWriteForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The PDF with its outline replaced",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/convert": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Gotenberg's `/forms/pdfengines/convert`: PDFs to PDF/A or PDF/UA through\nLibreOffice, with the same post-processing fields.",
+        "operationId": "convert_pdf",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The converted PDF, or a ZIP of them",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An engine is unavailable or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/embed": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Attaches files to a PDF.",
+        "operationId": "embed",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The PDF with attachments",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/encrypt": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Encrypts a PDF with AES-256.",
+        "operationId": "encrypt",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/EncryptForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The encrypted PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An engine is unavailable or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/factur-x": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Embeds Factur-X invoice XML and marks the PDF for it.",
+        "operationId": "facturx",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/FacturxForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The Factur-X PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/flatten": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Flattens forms and annotations into the page content.",
+        "operationId": "flatten",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The flattened PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/forms/fields": {
+      "post": {
+        "tags": [
+          "pdf-forms"
+        ],
+        "summary": "Lists a PDF's form fields with their kinds, pages and values.",
+        "operationId": "fields",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The form fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FieldSchema"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not supported in this version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/forms/fill": {
+      "post": {
+        "tags": [
+          "pdf-forms"
+        ],
+        "summary": "Fills a PDF form from data, applying tags in annotations, optionally\nflattening the result.",
+        "operationId": "fill",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/FillForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The filled PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template failed to render",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not supported in this version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/merge": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Merges PDFs in the order sent.",
+        "operationId": "merge",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The merged PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An engine is unavailable or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/metadata/read": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Reads the metadata of each PDF sent, keyed by file name.",
+        "operationId": "metadata_read",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per file name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/metadata/write": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Writes metadata keys; existing keys not named are kept.",
+        "operationId": "metadata_write",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataWriteForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The PDF with its metadata changed",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/optimize": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Recompresses streams and drops unused objects.",
+        "operationId": "optimize",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The smaller PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/overlay": {
+      "post": {
+        "tags": [
+          "pdf-forms"
+        ],
+        "summary": "Lays the second PDF over the first, page by page.",
+        "operationId": "overlay",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The combined PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not supported in this version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/rotate": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Rotates pages by 90, 180 or 270 degrees.",
+        "operationId": "rotate",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rotated PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/sign": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Places signature images at exact coordinates. This draws the image; it\nis not a cryptographic signature.",
+        "operationId": "sign",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SignForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The signed PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/split": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Splits a PDF by page ranges or into fixed intervals; several outputs\ncome back as a ZIP.",
+        "operationId": "split",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A PDF, or a ZIP of PDFs",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/stamp": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Puts text, an image or a PDF over the content of each page.",
+        "operationId": "stamp",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stamped PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/pdf/watermark": {
+      "post": {
+        "tags": [
+          "pdf"
+        ],
+        "summary": "Puts text, an image or a PDF under the content of each page.",
+        "operationId": "watermark",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The watermarked PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/render": {
+      "post": {
+        "tags": [
+          "render"
+        ],
+        "summary": "Fills a template and runs the steps.",
+        "description": "Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its\nown key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself\nwhen the service requires no credentials; `rusticdoc webhook-secret` prints it.",
+        "operationId": "render",
+        "parameters": [
+          {
+            "name": "X-Rusticdoc-Webhook-Url",
+            "in": "header",
+            "description": "Deliver the result here instead of in the response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-Rusticdoc-Webhook-Error-Url",
+            "in": "header",
+            "description": "Deliver failures here as JSON",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rendered file",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credentials required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template failed to render",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not supported in this version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An engine is unavailable or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/render/batch": {
+      "post": {
+        "tags": [
+          "render"
+        ],
+        "summary": "Renders the template once per element of an array in the data and\nreturns the files in a ZIP, as Carbone's batch rendering does.",
+        "description": "`splitBy` names the array with a dotted path such as `items` or\n`order.lines`. Each render sees the whole data with that array replaced\nby the one element, plus `item` (the element) and `batch` (`index`,\n`count`). `batchName` is a template for each file's name, default\n`{{ batch.index }}`.",
+        "operationId": "batch",
+        "parameters": [
+          {
+            "name": "X-Rusticdoc-Webhook-Url",
+            "in": "header",
+            "description": "Deliver the ZIP here instead of in the response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A ZIP of the rendered files",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Accepted; the result goes to the webhook"
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template failed to render",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Lists this caller's templates, oldest first.",
+        "operationId": "listTemplates",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many to return, up to 200. Default 50.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`nextCursor` from the page before.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateList"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Stores a template and returns its id. Syntax is checked now, without data, so a\nbroken template is refused here rather than at its first render. The content\nnever changes: to change a template, store the new one and use its id.",
+        "operationId": "uploadTemplate",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateUploadForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateSchema"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a template format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This caller's quota is used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template has syntax errors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/validate": {
+      "post": {
+        "tags": [
+          "render"
+        ],
+        "summary": "Checks a template against sample data without converting anything.",
+        "operationId": "validate",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The validation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Validation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/{id}": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "One template's details.",
+        "operationId": "getTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The template's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateSchema"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Deletes a template. Every replica stops serving it at once.",
+        "operationId": "deleteTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The template's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/{id}/content": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Downloads a template as it was uploaded.",
+        "operationId": "downloadTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The template's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/version": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Engine versions and paths.",
+        "operationId": "version",
+        "responses": {
+          "200": {
+            "description": "Version and engines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BinaryFile": {
+        "type": "string",
+        "format": "binary",
+        "description": "A file in a response, for the API description: generated clients return\nit as bytes."
+      },
+      "BookmarksWriteForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "bookmarks"
+        ],
+        "properties": {
+          "bookmarks": {
+            "description": "JSON array of `{title, page, children}`."
+          },
+          "files": {
+            "type": "string",
+            "format": "binary"
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ConvertForm": {
+        "type": "object",
+        "description": "The multipart form `/v1/convert` and `/forms/libreoffice/convert` accept.\nGotenberg's LibreOffice options (`landscape`, `nativePageRanges`,\n`exportFormFields`, `singlePageSheets`, `password`, ...) and its\npost-processing fields (`merge`, `splitMode`, `watermarkSource`,\n`stampSource`, `rotateAngle`, `flatten`, `metadata`, `bookmarks`,\n`embeds`, `facturxXml`, `userPassword`, ...) are accepted as well.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "One or more documents."
+          },
+          "landscape": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "merge": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Merge several inputs into one PDF instead of returning a ZIP."
+          },
+          "nativePageRanges": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "1-3,5"
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opens a protected input."
+          },
+          "pdfa": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PDF/A level: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`, `PDF/A-4`."
+          },
+          "pdfua": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Export as PDF/UA."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output format. Default `pdf`."
+          }
+        }
+      },
+      "EmbedForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF first, then the files to attach."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "EncryptForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "ownerPassword"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary",
+            "description": "One PDF."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ownerPassword": {
+            "type": "string"
+          },
+          "userPassword": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "EngineStatus": {
+        "type": "object",
+        "required": [
+          "libreoffice",
+          "qpdf"
+        ],
+        "properties": {
+          "libreoffice": {
+            "type": "boolean"
+          },
+          "qpdf": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "The JSON body of every error response.",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "A stable, machine-readable kind.",
+            "example": "invalid_request"
+          },
+          "message": {
+            "type": "string",
+            "description": "What went wrong, for a person.",
+            "example": "unknown step 'teleport'"
+          }
+        }
+      },
+      "FaceSchema": {
+        "type": "object",
+        "required": [
+          "family",
+          "style",
+          "weight"
+        ],
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "style": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "FacturxForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "profile"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF/A-3 invoice, then the Factur-X XML."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": "string",
+            "description": "`MINIMUM`, `BASIC_WL`, `BASIC`, `EN16931` or `EXTENDED`.",
+            "example": "EN16931"
+          }
+        }
+      },
+      "FieldSchema": {
+        "type": "object",
+        "description": "One form field, as `/v1/pdf/forms/fields` lists them.",
+        "required": [
+          "name",
+          "kind",
+          "page",
+          "options"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`text`, `checkbox`, `radio`, `choice`, `signature` or `button`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Fully qualified name, such as `customer.name`."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based page of the first widget.",
+            "minimum": 0
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "FillForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "ctx": {},
+          "data": {
+            "description": "JSON object, sent as text or as a file; a field named `customer.name` takes\nthat path."
+          },
+          "files": {
+            "type": "string",
+            "format": "binary",
+            "description": "The PDF with form fields, and optionally tags in annotations."
+          },
+          "flatten": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Fix the values into the page content."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stripAnnotations": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Remove the annotations that carried tags. Default true."
+          }
+        }
+      },
+      "FontSchema": {
+        "type": "object",
+        "required": [
+          "family",
+          "style",
+          "weight",
+          "file",
+          "mounted"
+        ],
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string",
+            "description": "The file's base name."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stored font this face belongs to, for deleting it. Absent for fonts\nin the image or the mounted directory."
+          },
+          "mounted": {
+            "type": "boolean",
+            "description": "True when it came from the mounted fonts directory."
+          },
+          "style": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "FontUploadForm": {
+        "type": "object",
+        "description": "The multipart form `POST /v1/fonts` accepts.",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "A ZIP of TTF, OTF or TTC files, or one such file."
+          }
+        }
+      },
+      "FontsStored": {
+        "type": "object",
+        "description": "What an upload stored.",
+        "required": [
+          "fonts",
+          "skipped",
+          "syncIntervalSeconds"
+        ],
+        "properties": {
+          "fonts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoredFontSchema"
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedSchema"
+            },
+            "description": "Files in the ZIP that were left out, and why."
+          },
+          "syncIntervalSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "In use on this replica now, and on the others within this many seconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "uptime_seconds",
+          "engines",
+          "details"
+        ],
+        "properties": {
+          "details": {
+            "description": "Per-module status in Gotenberg's shape."
+          },
+          "engines": {
+            "$ref": "#/components/schemas/EngineStatus"
+          },
+          "status": {
+            "type": "string",
+            "description": "`up` when the service answers.",
+            "example": "up"
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "MergeForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Two or more PDFs, merged in order."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MetadataWriteForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "metadata"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary"
+          },
+          "metadata": {
+            "description": "JSON object of keys such as `Title`, `Author`, `Subject`, `Keywords`."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OverlayForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Two PDFs: the base, then the overlay laid over it page by page."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PdfForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF to work on. Several for merge."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Reloaded": {
+        "type": "object",
+        "required": [
+          "families",
+          "faces",
+          "changed"
+        ],
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "False when the directory has not changed, so no worker restarted."
+          },
+          "faces": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "families": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RenderForm": {
+        "type": "object",
+        "description": "The multipart form `/v1/render` accepts. Documented here; parsed by hand.",
+        "required": [
+          "template",
+          "files"
+        ],
+        "properties": {
+          "ctx": {
+            "description": "JSON object visible as `ctx`, sent as text or as a file."
+          },
+          "data": {
+            "description": "JSON object the template sees as its root, sent as text or as a file."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Further files, used by `merge`."
+          },
+          "metadata": {
+            "description": "JSON object of metadata fields for `metadata`."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name of the result, without extension."
+          },
+          "owner_password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pdfa": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`."
+          },
+          "steps": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`.",
+            "example": "convert,pdfa,encrypt"
+          },
+          "template": {
+            "type": "string",
+            "format": "binary",
+            "description": "The template file. Send this or `templateId`."
+          },
+          "templateId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of a stored template, from `POST /v1/templates`. Send this or\n`template`. Files in the form are then only further inputs, for `merge`."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output format for `convert`. Default `pdf`."
+          },
+          "user_password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RotateForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "rotation"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary"
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pages": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Page selection such as `1-3,5`; all when empty."
+          },
+          "rotation": {
+            "type": "string",
+            "description": "90, 180 or 270.",
+            "example": "90"
+          }
+        }
+      },
+      "SignForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "page",
+          "x",
+          "y"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF first, then one PNG or JPEG per placement."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based page of each signature; repeat the field for several.",
+            "minimum": 0
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Width in points. Default the image's natural size."
+          },
+          "x": {
+            "type": "number",
+            "format": "float",
+            "description": "Points from the page's left edge to the image's left edge."
+          },
+          "y": {
+            "type": "number",
+            "format": "float",
+            "description": "Points from the page's bottom edge to the image's bottom edge."
+          }
+        }
+      },
+      "SkippedSchema": {
+        "type": "object",
+        "required": [
+          "file",
+          "reason"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "SplitForm": {
+        "type": "object",
+        "required": [
+          "files",
+          "splitMode",
+          "splitSpan"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary"
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "splitMode": {
+            "type": "string",
+            "description": "`pages` or `intervals`.",
+            "example": "pages"
+          },
+          "splitSpan": {
+            "type": "string",
+            "description": "For `pages`: ranges such as `1-3,5`. For `intervals`: pages per file.",
+            "example": "1-2"
+          },
+          "splitUnify": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "For `pages`: one file holding every range instead of one per range."
+          }
+        }
+      },
+      "StoredFontSchema": {
+        "type": "object",
+        "description": "A stored font.",
+        "required": [
+          "id",
+          "file",
+          "size",
+          "faces",
+          "uploadedAt"
+        ],
+        "properties": {
+          "faces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FaceSchema"
+            }
+          },
+          "file": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "The hex SHA-256 of the file, so storing it twice changes nothing."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "uploadedAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          }
+        }
+      },
+      "TemplateList": {
+        "type": "object",
+        "description": "One page of templates.",
+        "required": [
+          "templates"
+        ],
+        "properties": {
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page. Absent on the last."
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateSchema"
+            }
+          }
+        }
+      },
+      "TemplateSchema": {
+        "type": "object",
+        "description": "A stored template.",
+        "required": [
+          "id",
+          "name",
+          "format",
+          "size",
+          "sha256",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "format": {
+            "type": "string",
+            "example": "docx"
+          },
+          "id": {
+            "type": "string",
+            "description": "Pass as `templateId` to `/v1/render`, `/v1/render/batch` or `/v1/templates/validate`.",
+            "example": "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"
+          },
+          "name": {
+            "type": "string",
+            "example": "invoice.docx"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Hex SHA-256 of the content."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TemplateUploadForm": {
+        "type": "object",
+        "description": "The multipart form `POST /v1/templates` accepts.",
+        "required": [
+          "template"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A name for it, in place of the file's. The extension stays the file's."
+          },
+          "template": {
+            "type": "string",
+            "format": "binary",
+            "description": "The template: DOCX, XLSX, PPTX, ODT, ODS, ODP, PDF or a text format."
+          }
+        }
+      },
+      "Validation": {
+        "type": "object",
+        "required": [
+          "ok",
+          "template_hash",
+          "format",
+          "engine",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every problem found: `severity`, `message`, and a `location` with\n`part`, `place` and `snippet` where known."
+          },
+          "engine": {
+            "type": "string",
+            "description": "The engine that would handle it: `office`, `text` or `none`."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first error, when `ok` is false."
+          },
+          "format": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "True when the template renders with the sample data."
+          },
+          "template_hash": {
+            "type": "string",
+            "description": "SHA-256 of the template, the cache key."
+          }
+        }
+      },
+      "Version": {
+        "type": "object",
+        "required": [
+          "version",
+          "engines"
+        ],
+        "properties": {
+          "engines": {
+            "description": "Paths of the engines in use, or null when absent."
+          },
+          "version": {
+            "type": "string",
+            "example": "0.1.0"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "api_key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "basic": {
+        "type": "http",
+        "scheme": "basic"
+      },
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "render",
+      "description": "Templates in, documents out"
+    },
+    {
+      "name": "convert",
+      "description": "Documents in, converted documents out"
+    },
+    {
+      "name": "pdf",
+      "description": "PDF operations"
+    },
+    {
+      "name": "pdf-forms",
+      "description": "PDF templates: form fields, tags in annotations, overlays"
+    },
+    {
+      "name": "templates",
+      "description": "Store a template and render it by id from any replica"
+    },
+    {
+      "name": "fonts",
+      "description": "List, upload and delete fonts, and reload a mounted directory"
+    },
+    {
+      "name": "service",
+      "description": "Health, version, metrics"
+    }
+  ]
+}
