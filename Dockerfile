@@ -20,6 +20,10 @@ RUN CGO_ENABLED=0 GOBIN=/out go install -ldflags "-s -w -X 'main.version=$PDFCPU
 # ----------------------------------------------
 FROM rust:1.99.1-slim-trixie@sha256:7eab7ce19273ce785e0ca7578bdf7bc1fcbae621775a8197379a04c9f6e03cd5 AS build
 WORKDIR /src
+# Servo's style engine, under Fulgur, generates code with Python at build time.
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 # Dependencies first, so source edits do not refetch them.
 COPY Cargo.toml Cargo.lock ./
 COPY crates/template/Cargo.toml crates/template/Cargo.toml

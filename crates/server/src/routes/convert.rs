@@ -37,11 +37,21 @@ pub struct ConvertForm {
     pub native_page_ranges: Option<String>,
     /// Opens a protected input.
     pub password: Option<String>,
+    /// What turns HTML into PDF: `fulgur` (default), a layout engine with
+    /// no browser and no network, or `libreoffice`.
+    #[schema(rename = "htmlEngine", example = "fulgur")]
+    pub html_engine: Option<String>,
+    /// Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names
+    /// by file name, as in `<img src="logo.png">`. Every stylesheet applies to
+    /// the whole page. Nothing is fetched from anywhere else.
+    #[schema(value_type = Vec<String>, format = Binary, required = false)]
+    pub assets: Option<Vec<String>>,
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
 }
 
-/// Converts uploads with LibreOffice and runs any post-processing fields.
+/// Converts uploads and runs any post-processing fields. HTML goes to Fulgur
+/// unless `htmlEngine` says `libreoffice`; everything else to LibreOffice.
 /// Several files come back as a ZIP, or as one PDF with `merge=true`.
 #[utoipa::path(
     post, path = "/v1/convert", tag = "convert",

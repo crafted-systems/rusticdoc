@@ -109,6 +109,13 @@ struct RenderArgs {
     /// Extra PDFs for `merge`.
     #[arg(long = "merge-with")]
     merge_with: Vec<PathBuf>,
+    /// An image, stylesheet or font an HTML page names by file name.
+    /// Repeat it for each.
+    #[arg(long = "asset")]
+    assets: Vec<PathBuf>,
+    /// What turns HTML into PDF: fulgur or libreoffice.
+    #[arg(long, default_value = "fulgur")]
+    html_engine: String,
     /// Where to write the result. Defaults to the template's name with the
     /// output extension.
     #[arg(short, long)]
@@ -127,9 +134,34 @@ struct ConvertArgs {
     /// Merge all inputs into one PDF.
     #[arg(long)]
     merge: bool,
+    /// An image, stylesheet or font an HTML page names by file name.
+    /// Repeat it for each.
+    #[arg(long = "asset")]
+    assets: Vec<PathBuf>,
+    /// What turns HTML into PDF: fulgur or libreoffice.
+    #[arg(long, default_value = "fulgur")]
+    html_engine: String,
     /// Output file (one input or --merge), or directory (several inputs).
     #[arg(short, long)]
     output: Option<PathBuf>,
+}
+
+/// Conversion options carrying the HTML engine and the assets read from disk.
+fn html_options(
+    assets: &[PathBuf],
+    engine: &str,
+) -> anyhow::Result<rusticdoc_core::convert::ConvertOptions> {
+    let mut options = rusticdoc_core::convert::ConvertOptions {
+        html_engine: rusticdoc_core::html::HtmlEngine::parse(engine)?,
+        ..Default::default()
+    };
+    let docs = assets
+        .iter()
+        .map(|p| read_doc(p))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    rusticdoc_core::html::check_assets(&docs)?;
+    options.assets = docs.into_iter().map(|d| (d.name, d.bytes)).collect();
+    Ok(options)
 }
 
 fn main() -> anyhow::Result<std::process::ExitCode> {
@@ -281,6 +313,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 fields.insert("ownerPassword".into(), p.clone());
             }
             req.steps = parse_steps(&args.steps, &fields)?;
+            req.convert_options = html_options(&args.assets, &args.html_engine)?;
             req.extra = args
                 .merge_with
                 .iter()
@@ -304,6 +337,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             let pipeline = pipeline(&config);
             let to = Format::parse(&args.to)?;
+            let options = html_options(&args.assets, &args.html_engine)?;
             let step = match &args.pdfa {
                 Some(level) => Step::Pdfa {
                     level: rusticdoc_core::job::PdfaLevel::parse(level)?,
@@ -313,11 +347,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             if args.merge || args.files.len() == 1 {
                 let mut req = RenderRequest::new(read_doc(&args.files[0])?);
                 req.templating = false;
+                req.convert_options = options.clone();
                 req.steps = vec![step.clone()];
                 if args.merge && args.files.len() > 1 {
                     for f in &args.files[1..] {
                         let mut r = RenderRequest::new(read_doc(f)?);
                         r.templating = false;
+                        r.convert_options = options.clone();
                         r.steps = vec![Step::Convert { to: Format::Pdf }];
                         let o = pipeline.run(r).await?;
                         req.extra.push(Document::new(o.name, o.bytes));
@@ -340,6 +376,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 for f in &args.files {
                     let mut req = RenderRequest::new(read_doc(f)?);
                     req.templating = false;
+                    req.convert_options = options.clone();
                     req.steps = vec![step.clone()];
                     let out = pipeline.run(req).await?;
                     let path = dir.join(&out.name);

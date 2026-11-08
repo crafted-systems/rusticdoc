@@ -9,6 +9,7 @@ pub mod config;
 pub mod convert;
 pub mod error;
 pub mod fonts;
+pub mod html;
 pub mod job;
 pub mod limits;
 pub mod pdfform;

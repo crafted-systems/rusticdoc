@@ -68,6 +68,11 @@ pub struct ConvertOptions {
     /// Fonts for this conversion alone, as (name, bytes). The job runs on
     /// a dedicated worker that is discarded afterwards, so it is slower.
     pub fonts: Vec<(String, Vec<u8>)>,
+    /// What turns HTML into PDF. Fulgur unless the request names LibreOffice.
+    pub html_engine: crate::html::HtmlEngine,
+    /// Images, stylesheets and fonts an HTML page names by file name, for
+    /// Fulgur. LibreOffice never sees them.
+    pub assets: Vec<(String, bytes::Bytes)>,
     /// `UseTaggedPDF`, implied by `pdfua`.
     pub generate_tagged_pdf: bool,
     /// Refresh indexes and tables of contents before exporting.
@@ -144,6 +149,8 @@ impl Default for ConvertOptions {
             max_image_resolution: 300,
             password: None,
             fonts: Vec::new(),
+            html_engine: crate::html::HtmlEngine::default(),
+            assets: Vec::new(),
             generate_tagged_pdf: false,
             update_indexes: false,
             initial_view: 0,
@@ -308,6 +315,8 @@ impl fmt::Debug for ConvertOptions {
             .field("landscape", &self.landscape)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("fonts", &self.fonts.len())
+            .field("html_engine", &self.html_engine)
+            .field("assets", &self.assets.len())
             .finish()
     }
 }

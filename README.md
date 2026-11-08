@@ -1,8 +1,8 @@
 # rusticdoc
 
-A document engine in Rust: fills Office and PDF templates from JSON with `{{customer.name}}` tags, converts the result with LibreOffice, and finishes it with PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously; the OpenAPI description feeds the SDKs.
+A document engine in Rust: fills Office, HTML and PDF templates from JSON with `{{customer.name}}` tags, converts the result with LibreOffice or Fulgur, and finishes it with PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously; the OpenAPI description feeds the SDKs.
 
-It covers documents only: no HTML or URL rendering through a browser. It ships as one hardened image with no Node, Java or Chromium. LibreOffice does the conversions, driven through a small Python bridge, and qpdf and pdfcpu back the PDF stage alongside the built-in engine. The design is in [rusticdoc: a document engine in Rust](https://claude.ai/artifact/4ZBnc3L7jTH1ov5TKH8qs3), and what is done against it is in [docs/ROADMAP.md](docs/ROADMAP.md).
+It covers documents, not live web pages: HTML written for print is laid out by [Fulgur](https://github.com/fulgur-rs/fulgur) with no browser, and no URL is fetched or JavaScript run. It ships as one hardened image with no Node, Java or Chromium. LibreOffice does the Office conversions, driven through a small Python bridge, and qpdf and pdfcpu back the PDF stage alongside the built-in engine. The design is in [rusticdoc: a document engine in Rust](https://claude.ai/artifact/4ZBnc3L7jTH1ov5TKH8qs3), and what is done against it is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 Full documentation is at [rusticdoc.com/docs](https://rusticdoc.com/docs/), and its source is in [site/](site/).
 

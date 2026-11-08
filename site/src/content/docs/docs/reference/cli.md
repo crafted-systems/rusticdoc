@@ -63,6 +63,10 @@ Options:
           
       --merge-with <MERGE_WITH>
           Extra PDFs for `merge`
+      --asset <ASSETS>
+          An image, stylesheet or font an HTML page names by file name. Repeat it for each
+      --html-engine <HTML_ENGINE>
+          What turns HTML into PDF: fulgur or libreoffice [default: fulgur]
   -o, --output <OUTPUT>
           Where to write the result. Defaults to the template's name with the output extension
   -h, --help
@@ -80,12 +84,14 @@ Arguments:
   [FILES]...  Documents to convert
 
 Options:
-      --to <TO>          [default: pdf]
-  -v, --verbose...       Log verbosity: -v for debug, -vv for trace
-      --pdfa <PDFA>      Export PDF/A at this level instead of plain PDF
-      --merge            Merge all inputs into one PDF
-  -o, --output <OUTPUT>  Output file (one input or --merge), or directory (several inputs)
-  -h, --help             Print help
+      --to <TO>                    [default: pdf]
+  -v, --verbose...                 Log verbosity: -v for debug, -vv for trace
+      --pdfa <PDFA>                Export PDF/A at this level instead of plain PDF
+      --merge                      Merge all inputs into one PDF
+      --asset <ASSETS>             An image, stylesheet or font an HTML page names by file name. Repeat it for each
+      --html-engine <HTML_ENGINE>  What turns HTML into PDF: fulgur or libreoffice [default: fulgur]
+  -o, --output <OUTPUT>            Output file (one input or --merge), or directory (several inputs)
+  -h, --help                       Print help
 ```
 
 ### rusticdoc serve

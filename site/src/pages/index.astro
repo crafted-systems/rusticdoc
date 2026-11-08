@@ -62,8 +62,8 @@ Issued {{ issued | date("%d %B %Y") }}
     label: 'Convert',
     line: 'PDF or another format',
     title: 'Conversion with the network unplugged',
-    text: 'LibreOffice turns the filled file into a PDF or another Office format. It can’t reach the network or run macros while it works. Send several files and get them back merged or as a ZIP.',
-    points: ['Office, OpenDocument, HTML and text', 'PDF/A and PDF/UA on export', 'A warm pool, so no cold start'],
+    text: 'LibreOffice turns the filled file into a PDF or another Office format, and Fulgur lays out HTML written for print. Neither can reach the network while it works. Send several files and get them back merged or as a ZIP.',
+    points: ['Office, OpenDocument and text', 'HTML and CSS, laid out without a browser', 'PDF/A and PDF/UA on export'],
     code: `# Fill and convert in one call
 curl http://localhost:9027/v1/render \\
   -F template=@invoice-template.docx \\
@@ -148,7 +148,7 @@ const faq = [
   },
   {
     q: 'Can it turn web pages into PDFs?',
-    a: 'No. rusticdoc has no browser. LibreOffice can convert a simple HTML file, but pages that need a browser’s layout or JavaScript need a tool that runs one.',
+    a: 'HTML you write for print, yes: Fulgur lays out its CSS, page rules and images without a browser. Live web pages, no: nothing fetches a URL or runs JavaScript, so a page that needs them needs a tool that runs a browser.',
   },
   {
     q: 'Does it need internet access?',
@@ -259,7 +259,7 @@ Total due {{ total | currency(currency) }}
         <ul class="vs-list">
           <li><strong>Ordinary documents.</strong> Whoever owns the invoice edits it in Word.</li>
           <li><strong>One request.</strong> Fill, convert and finish in one call, or by webhook.</li>
-          <li><strong>No browser.</strong> LibreOffice converts, and can’t reach the network while it does.</li>
+          <li><strong>No browser.</strong> LibreOffice and Fulgur convert, and neither can reach the network while it does.</li>
         </ul>
       </div>
     </div>

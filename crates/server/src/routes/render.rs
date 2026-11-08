@@ -59,6 +59,15 @@ pub struct RenderForm {
     /// File name of the result, without extension.
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
+    /// What turns HTML into PDF: `fulgur` (default), a layout engine with
+    /// no browser and no network, or `libreoffice`.
+    #[schema(rename = "htmlEngine", example = "fulgur")]
+    pub html_engine: Option<String>,
+    /// Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names
+    /// by file name, as in `<img src="logo.png">`. Every stylesheet applies to
+    /// the whole page. Nothing is fetched from anywhere else.
+    #[schema(value_type = Vec<String>, format = Binary, required = false)]
+    pub assets: Option<Vec<String>>,
     /// Further files, used by `merge`.
     #[schema(value_type = Vec<String>, format = Binary)]
     pub files: Option<Vec<String>>,

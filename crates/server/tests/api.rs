@@ -1507,3 +1507,104 @@ async fn font_reload_is_rate_limited_and_skips_an_unchanged_directory() {
     let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
     assert_eq!(body["changed"], false);
 }
+
+#[tokio::test]
+async fn html_converts_with_fulgur_and_its_assets() {
+    let router = app(AppState::new(config()));
+    // A 1x1 PNG.
+    let logo: Vec<u8> = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    let html = br#"<!doctype html><html><body><h1>Invoice</h1><img src="logo.png" width="40" height="40"></body></html>"#;
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/convert",
+            &[
+                ("files", Some("invoice.html"), html.to_vec()),
+                ("assets", Some("logo.png"), logo),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"invoice.pdf\""
+    );
+    let pdf = bytes_of(res).await;
+    assert!(pdf.starts_with(b"%PDF-"));
+    assert!(String::from_utf8_lossy(&pdf).contains("/Image"));
+
+    // An HTML template is filled, then laid out.
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("letter.html"), "<p>Dear {{ name }}</p>"),
+                ("data", None, r#"{"name":"Ada"}"#),
+                ("steps", None, "convert"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+
+    // Asking for LibreOffice reaches LibreOffice, which this service lacks.
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/convert",
+            &[
+                ("files", Some("a.html"), "<p>x</p>"),
+                ("htmlEngine", None, "libreoffice"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    for (field, value, file) in [
+        ("htmlEngine", Some("chromium"), None),
+        ("assets", None, Some("script.js")),
+    ] {
+        let mut parts = vec![("files", Some("a.html"), "<p>x</p>".to_string())];
+        if let Some(v) = value {
+            parts.push((field, None, v.to_string()));
+        }
+        if let Some(f) = file {
+            parts.push((field, Some(f), "alert(1)".to_string()));
+        }
+        let parts: Vec<(&str, Option<&str>, &str)> =
+            parts.iter().map(|(a, b, c)| (*a, *b, c.as_str())).collect();
+        let res = router
+            .clone()
+            .oneshot(post_form("/v1/convert", &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{field}");
+    }
+}
+
+#[tokio::test]
+async fn disabling_conversion_stops_fulgur_too() {
+    let mut c = config();
+    c.convert_disabled = true;
+    let router = app(AppState::new(c));
+    let res = router
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("a.html"), "<p>x</p>"),
+                ("steps", None, "convert"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

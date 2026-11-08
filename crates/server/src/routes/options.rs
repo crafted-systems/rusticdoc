@@ -404,6 +404,16 @@ pub fn convert_options(form: &Form) -> ApiResult<rusticdoc_core::convert::Conver
             .map(|f| (f.name.clone(), f.bytes.to_vec()))
             .collect();
     }
+    if let Some(engine) = form.field("htmlEngine") {
+        o.html_engine = rusticdoc_core::html::HtmlEngine::parse(engine)?;
+    }
+    if let Some(assets) = form.by_field.get("assets") {
+        rusticdoc_core::html::check_assets(assets)?;
+        o.assets = assets
+            .iter()
+            .map(|a| (a.name.clone(), a.bytes.clone()))
+            .collect();
+    }
     o.validate()?;
     Ok(o)
 }

@@ -74,7 +74,7 @@
         "tags": [
           "convert"
         ],
-        "summary": "Converts uploads with LibreOffice and runs any post-processing fields.\nSeveral files come back as a ZIP, or as one PDF with `merge=true`.",
+        "summary": "Converts uploads and runs any post-processing fields. HTML goes to Fulgur\nunless `htmlEngine` says `libreoffice`; everything else to LibreOffice.\nSeveral files come back as a ZIP, or as one PDF with `merge=true`.",
         "operationId": "convert",
         "requestBody": {
           "content": {
@@ -2172,6 +2172,14 @@
           "files"
         ],
         "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names\nby file name, as in `<img src=\"logo.png\">`. Every stylesheet applies to\nthe whole page. Nothing is fetched from anywhere else."
+          },
           "files": {
             "type": "array",
             "items": {
@@ -2179,6 +2187,14 @@
               "format": "binary"
             },
             "description": "One or more documents."
+          },
+          "htmlEngine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What turns HTML into PDF: `fulgur` (default), a layout engine with\nno browser and no network, or `libreoffice`.",
+            "example": "fulgur"
           },
           "landscape": {
             "type": [
@@ -2673,6 +2689,14 @@
           "files"
         ],
         "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names\nby file name, as in `<img src=\"logo.png\">`. Every stylesheet applies to\nthe whole page. Nothing is fetched from anywhere else."
+          },
           "contactInfo": {
             "type": [
               "string",
@@ -2693,6 +2717,14 @@
               "format": "binary"
             },
             "description": "Further files, used by `merge`."
+          },
+          "htmlEngine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What turns HTML into PDF: `fulgur` (default), a layout engine with\nno browser and no network, or `libreoffice`.",
+            "example": "fulgur"
           },
           "location": {
             "type": [

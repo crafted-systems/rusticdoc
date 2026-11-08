@@ -278,18 +278,66 @@ impl Pipeline {
         })
     }
 
+    /// True when Fulgur lays out `doc`: HTML, Fulgur chosen, and no PDF/A,
+    /// which only LibreOffice writes.
+    fn fulgur_takes(&self, doc: &Document, options: &ConvertOptions) -> bool {
+        crate::html::is_html(doc)
+            && options.html_engine == crate::html::HtmlEngine::Fulgur
+            && options.pdfa.is_none()
+    }
+
+    /// HTML to PDF in the render workers, with the request's assets and fonts.
+    async fn fulgur(
+        &self,
+        doc: &Document,
+        options: &ConvertOptions,
+        pdfua: bool,
+    ) -> Result<Document> {
+        if self.engines.office_routes_disabled {
+            return Err(Error::EngineUnavailable(
+                "conversion is disabled on this service".into(),
+            ));
+        }
+        let assets: Vec<Document> = options
+            .assets
+            .iter()
+            .map(|(name, bytes)| Document::new(name.clone(), bytes.clone()))
+            .chain(
+                options
+                    .fonts
+                    .iter()
+                    .map(|(name, bytes)| Document::new(name.clone(), bytes.clone())),
+            )
+            .collect();
+        let html_options = crate::html::HtmlOptions {
+            landscape: options.landscape,
+            pdfua,
+        };
+        let pdf = self
+            .renderer
+            .html_to_pdf(doc, &assets, &html_options, self.timeout)
+            .await?;
+        Ok(Document::new(doc.with_extension("pdf"), pdf))
+    }
+
     /// One document through one step; `Merge` and `Split` are handled by
     /// the caller because they change the number of documents.
     async fn one(&self, step: &Step, doc: &Document, options: &ConvertOptions) -> Result<Document> {
         let t = self.timeout;
         let pdf = &self.engines.pdf;
         Ok(match step {
+            Step::Convert { to: Format::Pdf } if self.fulgur_takes(doc, options) => {
+                self.fulgur(doc, options, options.pdfua).await?
+            }
             Step::Convert { to } => {
                 check_convertible(doc)?;
                 self.engines
                     .libreoffice()?
                     .convert_with(doc, *to, options, t)
                     .await?
+            }
+            Step::Pdfua if self.fulgur_takes(doc, options) => {
+                self.fulgur(doc, options, true).await?
             }
             Step::Pdfa { level } => {
                 check_convertible(doc)?;

@@ -66,6 +66,8 @@ Needs credentials, if any are configured.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `files` | files | Yes | One or more documents. |
+| `assets` | files | No | Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names by file name, as in `<img src="logo.png">`. Every stylesheet applies to the whole page. Nothing is fetched from anywhere else. |
+| `htmlEngine` | string | No | What turns HTML into PDF: `fulgur` (default), a layout engine with no browser and no network, or `libreoffice`. |
 | `landscape` | boolean | No |  |
 | `merge` | boolean | No | Merge several inputs into one PDF instead of returning a ZIP. |
 | `nativePageRanges` | string | No |  |

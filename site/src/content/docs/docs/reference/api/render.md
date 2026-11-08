@@ -28,10 +28,12 @@ Needs credentials, if any are configured.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `assets` | files | No | Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names by file name, as in `<img src="logo.png">`. Every stylesheet applies to the whole page. Nothing is fetched from anywhere else. |
 | `contactInfo` | string | No | For `sign`: how to reach the signer. |
 | `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
 | `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
 | `files` | files | No | Further files, used by `merge`. |
+| `htmlEngine` | string | No | What turns HTML into PDF: `fulgur` (default), a layout engine with no browser and no network, or `libreoffice`. |
 | `location` | string | No | For `sign`: where it was signed. |
 | `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |
@@ -78,10 +80,12 @@ Needs credentials, if any are configured.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `assets` | files | No | Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names by file name, as in `<img src="logo.png">`. Every stylesheet applies to the whole page. Nothing is fetched from anywhere else. |
 | `contactInfo` | string | No | For `sign`: how to reach the signer. |
 | `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
 | `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
 | `files` | files | No | Further files, used by `merge`. |
+| `htmlEngine` | string | No | What turns HTML into PDF: `fulgur` (default), a layout engine with no browser and no network, or `libreoffice`. |
 | `location` | string | No | For `sign`: where it was signed. |
 | `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |
@@ -116,10 +120,12 @@ Needs credentials, if any are configured.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `assets` | files | No | Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names by file name, as in `<img src="logo.png">`. Every stylesheet applies to the whole page. Nothing is fetched from anywhere else. |
 | `contactInfo` | string | No | For `sign`: how to reach the signer. |
 | `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
 | `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
 | `files` | files | No | Further files, used by `merge`. |
+| `htmlEngine` | string | No | What turns HTML into PDF: `fulgur` (default), a layout engine with no browser and no network, or `libreoffice`. |
 | `location` | string | No | For `sign`: where it was signed. |
 | `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |

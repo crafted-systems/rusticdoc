@@ -1,10 +1,10 @@
 ---
 title: Convert documents
-description: Convert one or more uploaded documents with LibreOffice, and merge or finish the result with PDF options.
+description: Convert one or more uploaded documents with LibreOffice, or HTML with Fulgur, and merge or finish the result with PDF options.
 sidebar: { order: 2 }
 ---
 
-`POST /v1/convert` converts files with LibreOffice and no templating. After this page you can convert one file or several, merge them into one PDF, and choose the export options.
+`POST /v1/convert` converts files with LibreOffice and no templating. HTML going to PDF is the exception: [Fulgur](/docs/guides/html/) lays it out. After this page you can convert one file or several, merge them into one PDF, and choose the export options.
 
 ```bash test
 curl -F files=@report.docx http://localhost:9027/v1/convert -o report.pdf
@@ -41,7 +41,7 @@ LibreOffice decides what can become what. A pair it cannot do, such as `report.d
 
 Inputs are chosen by extension. The list has about 130 entries, including the Office and OpenDocument families, `rtf`, `csv`, `txt`, `html`, `xml`, `epub`, `pdf` and common image formats. Anything else, such as `.json` or `.md`, is a `400` that says `is not a file type this service converts`.
 
-HTML goes through LibreOffice, not a browser. There is no route that renders a URL.
+HTML going to PDF is laid out by Fulgur, not a browser, as [HTML to PDF](/docs/guides/html/) explains. There is no route that renders a URL.
 
 ## Several files
 
@@ -138,6 +138,6 @@ These steps need a PDF, so with `to=odt` they get a `400`. To choose your own or
 
 ## Fonts and other parts of the form
 
-`fonts` files apply to this request alone. See [fonts](/docs/guides/fonts/). `downloadFrom` works here as in [the pipeline guide](/docs/guides/pipeline/#form-fields). A [webhook](/docs/guides/webhooks/) header works here too.
+`fonts` files apply to this request alone. See [fonts](/docs/guides/fonts/). `assets` and `htmlEngine` apply to HTML; see [HTML to PDF](/docs/guides/html/). `downloadFrom` works here as in [the pipeline guide](/docs/guides/pipeline/#form-fields). A [webhook](/docs/guides/webhooks/) header works here too.
 
 The response headers are the same as on [`/v1/render`](/docs/guides/pipeline/#response-headers).

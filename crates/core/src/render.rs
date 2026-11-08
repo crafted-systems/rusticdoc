@@ -25,6 +25,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::error::{Error, Result};
+use crate::html::{self, HtmlOptions};
 use crate::job::Document;
 use crate::pdfform::{self, FillLimits, FillOptions};
 use crate::pdfops::{Deadline, blocking};
@@ -57,6 +58,11 @@ enum Op {
     Syntax { name: String },
     /// A template string, for `batchName`. Blobs: the source, the context.
     Text { limit: usize },
+    /// HTML to PDF. Blobs: the page, then each asset, named in order.
+    Html {
+        assets: Vec<String>,
+        options: HtmlOptions,
+    },
     /// A PDF form. Blobs: the file, the data.
     Fill {
         flatten: bool,
@@ -158,7 +164,9 @@ pub fn worker_main() -> i32 {
         let _ = std::fs::write("/proc/self/oom_score_adj", "1000");
     }
     let mut input = std::io::stdin().lock();
-    let mut output = std::io::stdout().lock();
+    let Some(mut output) = protocol_output() else {
+        return 2;
+    };
     loop {
         let (kind, blobs) = match read_frame(&mut input) {
             Ok(Some(frame)) => frame,
@@ -181,6 +189,31 @@ pub fn worker_main() -> i32 {
         if written.is_err() {
             return 2;
         }
+    }
+}
+
+/// Where replies go: the original standard output, on a descriptor of its own.
+/// Standard output itself then points at standard error, which the service
+/// discards, so a library that prints, as the HTML parser does for every
+/// malformed tag, cannot corrupt a reply. Called while the process has one
+/// thread.
+fn protocol_output() -> Option<std::io::BufWriter<std::fs::File>> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+        // SAFETY: dup and dup2 on the standard descriptors, before any other
+        // thread exists; the new descriptor is owned by the File from here on.
+        unsafe {
+            let replies = libc::dup(libc::STDOUT_FILENO);
+            if replies < 0 || libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) < 0 {
+                return None;
+            }
+            Some(std::io::BufWriter::new(std::fs::File::from_raw_fd(replies)))
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        None
     }
 }
 
@@ -252,6 +285,15 @@ fn evaluate(blobs: &[Vec<u8>]) -> Result<(ReplyMeta, Vec<u8>)> {
             )?;
             plain(text.into_bytes())
         }
+        Op::Html { assets, options } => {
+            let docs: Vec<Document> = assets
+                .into_iter()
+                .enumerate()
+                .map(|(i, name)| Document::new(name, blob_bytes(blobs, i + 2)))
+                .collect();
+            let page = blobs.get(1).map(Vec::as_slice).unwrap_or(b"");
+            plain(html::to_pdf(page, &docs, &options)?)
+        }
         Op::Fill {
             flatten,
             strip_tag_annotations,
@@ -307,6 +349,9 @@ struct Isolation {
     bin: PathBuf,
     memory: u64,
     permits: Arc<Semaphore>,
+    /// A fontconfig file naming the font directories beside the system's, for
+    /// HTML layout. Removed when the last renderer goes.
+    fontconfig: Option<tempfile::TempPath>,
 }
 
 /// Where template code runs. Cheap to clone.
@@ -329,8 +374,48 @@ impl Renderer {
                 bin,
                 memory,
                 permits: Arc::new(Semaphore::new(workers.max(1))),
+                fontconfig: None,
             })),
         }
+    }
+
+    /// Lets HTML layout in the workers use the fonts in `dirs` as well as the
+    /// system's, through a fontconfig file of its own: the workers start with no
+    /// environment, so this is the one setting they are given. In-process, the
+    /// process's own fontconfig applies.
+    pub fn with_font_dirs(self, dirs: &[PathBuf]) -> Result<Self> {
+        let Some(isolation) = &self.isolation else {
+            return Ok(self);
+        };
+        if dirs.is_empty() {
+            return Ok(self);
+        }
+        let mut conf = String::from(
+            "<?xml version=\"1.0\"?>\n<fontconfig>\n<include ignore_missing=\"yes\">/etc/fonts/fonts.conf</include>\n",
+        );
+        for dir in dirs {
+            let shown = dir
+                .display()
+                .to_string()
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            conf.push_str(&format!("<dir>{shown}</dir>\n"));
+        }
+        conf.push_str("</fontconfig>\n");
+        let mut file = tempfile::Builder::new()
+            .prefix("rusticdoc-render-fonts-")
+            .suffix(".conf")
+            .tempfile()?;
+        file.write_all(conf.as_bytes())?;
+        Ok(Self {
+            isolation: Some(Arc::new(Isolation {
+                bin: isolation.bin.clone(),
+                memory: isolation.memory,
+                permits: isolation.permits.clone(),
+                fontconfig: Some(file.into_temp_path()),
+            })),
+        })
     }
 
     pub fn is_isolated(&self) -> bool {
@@ -447,6 +532,33 @@ impl Renderer {
         })
     }
 
+    /// Lays out an HTML page with its assets and writes it as a PDF.
+    pub async fn html_to_pdf(
+        &self,
+        page: &Document,
+        assets: &[Document],
+        options: &HtmlOptions,
+        timeout: Duration,
+    ) -> Result<Vec<u8>> {
+        html::check_assets(assets)?;
+        let mut session = self.session(timeout).await?;
+        if session.worker.is_none() {
+            let (page, assets, options) = (page.clone(), assets.to_vec(), options.clone());
+            return blocking(timeout, move |_| {
+                html::to_pdf(&page.bytes, &assets, &options)
+            })
+            .await;
+        }
+        let op = Op::Html {
+            assets: assets.iter().map(|a| a.name.clone()).collect(),
+            options: options.clone(),
+        };
+        let mut blobs: Vec<&[u8]> = vec![&page.bytes];
+        blobs.extend(assets.iter().map(|a| a.bytes.as_ref()));
+        let (_, payload) = session.call(&op, &blobs).await?;
+        Ok(payload)
+    }
+
     /// Fills a PDF form under one budget of fuel, output and time.
     pub async fn fill(
         &self,
@@ -517,9 +629,11 @@ impl Worker {
         permit: OwnedSemaphorePermit,
     ) -> Result<Self> {
         let mut cmd = Command::new(&isolation.bin);
-        cmd.arg(WORKER_COMMAND)
-            .env_clear()
-            .stdin(Stdio::piped())
+        cmd.arg(WORKER_COMMAND).env_clear();
+        if let Some(conf) = &isolation.fontconfig {
+            cmd.env("FONTCONFIG_FILE", conf.as_os_str());
+        }
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
@@ -630,13 +744,13 @@ impl Worker {
                 Some(libc::SIGABRT) | Some(libc::SIGKILL) | Some(libc::SIGBUS) => {
                     return Error::Status(
                         413,
-                        "The template needs more memory than one render may use.".into(),
+                        "The document needs more memory than one render may use.".into(),
                     );
                 }
                 Some(libc::SIGXCPU) => {
                     return Error::Status(
                         422,
-                        "The template used more CPU time than one render may use.".into(),
+                        "The document used more CPU time than one render may use.".into(),
                     );
                 }
                 _ => {}
@@ -647,7 +761,7 @@ impl Worker {
 }
 
 fn died() -> Error {
-    Error::Status(422, "The template could not be rendered.".into())
+    Error::Status(422, "The document could not be rendered.".into())
 }
 
 /// One job's evaluations, on one worker when isolated.

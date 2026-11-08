@@ -72,14 +72,14 @@ curl -F templateHash=deadbeef -F "data=<letter.json" http://localhost:9027/v1/re
 | Code | Meaning | What to do |
 |---|---|---|
 | `template_too_large` | A template to store is over `RUSTICDOC_MAX_TEMPLATE_BYTES` | Make it smaller, or raise the limit |
-| `reported` | A template needed more memory than one render may use, with the message `The template needs more memory than one render may use.` | Reduce the data, or raise `RUSTICDOC_RENDER_MEMORY` |
+| `reported` | A template, or an HTML page being laid out, needed more memory than one render may use, with the message `The document needs more memory than one render may use.` | Reduce the data or the page, or raise `RUSTICDOC_RENDER_MEMORY` |
 
 ### 422
 
 | Code | Meaning | What to do |
 |---|---|---|
 | `template_error` | The template has a syntax error, uses an undefined value or an unknown filter, or a filter refused a value. The message names the tag and, in Office files, where it sits | Fix it. [`/v1/templates/validate`](/docs/templates/validate/) lists every problem at once |
-| `reported` | The render worker stopped: `The template used more CPU time than one render may use.` or `The template could not be rendered.` | Simplify the template. Look in the log under the request id |
+| `reported` | The render worker stopped: `The document used more CPU time than one render may use.` or `The document could not be rendered.` | Simplify the template or the page. Look in the log under the request id |
 
 ```bash test=fail
 curl -F template=@letter.txt -F 'data={"customer":{}}' http://localhost:9027/v1/render

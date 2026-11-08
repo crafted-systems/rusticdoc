@@ -120,6 +120,95 @@ async fn a_template_that_doubles_a_string_is_refused_and_the_service_stays_up() 
     assert!(health.status().is_success());
 }
 
+/// Posts `parts` as a multipart form: (field, file name, bytes).
+async fn post_parts(
+    client: &reqwest::Client,
+    url: &str,
+    parts: &[(&str, &str, &[u8])],
+) -> (u16, Vec<u8>) {
+    let boundary = "b0undary";
+    let mut body = Vec::new();
+    for (field, name, bytes) in parts {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{name}\"\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    let res = client
+        .post(url)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    (res.status().as_u16(), res.bytes().await.unwrap().to_vec())
+}
+
+/// A 1x1 PNG.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+#[tokio::test]
+async fn html_becomes_a_pdf_in_the_worker_with_no_libreoffice() {
+    let service = start(&[]);
+    let client = wait_until_up(&service).await;
+    let html = br#"<!doctype html><html><body><h1>Invoice</h1><img src="logo.png" width="40" height="40"></body></html>"#;
+    let url = format!("{}/v1/convert", service.base);
+    let (status, body) = post_parts(
+        &client,
+        &url,
+        &[("files", "invoice.html", html), ("assets", "logo.png", PNG)],
+    )
+    .await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert!(body.starts_with(b"%PDF-"));
+    assert!(
+        body.windows(b"/Image".len()).any(|w| w == b"/Image"),
+        "the logo is in the PDF"
+    );
+    // The HTML parser prints a line to standard output for each malformed
+    // tag; none of it may reach the worker's replies.
+    let broken = b"<p><b>unclosed <div></span></i> & <table><td>cell</p>";
+    let (status, body) = post_parts(&client, &url, &[("files", "broken.html", broken)]).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert!(body.starts_with(b"%PDF-"));
+}
+
+/// `RLIMIT_AS` means nothing on macOS, so this one only runs on Linux.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_hostile_page_is_refused_and_the_service_stays_up() {
+    let mut html = String::from("<!doctype html><html><body>");
+    html.push_str(&"<div style=\"display:flex\">".repeat(20_000));
+    html.push_str("deep");
+    let service = start(&[
+        ("RUSTICDOC_RENDER_MEMORY", "256MB"),
+        ("RUSTICDOC_API_TIMEOUT", "10s"),
+    ]);
+    let client = wait_until_up(&service).await;
+    let url = format!("{}/v1/convert", service.base);
+    let (status, _) = post_parts(&client, &url, &[("files", "deep.html", html.as_bytes())]).await;
+    assert!(
+        status == 200 || (400..600).contains(&status),
+        "the request ends, whatever it ends with"
+    );
+    let (status, body) = post_parts(&client, &url, &[("files", "ok.html", b"<p>fine</p>")]).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+}
+
 #[test]
 fn webhook_secret_prints_the_key_a_receiver_verifies_with() {
     let run = |args: &[&str]| {

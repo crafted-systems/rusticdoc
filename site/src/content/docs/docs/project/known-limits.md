@@ -25,7 +25,7 @@ This page lists what does not work, what has not been checked, and what could su
 
 ## PDF output
 
-- **There is no HTML or URL rendering through a browser.** This image has no Chromium.
+- **HTML is laid out by Fulgur, not a browser.** JavaScript never runs and no URL is rendered. Fulgur is before version 1.0: text in `@page` margin boxes ignores its alignment, and an image in a flex row with only one of its width and height set is not drawn. See [HTML to PDF](/docs/guides/html/#limits).
 - **Filled PDF forms have not been opened in Acrobat.** Editable and flattened forms show their values in Chrome and Preview.
 - **Text the service draws into a PDF is Latin only, in Helvetica.** That means field appearances and annotation values. Other characters draw as `?`. Field values are stored in full, so a viewer that redraws the field still shows them.
 - **`/v1/pdf/sign` places only a signature image unless you send `signature=certificate`.** The default is not a cryptographic signature.

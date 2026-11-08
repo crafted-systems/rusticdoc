@@ -51,6 +51,19 @@ impl AppState {
                 config.render_workers,
             ),
         };
+        // HTML layout in the workers sees the mounted fonts and the stored ones,
+        // as LibreOffice does.
+        let mut font_dirs = vec![config.fonts_dir.clone()];
+        if config.store.is_some() {
+            font_dirs.push(config.font_cache_dir.clone());
+        }
+        let renderer = match renderer.clone().with_font_dirs(&font_dirs) {
+            Ok(renderer) => renderer,
+            Err(e) => {
+                tracing::warn!(error = %e, "HTML layout uses the system fonts only");
+                renderer
+            }
+        };
         let pipeline = Pipeline::new(engines.clone(), config.api_timeout)
             .with_max_output(config.max_render_bytes)
             .with_renderer(renderer);

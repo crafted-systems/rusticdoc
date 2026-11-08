@@ -1,0 +1,11 @@
+@page { size: A4; margin: 20mm; @bottom-center { content: "Page " counter(page) " of " counter(pages) } }
+body { font-family: "Liberation Sans", sans-serif; font-size: 10.5pt; color: #1a1a2e }
+header { display: flex; justify-content: space-between; border-bottom: 2px solid #2b59c3 }
+header img { width: 120px; height: 40px }
+h1 { margin: 0 }
+.parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 18px 0 }
+table { width: 100%; border-collapse: collapse }
+th { text-align: left; background: #2b59c3; color: white; padding: 6px }
+td { padding: 6px; border-bottom: 1px solid #dde }
+.n { text-align: right }
+.total { text-align: right; font-size: 14pt; font-weight: bold }

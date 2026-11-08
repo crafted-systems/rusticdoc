@@ -26,6 +26,7 @@ const SPECIAL_FIELDS: &[&str] = &[
     "facturX",
     "facturxXml",
     "fonts",
+    "assets",
 ];
 
 #[derive(Debug, Default)]

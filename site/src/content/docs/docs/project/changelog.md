@@ -25,6 +25,7 @@ Not yet released. This is the first release. The image will be `ghcr.io/vmosoti/
 ### Conversion and PDF
 
 - LibreOffice conversion through a warm worker pool.
+- HTML to PDF with Fulgur, without a browser: CSS layout with `@page` rules, page counters and margin boxes, images, stylesheets and fonts sent as `assets`, and tagged PDF/UA. It runs in the render workers and fetches nothing. `htmlEngine=libreoffice` keeps LibreOffice, and `rusticdoc convert --asset` does the same on the command line.
 - An image of about 300 MB to download. Noto Serif CJK and LibreOffice's gallery, wizards and spare icon themes are left out, and Windows Chinese, Japanese and Korean font names map to the matching Noto Sans CJK variant.
 - `POST /v1/render`, one multipart request for template, data and steps in order.
 - `POST /v1/render/batch`, one template per element of an array, returned as a ZIP.
