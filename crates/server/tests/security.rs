@@ -71,12 +71,6 @@ async fn too_many_file_parts_are_refused_as_soon_as_passed() {
     let parts: Vec<Part<'_>> = (0..11).map(|_| ("f", Some("a.pdf"), &b""[..])).collect();
     let mut c = config();
     c.max_form_parts = 10;
-    let res = service(c.clone())
-        .oneshot(post("/forms/pdfengines/merge", &parts))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    assert!(text(res).await.contains("more than 10 files"));
     let res = service(c)
         .oneshot(post("/v1/pdf/merge", &parts))
         .await
@@ -102,7 +96,7 @@ async fn too_many_text_parts_are_refused_as_soon_as_passed() {
 async fn page_selections_are_capped_before_they_expand() {
     let pdf = fixtures::pages(3);
     let spec = "1-,".repeat(1_001);
-    let cases: [(&str, Vec<Part<'_>>); 3] = [
+    let cases: [(&str, Vec<Part<'_>>); 2] = [
         (
             "/v1/pdf/rotate",
             vec![
@@ -111,15 +105,7 @@ async fn page_selections_are_capped_before_they_expand() {
             ],
         ),
         (
-            "/forms/pdfengines/rotate",
-            vec![
-                ("files", Some("a.pdf"), &pdf),
-                ("rotateAngle", None, b"90"),
-                ("rotatePages", None, spec.as_bytes()),
-            ],
-        ),
-        (
-            "/forms/pdfengines/split",
+            "/v1/pdf/split",
             vec![
                 ("files", Some("a.pdf"), &pdf),
                 ("splitMode", None, b"pages"),
@@ -139,7 +125,7 @@ async fn page_selections_are_capped_before_they_expand() {
 async fn stamp_text_is_capped_on_every_route() {
     let pdf = fixtures::pages(1);
     let long = "x".repeat(64 * 1024 + 1);
-    let cases: [(&str, Vec<Part<'_>>); 4] = [
+    let cases: [(&str, Vec<Part<'_>>); 2] = [
         (
             "/v1/pdf/stamp",
             vec![
@@ -152,22 +138,6 @@ async fn stamp_text_is_capped_on_every_route() {
             vec![
                 ("files", Some("a.pdf"), &pdf),
                 ("text", None, long.as_bytes()),
-            ],
-        ),
-        (
-            "/forms/pdfengines/stamp",
-            vec![
-                ("files", Some("a.pdf"), &pdf),
-                ("stampSource", None, b"text"),
-                ("stampExpression", None, long.as_bytes()),
-            ],
-        ),
-        (
-            "/forms/pdfengines/watermark",
-            vec![
-                ("files", Some("a.pdf"), &pdf),
-                ("watermarkSource", None, b"text"),
-                ("watermarkExpression", None, long.as_bytes()),
             ],
         ),
     ];
@@ -198,11 +168,11 @@ fn hooked(path: &str, parts: &[Part<'_>], port: u16, key: &str) -> Request<Body>
     form(path, parts)
         .header("x-api-key", key)
         .header(
-            "gotenberg-webhook-url",
+            "x-rusticdoc-webhook-url",
             format!("http://127.0.0.1:{port}/d"),
         )
         .header(
-            "gotenberg-webhook-error-url",
+            "x-rusticdoc-webhook-error-url",
             format!("http://127.0.0.1:{port}/e"),
         )
         .body(Body::from(body_of(parts)))
@@ -243,14 +213,14 @@ async fn webhook_jobs_are_limited_per_caller_and_in_all() {
         .await
         .unwrap();
     assert_eq!(third.status(), StatusCode::TOO_MANY_REQUESTS, "two in all");
-    // The Gotenberg routes count against the same places.
+    // PDF routes count against the same places.
     let pdf = fixtures::pages(1);
     let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
-    let forms = app(state)
-        .oneshot(hooked("/forms/pdfengines/flatten", &parts, port, "c"))
+    let flatten = app(state)
+        .oneshot(hooked("/v1/pdf/flatten", &parts, port, "c"))
         .await
         .unwrap();
-    assert_eq!(forms.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(flatten.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
@@ -406,7 +376,7 @@ fn every_start_warns_about_what_is_open() {
     c.render_mode = rusticdoc_core::config::RenderMode::Isolated;
     assert!(rusticdoc_server::startup_warnings(&c).is_empty());
     let mut c = config();
-    c.compat.webhook_disabled = true;
+    c.webhook_disabled = true;
     let warnings = rusticdoc_server::startup_warnings(&c);
     assert!(!warnings.iter().any(|w| w.contains("WEBHOOK_SECRET")));
 }
@@ -419,7 +389,7 @@ fn guarded() -> Config {
 
 #[tokio::test]
 async fn with_credentials_configured_little_is_open() {
-    for path in ["/metrics", "/v1/version", "/version", "/v1/fonts"] {
+    for path in ["/metrics", "/v1/version", "/v1/fonts"] {
         let res = service(guarded()).oneshot(get(path)).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{path}");
     }
@@ -453,7 +423,7 @@ async fn health_shows_only_its_status_without_credentials() {
         .unwrap();
     let res = service(guarded()).oneshot(keyed).await.unwrap();
     assert!(text(res).await.contains("engines"));
-    // With no credentials configured, health stays as Gotenberg's clients expect.
+    // With no credentials configured, health shows its details.
     let res = service(config()).oneshot(get("/health")).await.unwrap();
     let body = text(res).await;
     assert!(
@@ -478,7 +448,7 @@ async fn docs_are_opt_in_and_limited_when_on() {
 async fn every_response_says_nosniff() {
     for (path, c) in [
         ("/health", config()),
-        ("/version", guarded()),
+        ("/v1/version", guarded()),
         ("/nowhere", config()),
     ] {
         let res = service(c).oneshot(get(path)).await.unwrap();
@@ -497,7 +467,7 @@ async fn disabling_routes_holds_on_v1_too() {
     let pdf = fixtures::pages(1);
     let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
     let mut c = config();
-    c.compat.pdfengines_disable_routes = true;
+    c.pdf_disabled = true;
     for path in ["/v1/pdf/merge", "/v1/pdf/flatten", "/v1/pdf/forms/fill"] {
         let res = service(c.clone())
             .oneshot(post(path, &parts))
@@ -506,7 +476,7 @@ async fn disabling_routes_holds_on_v1_too() {
         assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
     }
     let mut c = config();
-    c.compat.libreoffice_disable_routes = true;
+    c.convert_disabled = true;
     for path in ["/v1/convert", "/v1/pdf/convert"] {
         let res = service(c.clone())
             .oneshot(post(path, &parts))
@@ -531,7 +501,7 @@ async fn webhook_disable_holds_on_v1_too() {
     let receiver = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = receiver.local_addr().unwrap().port();
     let mut c = config();
-    c.compat.webhook_disabled = true;
+    c.webhook_disabled = true;
     c.webhook_allow_private = true;
     let parts: [Part<'_>; 1] = [("template", Some("t.txt"), b"hello")];
     let res = service(c)
@@ -549,7 +519,7 @@ async fn url_lists_hold_on_every_route() {
     let parts: [Part<'_>; 1] = [("template", Some("t.txt"), b"hello")];
     let mut c = config();
     c.webhook_allow_private = true;
-    c.compat.webhook_deny_list = vec!["/d$".into()];
+    c.webhook_deny_list = vec!["/d$".into()];
     let res = service(c.clone())
         .oneshot(hooked("/v1/render", &parts, 1, "k"))
         .await
@@ -558,13 +528,13 @@ async fn url_lists_hold_on_every_route() {
     let pdf = fixtures::pages(1);
     let files: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
     let res = service(c)
-        .oneshot(hooked("/forms/pdfengines/flatten", &files, 1, "k"))
+        .oneshot(hooked("/v1/pdf/flatten", &files, 1, "k"))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     let mut c = config();
     c.download_from_allow_private = true;
-    c.compat.download_deny_list = vec!["evil".into()];
+    c.download_deny_list = vec!["evil".into()];
     let parts: [Part<'_>; 1] = [(
         "downloadFrom",
         None,
@@ -575,21 +545,6 @@ async fn url_lists_hold_on_every_route() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn debug_prints_the_real_lists() {
-    let mut c = config();
-    c.compat.enable_debug_route = true;
-    let res = service(c.clone()).oneshot(get("/debug")).await.unwrap();
-    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
-    assert_eq!(body["flags"]["webhook-allow-list"], "[.+]");
-    c.compat.webhook_allow_list = vec!["^https://a".into()];
-    c.compat.download_deny_list = vec!["b".into()];
-    let res = service(c).oneshot(get("/debug")).await.unwrap();
-    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
-    assert_eq!(body["flags"]["webhook-allow-list"], "[^https://a]");
-    assert_eq!(body["flags"]["api-download-from-deny-list"], "[b]");
 }
 
 #[tokio::test]
@@ -623,7 +578,7 @@ async fn engine_failures_stay_out_of_v1_responses() {
 // ---------------------------------------------------------------- F9
 
 #[tokio::test]
-async fn each_caller_signs_with_its_own_key_and_events_are_signed() {
+async fn each_caller_signs_with_its_own_key() {
     use rusticdoc_server::{auth, webhook};
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let receiver = Router::new().fallback(move |request: axum::extract::Request| {
@@ -645,19 +600,13 @@ async fn each_caller_signs_with_its_own_key_and_events_are_signed() {
     c.webhook_allow_private = true;
     c.webhook_secret = Some("master".into());
     c.api_keys = vec!["tenant-a".into(), "tenant-b".into()];
-    let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &[][..])];
     let pdf = fixtures::pages(1);
-    let _ = parts;
     let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
-    let request = form("/forms/pdfengines/flatten", &parts)
+    let request = form("/v1/pdf/flatten", &parts)
         .header("x-api-key", "tenant-a")
         .header(
-            "gotenberg-webhook-url",
+            "x-rusticdoc-webhook-url",
             format!("http://127.0.0.1:{port}/done"),
-        )
-        .header(
-            "gotenberg-webhook-events-url",
-            format!("http://127.0.0.1:{port}/events"),
         )
         .body(Body::from(body_of(&parts)))
         .unwrap();
@@ -666,7 +615,7 @@ async fn each_caller_signs_with_its_own_key_and_events_are_signed() {
 
     let key_a = webhook::signing_key("master", &auth::key_principal("tenant-a").0);
     let key_b = webhook::signing_key("master", &auth::key_principal("tenant-b").0);
-    for _ in 0..2 {
+    {
         let (path, headers, body) = tokio::time::timeout(Duration::from_secs(10), rx.recv())
             .await
             .unwrap()
@@ -674,7 +623,7 @@ async fn each_caller_signs_with_its_own_key_and_events_are_signed() {
         let value = |name: &str| headers.get(name).unwrap().to_str().unwrap().to_string();
         let timestamp: u64 = value(webhook::TIMESTAMP).parse().unwrap();
         let event = value(webhook::EVENT);
-        let id = value("gotenberg-trace");
+        let id = value("x-request-id");
         let signature = value(webhook::SIGNATURE);
         assert_eq!(
             signature,
@@ -894,20 +843,23 @@ async fn shutdown_lets_requests_finish_and_then_returns() {
 async fn deny_lists_catch_a_trailing_dot_and_an_uppercase_host_on_every_path() {
     let hosts = ["https://evil.example./x", "https://EVIL.example/x"];
     let mut c = config();
-    c.compat.webhook_deny_list = vec!["^https://evil\\.example/".into()];
-    c.compat.download_deny_list = vec!["^https://evil\\.example/".into()];
+    c.webhook_deny_list = vec!["^https://evil\\.example/".into()];
+    c.download_deny_list = vec!["^https://evil\\.example/".into()];
     let pdf = fixtures::pages(1);
     let template: [Part<'_>; 1] = [("template", Some("t.txt"), b"hello")];
     let files: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
     for url in hosts {
-        // /v1, under both header names.
-        for header_name in ["x-rusticdoc-webhook-url", "gotenberg-webhook-url"] {
-            let request = form("/v1/render", &template)
-                .header(header_name, url)
-                .body(Body::from(body_of(&template)))
+        // The result URL, on a render and on a PDF route.
+        for (path, parts) in [
+            ("/v1/render", &template[..]),
+            ("/v1/pdf/flatten", &files[..]),
+        ] {
+            let request = form(path, parts)
+                .header("x-rusticdoc-webhook-url", url)
+                .body(Body::from(body_of(parts)))
                 .unwrap();
             let res = service(c.clone()).oneshot(request).await.unwrap();
-            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{header_name} {url}");
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path} {url}");
         }
         // The error URL, on /v1.
         let request = form("/v1/render", &template)
@@ -917,29 +869,10 @@ async fn deny_lists_catch_a_trailing_dot_and_an_uppercase_host_on_every_path() {
             .unwrap();
         let res = service(c.clone()).oneshot(request).await.unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN, "error url {url}");
-        // The result, error and events URLs on /forms.
-        for (result, error, events) in [
-            (url, "https://1.1.1.1/e", "https://1.1.1.1/v"),
-            ("https://1.1.1.1/r", url, "https://1.1.1.1/v"),
-            ("https://1.1.1.1/r", "https://1.1.1.1/e", url),
-        ] {
-            let request = form("/forms/pdfengines/flatten", &files)
-                .header("gotenberg-webhook-url", result)
-                .header("gotenberg-webhook-error-url", error)
-                .header("gotenberg-webhook-events-url", events)
-                .body(Body::from(body_of(&files)))
-                .unwrap();
-            let res = service(c.clone()).oneshot(request).await.unwrap();
-            assert_eq!(
-                res.status(),
-                StatusCode::FORBIDDEN,
-                "{result} {error} {events}"
-            );
-        }
         // downloadFrom, which has its own lists.
         let entry = format!(r#"[{{"url":"{url}"}}]"#);
         let parts: [Part<'_>; 1] = [("downloadFrom", None, entry.as_bytes())];
-        for path in ["/v1/pdf/merge", "/forms/pdfengines/merge"] {
+        for path in ["/v1/pdf/merge", "/v1/convert"] {
             let res = service(c.clone())
                 .oneshot(post(path, &parts))
                 .await
@@ -960,18 +893,6 @@ async fn colours_are_refused_where_overlays_are_built() {
         "red",
         "a\u{e9}123",
     ] {
-        let options = serde_json::json!({ "fillcolor": colour }).to_string();
-        let parts: [Part<'_>; 4] = [
-            ("files", Some("a.pdf"), &pdf),
-            ("stampSource", None, b"text"),
-            ("stampExpression", None, b"DRAFT"),
-            ("stampOptions", None, options.as_bytes()),
-        ];
-        let res = service(config())
-            .oneshot(post("/forms/pdfengines/stamp", &parts))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{colour}");
         let parts: [Part<'_>; 3] = [
             ("files", Some("a.pdf"), &pdf),
             ("text", None, b"DRAFT"),
@@ -998,7 +919,7 @@ async fn colours_are_refused_where_overlays_are_built() {
 #[tokio::test]
 async fn a_password_with_a_line_break_is_a_400_before_any_engine() {
     let pdf = fixtures::pages(1);
-    for path in ["/v1/pdf/encrypt", "/forms/pdfengines/encrypt"] {
+    for path in ["/v1/pdf/encrypt"] {
         let parts: [Part<'_>; 2] = [
             ("files", Some("a.pdf"), &pdf),
             ("userPassword", None, b"a\nb"),
@@ -1114,7 +1035,7 @@ async fn a_body_that_stops_arriving_loses_its_place() {
     stream
         .write_all(
             format!(
-                "POST /forms/pdfengines/merge HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: 100000\r\n\r\n--{BOUNDARY}\r\n"
+                "POST /v1/pdf/merge HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: 100000\r\n\r\n--{BOUNDARY}\r\n"
             )
             .as_bytes(),
         )
@@ -1135,7 +1056,7 @@ async fn a_body_that_only_drips_is_stopped_by_the_total_limit() {
     stream
         .write_all(
             format!(
-                "POST /forms/pdfengines/merge HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: 100000\r\n\r\n--{BOUNDARY}\r\n"
+                "POST /v1/pdf/merge HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: 100000\r\n\r\n--{BOUNDARY}\r\n"
             )
             .as_bytes(),
         )
@@ -1450,7 +1371,7 @@ async fn a_keep_alive_client_is_not_affected() {
 /// One request declaring all of the budget, sent over a socket and left unfinished.
 fn declaring(length: usize) -> Vec<u8> {
     format!(
-        "POST /forms/pdfengines/flatten HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: {length}\r\n\r\n--{BOUNDARY}"
+        "POST /v1/pdf/flatten HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: {length}\r\n\r\n--{BOUNDARY}"
     )
     .into_bytes()
 }
@@ -1545,7 +1466,7 @@ async fn a_caller_without_credentials_does_not_join_the_queue() {
     let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), b"%PDF")];
     let started = std::time::Instant::now();
     let res = router
-        .oneshot(post("/forms/pdfengines/flatten", &parts))
+        .oneshot(post("/v1/pdf/flatten", &parts))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);

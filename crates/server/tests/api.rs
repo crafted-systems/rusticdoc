@@ -511,7 +511,7 @@ async fn webhooks_to_private_addresses_are_refused_by_default() {
     let router = app(AppState::new(config()));
     let mut req = post_form("/v1/render", &[("template", Some("a.txt"), "x")]);
     req.headers_mut().insert(
-        "gotenberg-webhook-url",
+        "x-rusticdoc-webhook-url",
         "http://127.0.0.1:1/x".parse().unwrap(),
     );
     let res = router.oneshot(req).await.unwrap();
@@ -614,27 +614,66 @@ async fn root_path_prefixes_every_route() {
 }
 
 #[tokio::test]
-async fn gotenberg_headers_rename_the_file_and_carry_the_trace() {
+async fn a_request_id_is_kept_cleaned_and_echoed() {
     let router = app(AppState::new(config()));
     let mut req = post_form("/v1/render", &[("template", Some("letter.txt"), "Hi")]);
     req.headers_mut()
-        .insert("gotenberg-output-filename", "foo".parse().unwrap());
-    req.headers_mut()
-        .insert("gotenberg-trace", "trace-123".parse().unwrap());
+        .insert("x-request-id", "order-2041".parse().unwrap());
     let res = router.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(
-        res.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-        "attachment; filename=\"foo.txt\""
-    );
-    assert_eq!(res.headers().get("gotenberg-trace").unwrap(), "trace-123");
-    assert_eq!(res.headers().get("x-request-id").unwrap(), "trace-123");
+    assert_eq!(res.headers().get("x-request-id").unwrap(), "order-2041");
 
+    // Nothing printable left: the service makes its own.
+    let mut req = post_form("/v1/render", &[("template", Some("letter.txt"), "Hi")]);
+    req.headers_mut()
+        .insert("x-request-id", "   ".parse().unwrap());
+    let res = router.clone().oneshot(req).await.unwrap();
+    let id = res.headers().get("x-request-id").unwrap().to_str().unwrap();
+    assert!(!id.trim().is_empty());
+
+    for gone in [
+        "/",
+        "/version",
+        "/debug",
+        "/prometheus/metrics",
+        "/favicon.ico",
+    ] {
+        let res = router
+            .clone()
+            .oneshot(Request::get(gone).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "{gone}");
+    }
     let res = router
-        .oneshot(Request::get("/favicon.ico").body(Body::empty()).unwrap())
+        .oneshot(post_form(
+            "/forms/libreoffice/convert",
+            &[("files", Some("a.docx"), "PK")],
+        ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn disabled_route_groups_answer_404() {
+    let mut c = config();
+    c.convert_disabled = true;
+    c.pdf_disabled = true;
+    let router = app(AppState::new(c));
+    for path in [
+        "/v1/convert",
+        "/v1/pdf/convert",
+        "/v1/pdf/merge",
+        "/v1/pdf/rotate",
+    ] {
+        let res = router
+            .clone()
+            .oneshot(post_form(path, &[("files", Some("a.pdf"), "x")]))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
+    }
 }
 
 #[tokio::test]
@@ -865,7 +904,7 @@ async fn pdf_operations_run_on_the_pure_rust_engine() {
     let res = router
         .clone()
         .oneshot(post_binary(
-            "/forms/pdfengines/metadata/read",
+            "/v1/pdf/metadata/read",
             &[("files", Some("in.pdf"), with_meta)],
         ))
         .await
@@ -927,28 +966,25 @@ async fn pdf_operations_run_on_the_pure_rust_engine() {
     let res = router
         .clone()
         .oneshot(post_binary(
-            "/forms/pdfengines/embed",
+            "/v1/pdf/embed",
             &[
                 ("files", Some("in.pdf"), three.clone()),
-                ("embeds", Some("note.txt"), b"hello".to_vec()),
+                ("files", Some("note.txt"), b"hello".to_vec()),
             ],
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
     let embedded = bytes_of(res).await;
     assert!(String::from_utf8_lossy(&embedded).contains("EmbeddedFile"));
 
-    // Gotenberg's merge route with post-processing: merge + rotate + metadata in one call
     let res = router
         .clone()
         .oneshot(post_binary(
-            "/forms/pdfengines/merge",
+            "/v1/pdf/merge",
             &[
                 ("files", Some("a.pdf"), three.clone()),
                 ("files", Some("b.pdf"), fixtures::pages(2)),
-                ("rotateAngle", None, b"180".to_vec()),
-                ("metadata", None, br#"{"Title":"Merged"}"#.to_vec()),
             ],
         ))
         .await
@@ -957,11 +993,11 @@ async fn pdf_operations_run_on_the_pure_rust_engine() {
     let merged = lopdf::Document::load_mem(&bytes_of(res).await).unwrap();
     assert_eq!(merged.get_pages().len(), 5);
 
-    // bad requests stay 400 in Gotenberg's style
+    // bad requests are 400
     let res = router
         .clone()
         .oneshot(post_binary(
-            "/forms/pdfengines/rotate",
+            "/v1/pdf/rotate",
             &[
                 ("files", Some("in.pdf"), three.clone()),
                 ("rotation", None, b"45".to_vec()),
@@ -972,7 +1008,7 @@ async fn pdf_operations_run_on_the_pure_rust_engine() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let res = router
         .oneshot(post_binary(
-            "/forms/pdfengines/split",
+            "/v1/pdf/split",
             &[
                 ("files", Some("in.pdf"), three),
                 ("splitMode", None, b"sideways".to_vec()),
@@ -985,11 +1021,11 @@ async fn pdf_operations_run_on_the_pure_rust_engine() {
 }
 
 #[tokio::test]
-async fn gotenberg_boolean_fields_are_strict() {
+async fn boolean_fields_are_strict() {
     let router = app(AppState::new(config()));
     let res = router
         .oneshot(post_form(
-            "/forms/libreoffice/convert",
+            "/v1/convert",
             &[
                 ("files", Some("a.docx"), "PK"),
                 ("landscape", None, "maybe"),
@@ -1119,6 +1155,243 @@ async fn signatures_land_at_exact_coordinates() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A service with a throwaway ECDSA key and self-signed certificate in
+/// `dir`, as `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT` would give it.
+fn signing_config(dir: &std::path::Path) -> Config {
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let cert = rcgen::CertificateParams::new(vec!["signer.test".to_string()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    std::fs::write(dir.join("key.pem"), key.serialize_pem()).unwrap();
+    std::fs::write(dir.join("cert.pem"), cert.pem()).unwrap();
+    let config = Config {
+        signing_key: Some(dir.join("key.pem")),
+        signing_cert: Some(dir.join("cert.pem")),
+        ..config()
+    };
+    config.check().expect("the test key loads");
+    config
+}
+
+fn signed_by_certificate(original: &[u8], signed: &[u8]) {
+    assert!(signed.starts_with(original), "an incremental update");
+    let tail = &signed[original.len()..];
+    assert!(tail.windows(19).any(|w| w == b"ETSI.CAdES.detached"));
+    assert!(tail.windows(10).any(|w| w == b"/ByteRange"));
+    lopdf::Document::load_mem(signed).expect("the signed file parses");
+}
+
+#[tokio::test]
+async fn certificate_signatures_answer_503_without_a_key() {
+    use rusticdoc_core::pdfops::fixtures;
+    let router = app(AppState::new(config()));
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), fixtures::pages(1)),
+                ("signature", None, b"certificate".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("RUSTICDOC_SIGNING_KEY"),
+        "{body}"
+    );
+
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), fixtures::pages(1)),
+                ("steps", None, b"sign".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // The image signature is still there, and stays the default.
+    let res = router
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), fixtures::pages(1)),
+                ("files", Some("sig.png"), fixtures::PNG_DOT.to_vec()),
+                ("page", None, b"1".to_vec()),
+                ("x", None, b"10".to_vec()),
+                ("y", None, b"10".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+}
+
+#[tokio::test]
+async fn certificate_signatures_sign_with_the_configured_key() {
+    use rusticdoc_core::pdfops::fixtures;
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(AppState::new(signing_config(dir.path())));
+    let original = fixtures::pages(2);
+
+    // Invisible, with the descriptive fields.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), original.clone()),
+                ("signature", None, b"certificate".to_vec()),
+                ("reason", None, b"Approved".to_vec()),
+                ("location", None, b"Nairobi".to_vec()),
+                ("contactInfo", None, b"ops@example.com".to_vec()),
+                ("signerName", None, b"Ada".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let signed = bytes_of(res).await;
+    signed_by_certificate(&original, &signed);
+    assert!(signed.windows(10).any(|w| w == b"(Approved)"));
+
+    // Visible, with the image as the widget's appearance on page 2.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), original.clone()),
+                ("files", Some("sig.png"), fixtures::PNG_DOT.to_vec()),
+                ("signature", None, b"certificate".to_vec()),
+                ("page", None, b"2".to_vec()),
+                ("x", None, b"100".to_vec()),
+                ("y", None, b"72".to_vec()),
+                ("width", None, b"150".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    signed_by_certificate(&original, &bytes_of(res).await);
+
+    // As the last step of a render.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), original.clone()),
+                ("steps", None, b"rotate,sign".to_vec()),
+                ("reason", None, b"Rendered".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let rendered = bytes_of(res).await;
+    assert!(rendered.windows(19).any(|w| w == b"ETSI.CAdES.detached"));
+    assert!(rendered.windows(10).any(|w| w == b"(Rendered)"));
+    let pdf = lopdf::Document::load_mem(&rendered).unwrap();
+    let page = pdf.get_dictionary(pdf.get_pages()[&1]).unwrap();
+    assert_eq!(
+        page.get(b"Rotate").unwrap().as_i64().unwrap(),
+        90,
+        "rotated, then signed"
+    );
+
+    // What the request gets wrong is a 400.
+    for (parts, says) in [
+        (
+            vec![
+                ("files", Some("in.pdf"), original.clone()),
+                ("files", Some("a.png"), fixtures::PNG_DOT.to_vec()),
+                ("files", Some("b.png"), fixtures::PNG_DOT.to_vec()),
+                ("signature", None, b"certificate".to_vec()),
+            ],
+            "at most one",
+        ),
+        (
+            vec![
+                ("files", Some("in.pdf"), original.clone()),
+                ("signature", None, b"certificate".to_vec()),
+                ("x", None, b"10".to_vec()),
+            ],
+            "invisible",
+        ),
+        (
+            vec![
+                ("files", Some("in.pdf"), original.clone()),
+                ("files", Some("sig.png"), fixtures::PNG_DOT.to_vec()),
+                ("page", None, b"1".to_vec()),
+                ("x", None, b"10".to_vec()),
+                ("y", None, b"10".to_vec()),
+                ("reason", None, b"Approved".to_vec()),
+            ],
+            "signature=certificate",
+        ),
+        (
+            vec![
+                ("files", Some("in.pdf"), original.clone()),
+                ("signature", None, b"wet-ink".to_vec()),
+            ],
+            "image or certificate",
+        ),
+    ] {
+        let res = router
+            .clone()
+            .oneshot(post_binary("/v1/pdf/sign", &parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let message = text(res).await;
+        assert!(message.contains(says), "{says}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn sign_steps_come_last_and_never_with_encrypt() {
+    use rusticdoc_core::pdfops::fixtures;
+    let dir = tempfile::tempdir().unwrap();
+    // With a key, so the refusals are about the order, not the key; and
+    // without one, where the order is still a 400 rather than a 503.
+    for config in [signing_config(dir.path()), config()] {
+        let router = app(AppState::new(config));
+        for (steps, says) in [
+            ("sign,encrypt", "cannot be combined"),
+            ("encrypt,sign", "cannot be combined"),
+            ("sign,flatten", "last step"),
+            ("sign,sign", "last step"),
+        ] {
+            let res = router
+                .clone()
+                .oneshot(post_binary(
+                    "/v1/render",
+                    &[
+                        ("template", Some("in.pdf"), fixtures::pages(1)),
+                        ("steps", None, steps.as_bytes().to_vec()),
+                        ("userPassword", None, b"secret".to_vec()),
+                    ],
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{steps}");
+            let message = text(res).await;
+            assert!(message.contains(says), "{steps}: {message}");
+        }
+    }
 }
 
 #[tokio::test]

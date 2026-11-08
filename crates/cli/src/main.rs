@@ -53,7 +53,7 @@ enum Command {
     /// Show the engines this machine has.
     Engines,
     /// PDF operations: merge, split, rotate, flatten, optimize, encrypt,
-    /// metadata, bookmarks, embed, watermark, stamp, factur-x, forms.
+    /// metadata, bookmarks, embed, watermark, stamp, sign, factur-x, forms.
     Pdf(pdf::PdfArgs),
     /// Check a template against sample data and list every problem.
     Validate {
@@ -89,7 +89,8 @@ struct RenderArgs {
     /// JSON file visible as `ctx`.
     #[arg(long)]
     ctx: Option<PathBuf>,
-    /// Steps in order: convert, pdfa, metadata, encrypt, merge.
+    /// Steps in order: convert, pdfa, metadata, encrypt, merge, sign. `sign`
+    /// comes last and uses RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT.
     #[arg(short, long, default_value = "")]
     steps: String,
     /// Output format for `convert`.

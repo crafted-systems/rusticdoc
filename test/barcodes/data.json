@@ -1,0 +1,8 @@
+{
+  "qr_url": "https://pay.example.com/INV-2041?amount=36300&currency=KES",
+  "qr_text": "Mawingu Coffee Co. – café, Nairobi: KES 36,300.00 ✓",
+  "c128": "INV-2041/abc-xyz",
+  "c39": "INV-2041",
+  "ean13": "590123412345",
+  "ean8": "9638507"
+}

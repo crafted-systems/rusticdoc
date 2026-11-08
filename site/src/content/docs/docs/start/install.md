@@ -94,7 +94,7 @@ The CLI renders templates in its own process, with no separate worker and no mem
 | | What is known |
 |---|---|
 | Container runtime | Docker. CI builds and smoke-tests the image on `ubuntu-latest`. The examples in these docs ran on an arm64 build |
-| Disk | The image is about 1.25 GB, measured on the arm64 build |
+| Disk | About 300 MB to download, unpacking to about 810 MB, measured on the arm64 build. Docker Desktop keeps both copies and shows about 1.1 GB |
 | Memory at rest | 150 to 270 MiB in `docker stats`, measured after a first conversion with two LibreOffice workers. This grows with what you ask of it |
 | Memory under load | Compose limits the container to 6 GiB, which leaves room for four render workers at 1 GiB each, the service and two LibreOffice workers. [Sizing](/docs/operate/sizing/) has the arithmetic and a failure seen at less |
 | CPU | The Kubernetes manifest requests one CPU per pod. No minimum has been measured |

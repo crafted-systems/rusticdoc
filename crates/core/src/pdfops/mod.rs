@@ -2,8 +2,8 @@
 //!
 //! An engine implements the operations it can; the rest return
 //! [`Error::Unsupported`], and [`MultiEngine`] moves on to the next engine.
-//! This is how Gotenberg's `PDFENGINES_*_ENGINES` lists work, with the
-//! order fixed in code rather than configuration.
+//! The order is lopdf, qpdf, pdfcpu unless a `RUSTICDOC_PDF_ENGINES_*` list
+//! sets another for one operation.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -25,6 +25,7 @@ pub mod lopdf;
 pub mod pages;
 pub mod pdfcpu;
 pub mod qpdf;
+pub mod sign;
 #[cfg(test)]
 mod tests;
 pub mod xmp;
@@ -370,24 +371,24 @@ pub enum Op {
 }
 
 impl Op {
-    /// The operations a `PDFENGINES_*_ENGINES` variable decides.
+    /// The operations a `RUSTICDOC_PDF_ENGINES_*` variable decides.
     pub fn for_variable(variable: &str) -> &'static [Op] {
         match variable {
-            "PDFENGINES_MERGE_ENGINES" => &[Op::Merge],
-            "PDFENGINES_SPLIT_ENGINES" => &[Op::Split],
-            "PDFENGINES_FLATTEN_ENGINES" => &[Op::Flatten],
-            "PDFENGINES_OPTIMIZE_IMAGES_ENGINES" => &[Op::OptimizeImages],
-            "PDFENGINES_READ_METADATA_ENGINES" => &[Op::ReadMetadata],
-            "PDFENGINES_WRITE_METADATA_ENGINES" => &[Op::WriteMetadata],
-            "PDFENGINES_ENCRYPT_ENGINES" => &[Op::Encrypt],
-            "PDFENGINES_EMBED_ENGINES" => &[Op::Embed],
-            "PDFENGINES_EMBED_METADATA_ENGINES" => &[Op::EmbedMetadata],
-            "PDFENGINES_READ_BOOKMARKS_ENGINES" => &[Op::ReadBookmarks],
-            "PDFENGINES_WRITE_BOOKMARKS_ENGINES" => &[Op::WriteBookmarks],
-            "PDFENGINES_WATERMARK_ENGINES" => &[Op::Watermark],
-            "PDFENGINES_STAMP_ENGINES" => &[Op::Stamp],
-            "PDFENGINES_ROTATE_ENGINES" => &[Op::Rotate],
-            "PDFENGINES_FACTUR_X_ENGINES" => &[Op::Facturx],
+            "RUSTICDOC_PDF_ENGINES_MERGE" => &[Op::Merge],
+            "RUSTICDOC_PDF_ENGINES_SPLIT" => &[Op::Split],
+            "RUSTICDOC_PDF_ENGINES_FLATTEN" => &[Op::Flatten],
+            "RUSTICDOC_PDF_ENGINES_OPTIMIZE_IMAGES" => &[Op::OptimizeImages],
+            "RUSTICDOC_PDF_ENGINES_READ_METADATA" => &[Op::ReadMetadata],
+            "RUSTICDOC_PDF_ENGINES_WRITE_METADATA" => &[Op::WriteMetadata],
+            "RUSTICDOC_PDF_ENGINES_ENCRYPT" => &[Op::Encrypt],
+            "RUSTICDOC_PDF_ENGINES_EMBED" => &[Op::Embed],
+            "RUSTICDOC_PDF_ENGINES_EMBED_METADATA" => &[Op::EmbedMetadata],
+            "RUSTICDOC_PDF_ENGINES_READ_BOOKMARKS" => &[Op::ReadBookmarks],
+            "RUSTICDOC_PDF_ENGINES_WRITE_BOOKMARKS" => &[Op::WriteBookmarks],
+            "RUSTICDOC_PDF_ENGINES_WATERMARK" => &[Op::Watermark],
+            "RUSTICDOC_PDF_ENGINES_STAMP" => &[Op::Stamp],
+            "RUSTICDOC_PDF_ENGINES_ROTATE" => &[Op::Rotate],
+            "RUSTICDOC_PDF_ENGINES_FACTUR_X" => &[Op::Facturx],
             _ => &[],
         }
     }
@@ -677,11 +678,10 @@ impl MultiEngine {
         self
     }
 
-    /// The order Gotenberg's routes use: qpdf for merging, flattening and
-    /// encryption, the in-process engine wherever it does the job, and the
-    /// process engines behind it. `lists` holds the operations configured by
-    /// name; a name without a binary is dropped.
-    pub fn for_forms(
+    /// Gives each operation named in `lists` the engines listed for it, by
+    /// variable name. A name whose binary is not configured is dropped.
+    pub fn with_lists(
+        mut self,
         qpdf_bin: Option<PathBuf>,
         pdfcpu_bin: Option<PathBuf>,
         lists: &BTreeMap<String, Vec<String>>,
@@ -699,36 +699,10 @@ impl MultiEngine {
                 _ => None,
             }
         };
-        let order = |names: &[&str]| -> Vec<Arc<dyn PdfEngine>> {
-            names.iter().filter_map(|n| named(n)).collect()
-        };
-        let mut multi = Self::new(order(&["lopdf", "qpdf", "pdfcpu"]))
-            .falling_through()
-            .with_order(Op::Merge, order(&["qpdf", "pdfcpu", "lopdf"]))
-            .with_order(Op::Flatten, order(&["qpdf", "lopdf"]))
-            .with_order(Op::Encrypt, order(&["qpdf", "pdfcpu"]));
         for (variable, names) in lists {
             let engines: Vec<Arc<dyn PdfEngine>> = names.iter().filter_map(|n| named(n)).collect();
             for op in Op::for_variable(variable) {
-                multi = multi.with_order(*op, engines.clone());
-            }
-        }
-        multi
-    }
-
-    /// Applies the configured engine lists on top of this order.
-    pub fn with_lists(
-        mut self,
-        qpdf_bin: Option<PathBuf>,
-        pdfcpu_bin: Option<PathBuf>,
-        lists: &BTreeMap<String, Vec<String>>,
-    ) -> Self {
-        let forms = Self::for_forms(qpdf_bin, pdfcpu_bin, lists);
-        for variable in lists.keys() {
-            for op in Op::for_variable(variable) {
-                if let Some(engines) = forms.orders.get(op) {
-                    self.orders.insert(*op, engines.clone());
-                }
+                self.orders.insert(*op, engines.clone());
             }
         }
         self

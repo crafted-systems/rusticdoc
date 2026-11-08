@@ -1,7 +1,6 @@
 //! rusticdoc server: the HTTP API over the core pipeline.
 //!
-//! Routes are versioned under `/v1`, with Gotenberg's form paths kept as
-//! aliases so existing clients keep working. Every response carries an
+//! Routes are versioned under `/v1`. Every response carries an
 //! `x-request-id`; webhooks deliver results asynchronously with an HMAC
 //! signature; `/openapi.json` describes the API for SDK generation.
 
@@ -46,10 +45,6 @@ pub fn app(state: AppState) -> Router {
     let version = HeaderValue::from_static(rusticdoc_core::VERSION);
 
     // Behind authentication, so it says nothing the version route would not.
-    let advertise = SetResponseHeaderLayer::overriding(
-        HeaderName::from_static("gotenberg-version"),
-        version.clone(),
-    );
     let own_version = SetResponseHeaderLayer::if_not_present(
         HeaderName::from_static("x-rusticdoc-version"),
         version,
@@ -61,7 +56,6 @@ pub fn app(state: AppState) -> Router {
                 state.clone(),
                 admission::admit,
             ))
-            .layer(advertise.clone())
             .layer(own_version.clone())
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
@@ -79,26 +73,6 @@ pub fn app(state: AppState) -> Router {
         state.config.batch_timeout + Duration::from_secs(5),
     );
 
-    // Gotenberg's paths: the same authentication and limits, with its errors.
-    let forms = routes::compat::forms(&state.config)
-        .merge(routes::compat::service::routes(&state.config))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            admission::admit,
-        ))
-        .layer(advertise)
-        .layer(own_version.clone())
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth::require,
-        ))
-        .layer(DefaultBodyLimit::max(body_limit))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::SERVICE_UNAVAILABLE,
-            timeout,
-        ))
-        .layer(axum::middleware::from_fn(routes::compat::plain_errors));
-
     // Without credentials configured nothing is hidden from anyone. With them,
     // the open routes do not say which version runs.
     let mut public = routes::public(&state.config);
@@ -109,67 +83,38 @@ pub fn app(state: AppState) -> Router {
         .merge(public)
         .merge(api)
         .merge(long)
-        .merge(forms)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             metrics::observe,
         ))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            telemetry::access,
-        ))
+        .layer(axum::middleware::from_fn(telemetry::access))
         .layer(SetResponseHeaderLayer::overriding(
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
         ))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID))
         .layer(SetRequestIdLayer::new(REQUEST_ID, MakeRequestUuid))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            gotenberg_headers,
-        ))
+        .layer(axum::middleware::from_fn(clean_request_id))
         .layer(cors(&state.config))
         .layer(CatchPanicLayer::new())
         .with_state(state.clone());
 
-    // Gotenberg's API_ROOT_PATH: everything, health included, under a prefix.
+    // RUSTICDOC_ROOT_PATH: everything, health included, under a prefix.
     let root = state.config.root_path.trim_end_matches('/');
     if root.is_empty() {
         router
     } else {
-        // `/foo/` is the root route as well as `/foo`.
-        let with_slash = router
-            .clone()
-            .map_request(|mut req: axum::extract::Request| {
-                *req.uri_mut() = axum::http::Uri::from_static("/");
-                req
-            });
-        Router::new()
-            .nest(root, router)
-            .route_service(&format!("{root}/"), with_slash)
+        Router::new().nest(root, router)
     }
 }
 
-/// Gotenberg's request conventions: its trace header, cleaned up, becomes the
-/// request id and is echoed back, and `Gotenberg-Output-Filename` renames the
-/// file in the response on the service's own routes, keeping the extension the
-/// route produced. Its own routes apply that name themselves.
-async fn gotenberg_headers(
-    axum::extract::State(state): axum::extract::State<AppState>,
+/// A request id the client chose is kept to printable ASCII and a length cap,
+/// and dropped when nothing is left, so the service makes one instead.
+async fn clean_request_id(
     mut req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let trace_header = state.config.compat.trace_header.as_str();
-    if let Some(trace) = req
-        .headers()
-        .get(trace_header)
-        .and_then(|v| v.to_str().ok())
-        .and_then(telemetry::sanitize_correlation_id)
-        .and_then(|t| HeaderValue::from_str(&t).ok())
-    {
-        req.headers_mut().insert(REQUEST_ID, trace);
-    } else if let Some(given) = req.headers().get(&REQUEST_ID) {
-        // An id the client chose is held to the same rules as a trace.
+    if let Some(given) = req.headers().get(&REQUEST_ID) {
         let clean = given
             .to_str()
             .ok()
@@ -180,47 +125,7 @@ async fn gotenberg_headers(
             None => req.headers_mut().remove(&REQUEST_ID),
         };
     }
-    let on_v1 = req.uri().path().contains("/v1/");
-    let wanted = req
-        .headers()
-        .get("gotenberg-output-filename")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.trim().to_string())
-        .filter(|v| on_v1 && !v.is_empty());
-    let mut res = next.run(req).await;
-    if let Some(id) = res.headers().get(REQUEST_ID).cloned()
-        && let Ok(name) = HeaderName::from_bytes(trace_header.as_bytes())
-    {
-        res.headers_mut().insert(name, id);
-    }
-    if let Some(name) = wanted
-        && let Some(current) = res
-            .headers()
-            .get(header::CONTENT_DISPOSITION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split("filename=\"").nth(1))
-            .map(|v| v.trim_end_matches('"').to_string())
-    {
-        let ext = std::path::Path::new(&current)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{e}"))
-            .unwrap_or_default();
-        let base = name
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(&name)
-            .replace('"', "");
-        let renamed = if std::path::Path::new(&base).extension().is_some() {
-            base
-        } else {
-            format!("{base}{ext}")
-        };
-        if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{renamed}\"")) {
-            res.headers_mut().insert(header::CONTENT_DISPOSITION, v);
-        }
-    }
-    res
+    next.run(req).await
 }
 
 /// Cross-origin access is off unless `RUSTICDOC_CORS_ORIGINS` lists origins,
@@ -255,7 +160,7 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
             "no authentication is configured, so anyone who can reach this service can use it; set RUSTICDOC_API_KEYS".to_string(),
         );
     }
-    if !config.compat.webhook_disabled && config.webhook_secret.is_none() {
+    if !config.webhook_disabled && config.webhook_secret.is_none() {
         warnings.push(
             "webhooks are possible and deliveries are not signed; set RUSTICDOC_WEBHOOK_SECRET"
                 .to_string(),
@@ -279,10 +184,7 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
                 .to_string(),
         );
     }
-    let encrypt_order = config
-        .compat
-        .engine_orders
-        .get("PDFENGINES_ENCRYPT_ENGINES");
+    let encrypt_order = config.engine_orders.get("RUSTICDOC_PDF_ENGINES_ENCRYPT");
     let pdfcpu_encrypts = match encrypt_order {
         Some(names) => names.iter().any(|name| name == "pdfcpu"),
         None => config.qpdf_bin.is_none() && config.pdfcpu_bin.is_some(),
@@ -309,6 +211,18 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     for warning in startup_warnings(&state.config) {
         tracing::warn!("{warning}");
+    }
+    // Which certificate signs, never anything about the key itself.
+    if let Some(signer) = &state.engines.signer {
+        tracing::info!(
+            subject = signer.subject(),
+            algorithm = %signer.algorithm(),
+            not_after = %signer.expiry(),
+            "PDF signing key loaded"
+        );
+        for warning in signer.warnings() {
+            tracing::warn!("{warning}");
+        }
     }
     tracing::info!(%bind, version = rusticdoc_core::VERSION, engines = %state.engines.describe(), "rusticdoc listening");
     // Start the LibreOffice workers now rather than on the first request,

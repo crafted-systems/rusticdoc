@@ -129,6 +129,22 @@ Fonts are shared by every caller, and a font decides what the digits look like i
 
 A valid API key, a basic-auth user and an OpenID Connect token are all refused unless they are an admin key. See [authentication](/docs/guides/authentication/).
 
+## Chinese, Japanese and Korean fonts
+
+The image has Noto Sans CJK but not Noto Serif CJK, which would add 53 MB. Windows CJK font names map to the Noto variant for their script, so Simplified Chinese never takes the Hong Kong forms:
+
+| A document names | It gets | With Noto Serif CJK added |
+|---|---|---|
+| SimSun, NSimSun, FangSong, KaiTi | Noto Sans CJK SC | Noto Serif CJK SC |
+| PMingLiU, MingLiU | Noto Sans CJK TC | Noto Serif CJK TC |
+| MS Mincho, MS PMincho, Yu Mincho | Noto Sans CJK JP | Noto Serif CJK JP |
+| Batang, BatangChe, Gungsuh | Noto Sans CJK KR | Noto Serif CJK KR |
+| SimHei, Microsoft YaHei, Microsoft JhengHei, MS Gothic, Meiryo, Malgun Gothic, Gulim, Dotum | The Noto Sans CJK variant for its script | No change |
+
+The names also match in their own scripts, such as 宋体 and ＭＳ 明朝. None of these keep the original's line breaks, because no free font matches their widths.
+
+To get the serif faces back, add `NotoSerifCJK-Regular.ttc` and `NotoSerifCJK-Bold.ttc` in any of the three ways above. They are under the SIL Open Font License, from the [Noto CJK releases](https://github.com/notofonts/noto-cjk/releases) or Debian's `fonts-noto-cjk`. Each is about 27 MB, under the 128 MB limit for one font. Nothing else needs to change: the serif names above ask for Noto Serif CJK first.
+
 ## Check what a document used
 
 `x-fonts-used` on a PDF response lists the fonts named in that PDF.

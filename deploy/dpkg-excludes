@@ -1,0 +1,17 @@
+# Files the service never reads, left out at install time (dpkg path-exclude).
+# Debian's slim base already drops docs, man pages and translations.
+
+# Noto Serif CJK, 53 MB. Chinese, Japanese and Korean text set in a serif face
+# (Mincho, Song, Batang) falls back to Noto Sans CJK, which is kept.
+path-exclude /usr/share/fonts/opentype/noto/NotoSerifCJK*
+
+# LibreOffice's clip-art gallery and wizards are opened only from its menus,
+# which a headless conversion never shows.
+path-exclude /usr/lib/libreoffice/share/gallery/*
+path-exclude /usr/lib/libreoffice/share/wizards/*
+
+# One icon theme is kept for LibreOffice to start with; the dark and SVG
+# variants are never drawn.
+path-exclude /usr/share/libreoffice/share/config/images_colibre_dark.zip
+path-exclude /usr/share/libreoffice/share/config/images_colibre_dark_svg.zip
+path-exclude /usr/share/libreoffice/share/config/images_colibre_svg.zip

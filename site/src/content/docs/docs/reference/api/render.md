@@ -28,14 +28,18 @@ Needs credentials, if any are configured.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `contactInfo` | string | No | For `sign`: how to reach the signer. |
 | `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
 | `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
 | `files` | files | No | Further files, used by `merge`. |
+| `location` | string | No | For `sign`: where it was signed. |
 | `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |
 | `ownerPassword` | string | No |  |
 | `pdfa` | string | No | PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`. |
-| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`. |
+| `reason` | string | No | For `sign`: why the document was signed. |
+| `signerName` | string | No | For `sign`: the signer's name as shown. |
+| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the service's key; it must be last and cannot be combined with `encrypt`. |
 | `template` | file | No | The template file. Send this or `templateId`. |
 | `templateId` | string | No | The id of a stored template, from `POST /v1/templates`. Send this or `template`. Files in the form are then only further inputs, for `merge`. |
 | `to` | string | No | Output format for `convert`. Default `pdf`. |
@@ -56,7 +60,7 @@ Needs credentials, if any are configured.
 ## POST /v1/render/batch
 
 Renders the template once per element of an array in the data and
-returns the files in a ZIP, as Carbone's batch rendering does.
+returns the files in a ZIP.
 
 `splitBy` names the array with a dotted path such as `items` or `order.lines`. Each render sees the whole data with that array replaced by the one element, plus `item` (the element) and `batch` (`index`, `count`). `batchName` is a template for each file's name, default `{{ batch.index }}`.
 
@@ -74,14 +78,18 @@ Needs credentials, if any are configured.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `contactInfo` | string | No | For `sign`: how to reach the signer. |
 | `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
 | `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
 | `files` | files | No | Further files, used by `merge`. |
+| `location` | string | No | For `sign`: where it was signed. |
 | `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |
 | `ownerPassword` | string | No |  |
 | `pdfa` | string | No | PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`. |
-| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`. |
+| `reason` | string | No | For `sign`: why the document was signed. |
+| `signerName` | string | No | For `sign`: the signer's name as shown. |
+| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the service's key; it must be last and cannot be combined with `encrypt`. |
 | `template` | file | No | The template file. Send this or `templateId`. |
 | `templateId` | string | No | The id of a stored template, from `POST /v1/templates`. Send this or `template`. Files in the form are then only further inputs, for `merge`. |
 | `to` | string | No | Output format for `convert`. Default `pdf`. |
@@ -108,14 +116,18 @@ Needs credentials, if any are configured.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `contactInfo` | string | No | For `sign`: how to reach the signer. |
 | `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
 | `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
 | `files` | files | No | Further files, used by `merge`. |
+| `location` | string | No | For `sign`: where it was signed. |
 | `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |
 | `ownerPassword` | string | No |  |
 | `pdfa` | string | No | PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`. |
-| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`. |
+| `reason` | string | No | For `sign`: why the document was signed. |
+| `signerName` | string | No | For `sign`: the signer's name as shown. |
+| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the service's key; it must be last and cannot be combined with `encrypt`. |
 | `template` | file | No | The template file. Send this or `templateId`. |
 | `templateId` | string | No | The id of a stored template, from `POST /v1/templates`. Send this or `template`. Files in the form are then only further inputs, for `merge`. |
 | `to` | string | No | Output format for `convert`. Default `pdf`. |

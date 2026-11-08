@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, OriginalUri, State};
+use axum::extract::{ConnectInfo, OriginalUri};
 use axum::http::{Request, header};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -12,7 +12,6 @@ use tracing::Instrument;
 use tracing_subscriber::EnvFilter;
 
 use crate::auth::LoggedCaller;
-use crate::state::AppState;
 
 /// Installs the global subscriber: JSON lines by default, `pretty` for a
 /// terminal. Safe to call once per process.
@@ -48,27 +47,17 @@ pub fn sanitize_correlation_id(value: &str) -> Option<String> {
     (!clean.is_empty()).then(|| clean.to_string())
 }
 
-/// True for the routes the settings leave out of the access log. `path` is
-/// relative to the root path.
-fn telemetry_off(state: &AppState, path: &str) -> bool {
-    let compat = &state.config.compat;
-    match path {
-        // A readiness probe runs as often as a liveness one, and answers 503 for
-        // as long as a new replica waits for its fonts, which is no error.
-        "/health" | "/ready" => compat.health_telemetry_off,
-        "/" => compat.root_telemetry_off,
-        "/debug" => compat.debug_telemetry_off,
-        "/version" => compat.version_telemetry_off,
-        p if p == compat.prometheus_path => compat.prometheus_telemetry_off,
-        _ => false,
-    }
+/// True for the probes left out of the access log. `path` is relative to the
+/// root path. A readiness probe runs as often as a liveness one, and answers
+/// 503 for as long as a new replica waits for its fonts, which is no error.
+fn telemetry_off(path: &str) -> bool {
+    matches!(path, "/health" | "/ready")
 }
 
-/// One span and one log line per request, in the fields Gotenberg's access log
-/// has, except for the routes that are configured out of it.
-pub async fn access(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+/// One span and one log line per request, except for the probes.
+pub async fn access(req: Request<Body>, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    if telemetry_off(&state, &path) {
+    if telemetry_off(&path) {
         return next.run(req).await;
     }
     let full_path = req

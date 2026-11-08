@@ -69,7 +69,7 @@ The service finds its engines when it starts. If one is missing, the steps that 
 | qpdf | PDF operations, and encryption | A child process per operation |
 | pdfcpu | PDF operations | A child process per operation |
 
-Child engines start from an almost empty environment, so your keys and secrets do not reach them. On `/v1/*`, PDF operations try `lopdf`, then qpdf, then pdfcpu. You can change the order, as the [configuration reference](/docs/reference/configuration/) explains.
+Child engines start from an almost empty environment, so your keys and secrets do not reach them. PDF operations try `lopdf`, then qpdf, then pdfcpu. You can change the order, as the [configuration reference](/docs/reference/configuration/#pdf-engine-order) explains.
 
 Documents cannot reach the network through LibreOffice. [Security](/docs/operate/security/) says how, and how that is checked.
 

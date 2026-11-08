@@ -2,8 +2,8 @@
 # Proves that crafted documents make LibreOffice fetch nothing and read no
 # local files: remote images, linked sections, WEBSERVICE(), external cell
 # links and file:// references, in DOCX, PPTX, XLSX, ODP, FODT, FODS, FODP,
-# FODG, HTML, XHTML, SVG and RTF, through /forms/libreoffice/convert with and
-# without landscape and through /v1/convert. A control request from the same container must reach the listener, or the test
+# FODG, HTML, XHTML, SVG and RTF, through /v1/convert with and without
+# landscape. A control request from the same container must reach the listener, or the test
 # proves nothing. Usage: test/security/outbound.sh [image]
 set -u
 IMAGE=${1:-rusticdoc:local}
@@ -39,9 +39,8 @@ convert() { # file, label, path, extra curl arguments
     fi
 }
 for f in ext.docx ext.html ext.fodt ext.fods ext.pptx ext.odp ext.fodp ext.fodg ext.svg ext.xhtml ext.rtf ext.xlsx web.html web.xhtml frames.html objects.fodt linked.docx; do
-    convert "$f" forms /forms/libreoffice/convert
-    convert "$f" landscape /forms/libreoffice/convert -F landscape=true
     convert "$f" v1 /v1/convert
+    convert "$f" landscape /v1/convert -F landscape=true
 done
 # The text export opens a document for editing, so it gets its own pass.
 for f in ext.docx ext.html ext.fodt ext.rtf linked.docx; do

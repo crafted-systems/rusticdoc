@@ -11,17 +11,14 @@ This page lists every environment variable the service reads. All of them are op
 |---|---|---|
 | Size | `512KB`, `64MB`, `1GB` or a bare number of bytes. Case does not matter, and each unit is a multiple of 1024 | `2g`, `1.5GB`, `2GiB` |
 | Duration | `500ms`, `30s`, `2m`, `1h`, or a number of seconds such as `1.5` | `1m30s` |
-| `RUSTICDOC_*` boolean | `1`, `true` or `yes` is on. Anything else is off, including `TRUE` | |
-| Gotenberg boolean | `1`, `t`, `T`, `TRUE`, `true`, `True`, and `0`, `f`, `F`, `FALSE`, `false`, `False` | Anything else is ignored, except that `API_ENABLE_BASIC_AUTH` and `API_ENABLE_OIDC_AUTH` stop the service |
+| Boolean | `1`, `true` or `yes` is on. Anything else is off, including `TRUE` | |
 | List | Comma-separated, with spaces trimmed | |
 
 An empty variable counts as unset.
 
-**A bad value does not always stop the service.** These settings stop it from starting, with a message that names the problem: `RUSTICDOC_STORE`, `RUSTICDOC_STORE_SCOPE`, `RUSTICDOC_ADMIN_KEYS`, `RUSTICDOC_API_KEYS`, `RUSTICDOC_BASIC_AUTH_USERNAME` and `RUSTICDOC_BASIC_AUTH_PASSWORD` when only one is set, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE`, `RUSTICDOC_STORE_SYNC_INTERVAL`, a `PDFENGINES_*_ENGINES` list that names `pdftk`, `exiftool` or an unknown engine, an invalid regular expression in an allow or deny list, a trace header that is not a valid header name, and half-configured OpenID Connect.
+**A bad value does not always stop the service.** These settings stop it from starting, with a message that names the problem: `RUSTICDOC_STORE`, `RUSTICDOC_STORE_SCOPE`, `RUSTICDOC_ADMIN_KEYS`, `RUSTICDOC_API_KEYS`, `RUSTICDOC_BASIC_AUTH_USERNAME` and `RUSTICDOC_BASIC_AUTH_PASSWORD` when only one is set, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE`, `RUSTICDOC_STORE_SYNC_INTERVAL`, a `RUSTICDOC_PDF_ENGINES_*` list that names an unknown engine, an invalid regular expression in an allow or deny list, and OpenID Connect with only one of the issuer and audience set, or with an issuer or JWKS URL that is neither `https` nor `http` on a loopback host.
 
 Every other number, size or duration that the service cannot parse is ignored, and the default stays in place with no warning. `RUSTICDOC_RENDER_MEMORY=2g` leaves the limit at 1 GiB.
-
-When a `RUSTICDOC_*` variable and a Gotenberg variable set the same thing, the `RUSTICDOC_*` one wins. `rusticdoc serve --bind` wins over both.
 
 The image sets `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN`, `RUSTICDOC_PDFCPU_BIN`, `RUSTICDOC_FONTS_DIR` and `RUSTICDOC_LOG_FORMAT` for you, along with `TZ=UTC`, `LANG=C.UTF-8` and `LC_ALL=C.UTF-8`.
 
@@ -39,6 +36,13 @@ The image sets `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN`, `RUSTICDOC_PDF
 | `RUSTICDOC_LOG_FORMAT` | `json` | `json`, or `pretty` for a terminal |
 | `RUSTICDOC_LOG_LEVEL` | `info` | A `tracing` filter such as `info` or `rusticdoc=debug` |
 
+## Routes
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RUSTICDOC_CONVERT_DISABLED` | `false` | `/v1/convert` and `/v1/pdf/convert` answer `404`. Conversion steps in `/v1/render` answer `503` |
+| `RUSTICDOC_PDF_DISABLED` | `false` | The `/v1/pdf/*` routes answer `404` |
+
 ## Authentication
 
 | Variable | Default | Purpose |
@@ -47,8 +51,11 @@ The image sets `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN`, `RUSTICDOC_PDF
 | `RUSTICDOC_BASIC_AUTH_USERNAME` | None | Basic auth user. Set it together with `RUSTICDOC_BASIC_AUTH_PASSWORD` |
 | `RUSTICDOC_BASIC_AUTH_PASSWORD` | None | Basic auth password. Set it together with `RUSTICDOC_BASIC_AUTH_USERNAME` |
 | `RUSTICDOC_ADMIN_KEYS` | None | Comma-separated keys that may upload and delete fonts. With credentials configured and none of these, nobody may |
+| `RUSTICDOC_OIDC_ISSUER` | None | Accept bearer tokens from this OpenID Connect provider on the protected routes. Must be `https`, or `http` on a loopback host |
+| `RUSTICDOC_OIDC_AUDIENCE` | None | The audience tokens must carry. Required with the issuer |
+| `RUSTICDOC_OIDC_JWKS_URL` | Discovered from the issuer | Where the signing keys live, under the same rule as the issuer |
 
-OpenID Connect uses Gotenberg's variable names, listed [below](#authentication-with-gotenbergs-names). See [authentication](/docs/guides/authentication/).
+OpenID Connect is on when `RUSTICDOC_OIDC_ISSUER` is set. Set the issuer and the audience together: one without the other stops the service from starting. See [authentication](/docs/guides/authentication/).
 
 ## Requests and connections
 
@@ -92,6 +99,28 @@ OpenID Connect uses Gotenberg's variable names, listed [below](#authentication-w
 | `RUSTICDOC_FONTS_DIR` | `/fonts` | Mounted fonts, picked up by LibreOffice |
 
 The service does not search your `PATH` for engines.
+
+## PDF engine order
+
+Each of these takes a comma-separated list from `lopdf`, `qpdf`, `pdfcpu` and `qpdf-metadata`, tried in the order given. An unknown name stops the service from starting. With no list set, every operation tries `lopdf`, qpdf, then pdfcpu.
+
+| Variable | Operation |
+|---|---|
+| `RUSTICDOC_PDF_ENGINES_MERGE` | Merge |
+| `RUSTICDOC_PDF_ENGINES_SPLIT` | Split |
+| `RUSTICDOC_PDF_ENGINES_FLATTEN` | Flatten |
+| `RUSTICDOC_PDF_ENGINES_ROTATE` | Rotate |
+| `RUSTICDOC_PDF_ENGINES_OPTIMIZE_IMAGES` | Optimize images |
+| `RUSTICDOC_PDF_ENGINES_ENCRYPT` | Encrypt. A failed encryption never falls through to the next engine. Naming `pdfcpu` passes passwords as command-line arguments, which this user's other processes can read while it runs, and the service warns at start |
+| `RUSTICDOC_PDF_ENGINES_WATERMARK` | Watermark |
+| `RUSTICDOC_PDF_ENGINES_STAMP` | Stamp |
+| `RUSTICDOC_PDF_ENGINES_EMBED` | Embed files |
+| `RUSTICDOC_PDF_ENGINES_EMBED_METADATA` | Metadata of embedded files |
+| `RUSTICDOC_PDF_ENGINES_READ_BOOKMARKS` | Read bookmarks |
+| `RUSTICDOC_PDF_ENGINES_WRITE_BOOKMARKS` | Write bookmarks |
+| `RUSTICDOC_PDF_ENGINES_READ_METADATA` | Read metadata |
+| `RUSTICDOC_PDF_ENGINES_WRITE_METADATA` | Write metadata |
+| `RUSTICDOC_PDF_ENGINES_FACTUR_X` | Factur-X |
 
 ## Store
 
@@ -143,127 +172,39 @@ The service sets the bucket from `RUSTICDOC_STORE`, so `AWS_BUCKET` has no effec
 |---|---|---|
 | `RUSTICDOC_WEBHOOK_SECRET` | None | The secret that callers' signing keys derive from. Unset, deliveries are not signed, and the service warns at start |
 | `RUSTICDOC_WEBHOOK_ATTEMPTS` | `3` | Attempts per delivery, including the first |
+| `RUSTICDOC_WEBHOOK_DISABLED` | `false` | Ignore the webhook headers, on every route |
 | `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhooks to private and loopback addresses |
+| `RUSTICDOC_WEBHOOK_ALLOW_LIST` | None | Regular expressions a webhook URL must match one of |
+| `RUSTICDOC_WEBHOOK_DENY_LIST` | None | Regular expressions no webhook URL may match |
+| `RUSTICDOC_WEBHOOK_ERROR_ALLOW_LIST` | `RUSTICDOC_WEBHOOK_ALLOW_LIST` | The allow list for error URLs |
+| `RUSTICDOC_WEBHOOK_ERROR_DENY_LIST` | None | More refusals for error URLs |
 | `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook jobs running at once, across the service. Past it, a request gets `429` before its body is read |
 | `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | Webhook jobs running at once for one caller |
 | `RUSTICDOC_DOWNLOAD_FROM_DISABLED` | `false` | Refuse the `downloadFrom` form field entirely |
 | `RUSTICDOC_DOWNLOAD_FROM_MAX_ENTRIES` | `10` | Most URLs one request may fetch through `downloadFrom` |
 | `RUSTICDOC_DOWNLOAD_FROM_ALLOW_PRIVATE` | `false` | Allow `downloadFrom` to fetch from private and loopback addresses |
+| `RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST` | None | The allow list for `downloadFrom` |
+| `RUSTICDOC_DOWNLOAD_FROM_DENY_LIST` | None | The deny list for `downloadFrom` |
 | `RUSTICDOC_OUTBOUND_PROXY` | None | Proxy for webhooks and `downloadFrom`. Proxy variables in the environment are otherwise ignored. With this set, DNS pinning no longer applies, because the proxy resolves names itself: it must enforce its own egress policy, including blocking private ranges. The URL and its resolved addresses are still checked first, and the service warns at start |
 
-## Gotenberg's variables
+The allow and deny lists hold comma-separated regular expressions, matched against the URL with its host normalised, on every route. Deny wins. A refusal is `403`. They add to the refusal of private addresses and never relax it. An invalid one stops the service from starting.
 
-The service accepts Gotenberg's variable names, so a deployment can move over by changing the image. See [moving from Gotenberg](/docs/guides/from-gotenberg/).
+## PDF signing
 
-### Settings with a rusticdoc equivalent
-
-| Variable | Default | Same as |
-|---|---|---|
-| `API_PORT` | `9027` | The port in `RUSTICDOC_BIND` |
-| `API_BIND_IP` | `0.0.0.0` | The address in `RUSTICDOC_BIND` |
-| `API_ROOT_PATH` | `/` | `RUSTICDOC_ROOT_PATH` |
-| `API_TIMEOUT` | `30s` | `RUSTICDOC_API_TIMEOUT` |
-| `API_BODY_LIMIT` | `64MB` | `RUSTICDOC_BODY_LIMIT` |
-| `LIBREOFFICE_BIN_PATH` | As for the rusticdoc variable | `RUSTICDOC_LIBREOFFICE_BIN` |
-| `QPDF_BIN_PATH` | As for the rusticdoc variable | `RUSTICDOC_QPDF_BIN` |
-| `PDFCPU_BIN_PATH` | As for the rusticdoc variable | `RUSTICDOC_PDFCPU_BIN` |
-| `LOG_LEVEL` | `info` | `RUSTICDOC_LOG_LEVEL` |
-| `LOG_FORMAT` | `json` | `RUSTICDOC_LOG_FORMAT`. `text` and `pretty` give pretty logs, and anything else JSON |
-| `WEBHOOK_ALLOW_PRIVATE` | `false` | `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE`. On for `true` or `1` |
-| `API_DISABLE_DOWNLOAD_FROM` | `false` | `RUSTICDOC_DOWNLOAD_FROM_DISABLED`. On for `true` or `1` |
-| `API_DOWNLOAD_FROM_MAX_ENTRIES` | `10` | `RUSTICDOC_DOWNLOAD_FROM_MAX_ENTRIES` |
-
-`API_TIMEOUT` and `API_BODY_LIMIT` follow the size and duration rules above, which are narrower than Gotenberg's. `API_TIMEOUT=1m30s` is ignored. Write `90s`.
-
-### Authentication with Gotenberg's names
+The key and certificate for [cryptographic signatures](/docs/guides/pdf-operations/#with-a-certificate): `signature=certificate` on `/v1/pdf/sign` and the `sign` step. Requests never carry a key.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `API_ENABLE_BASIC_AUTH` | Off | Turn on basic auth, with the next two |
-| `GOTENBERG_API_BASIC_AUTH_USERNAME` | None | Basic auth user |
-| `GOTENBERG_API_BASIC_AUTH_PASSWORD` | None | Basic auth password |
-| `API_ENABLE_OIDC_AUTH` | Off | Accept bearer tokens from an OpenID Connect provider on the protected routes |
-| `API_OIDC_ISSUER` | None | Required with OpenID Connect. Must be `https`, or `http` on a loopback host |
-| `API_OIDC_AUDIENCE` | None | Required with OpenID Connect |
-| `API_OIDC_JWKS_URL` | Discovered from the issuer | Where the signing keys live, under the same rule as the issuer |
+| `RUSTICDOC_SIGNING_KEY` | None | Path to the private key, PEM: PKCS#8 (`PRIVATE KEY`), PKCS#1 (`RSA PRIVATE KEY`) or SEC1 (`EC PRIVATE KEY`), unencrypted. RSA of 2,048 to 8,192 bits, or ECDSA P-256 |
+| `RUSTICDOC_SIGNING_CERT` | None | Path to the certificate for that key, PEM, followed by any chain certificates to include in signatures, in order |
 
-### Routes
+Set both or neither. At start the service reads them and refuses to start when only one is set, a file cannot be read, the key is encrypted or does not match the first certificate, or that certificate is outside its validity period. It warns, and starts, when the certificate allows neither digitalSignature nor nonRepudiation, when it is self-signed, when the chain is out of order, and when the key file can be read by other users. The log names the certificate's subject, algorithm and expiry, never anything about the key. Unset, cryptographic signing answers `503`, and image signing works as before.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `LIBREOFFICE_DISABLE_ROUTES` | `false` | The conversion routes answer `404`, on `/v1/*` as on `/forms/*`. Conversion steps in `/v1/render` answer `503` |
-| `PDFENGINES_DISABLE_ROUTES` | `false` | The PDF routes answer `404`, on `/v1/*` as on `/forms/*` |
-| `API_ENABLE_DEBUG_ROUTE` | `false` | Serve `/debug` |
-| `GOTENBERG_BUILD_DEBUG_DATA` | `true` | Fill `/debug` in |
-| `API_TRACE_HEADER` | `Gotenberg-Trace` | The header that carries the correlation id |
-| `API_CORRELATION_ID_HEADER` | `Gotenberg-Trace` | The older name for it. `API_TRACE_HEADER` wins |
-
-### PDF engine order
-
-Each of these takes a comma-separated list from `qpdf`, `pdfcpu`, `lopdf` and `qpdf-metadata`. Naming `pdftk` or `exiftool`, which this build lacks, or an unknown engine, stops the service from starting.
-
-With no list set, `/forms/*` tries qpdf, pdfcpu, then `lopdf` for merge, qpdf then `lopdf` for flatten, qpdf then pdfcpu for encrypt, and `lopdf`, qpdf, pdfcpu for the rest. `/v1/*` tries `lopdf`, qpdf, pdfcpu for everything. A list you set applies to both.
-
-| Variable | Operation |
-|---|---|
-| `PDFENGINES_MERGE_ENGINES` | Merge |
-| `PDFENGINES_SPLIT_ENGINES` | Split |
-| `PDFENGINES_FLATTEN_ENGINES` | Flatten |
-| `PDFENGINES_ROTATE_ENGINES` | Rotate |
-| `PDFENGINES_OPTIMIZE_IMAGES_ENGINES` | Optimize images |
-| `PDFENGINES_ENCRYPT_ENGINES` | Encrypt. A failed encryption never falls through to the next engine. Naming `pdfcpu` passes passwords as command-line arguments, which this user's other processes can read while it runs, and the service warns at start |
-| `PDFENGINES_WATERMARK_ENGINES` | Watermark |
-| `PDFENGINES_STAMP_ENGINES` | Stamp |
-| `PDFENGINES_EMBED_ENGINES` | Embed files |
-| `PDFENGINES_EMBED_METADATA_ENGINES` | Metadata of embedded files |
-| `PDFENGINES_READ_BOOKMARKS_ENGINES` | Read bookmarks |
-| `PDFENGINES_WRITE_BOOKMARKS_ENGINES` | Write bookmarks |
-| `PDFENGINES_READ_METADATA_ENGINES` | Read metadata |
-| `PDFENGINES_WRITE_METADATA_ENGINES` | Write metadata |
-| `PDFENGINES_FACTUR_X_ENGINES` | Factur-X |
-| `PDFENGINES_CONVERT_ENGINES` | Accepted and checked, and shown in `/debug`. It changes no order |
-| `PDFENGINES_ENGINES` | Accepted and checked, and shown in `/debug`. It changes no order |
-
-The check also accepts `libreoffice-pdfengine` as a name in these lists.
-
-### Access log
-
-Each of these leaves its route out of the access log, and defaults to `true`. The older `*_LOGGING` name still works, and the `*_TELEMETRY` name wins.
-
-| Variable | Older name | Route |
-|---|---|---|
-| `API_DISABLE_HEALTH_CHECK_ROUTE_TELEMETRY` | `API_DISABLE_HEALTH_CHECK_LOGGING` | `/health` and `/ready` |
-| `API_DISABLE_ROOT_ROUTE_TELEMETRY` | `API_DISABLE_ROOT_ROUTE_LOGGING` | `/` |
-| `API_DISABLE_DEBUG_ROUTE_TELEMETRY` | `API_DISABLE_DEBUG_ROUTE_LOGGING` | `/debug` |
-| `API_DISABLE_VERSION_ROUTE_TELEMETRY` | `API_DISABLE_VERSION_ROUTE_LOGGING` | `/version` |
-| `PROMETHEUS_DISABLE_ROUTE_TELEMETRY` | `PROMETHEUS_DISABLE_ROUTE_LOGGING` | The Gotenberg metrics route |
-
-### Gotenberg's metrics route
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PROMETHEUS_DISABLE_COLLECT` | `false` | Remove the route |
-| `PROMETHEUS_NAMESPACE` | `gotenberg` | The prefix on its metric names |
-| `PROMETHEUS_METRICS_PATH` | `/prometheus/metrics` | Its path. `/metrics` is separate and always has the `rusticdoc_` names |
-
-### Webhooks and downloads
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `WEBHOOK_ENABLE_SYNC_MODE` | `false` | Answer only after the delivery |
-| `WEBHOOK_DISABLE` | `false` | Ignore the webhook headers, on every route |
-| `WEBHOOK_ALLOW_LIST` | None | Regular expressions a webhook URL must match one of |
-| `WEBHOOK_DENY_LIST` | None | Regular expressions no webhook URL may match |
-| `WEBHOOK_ERROR_ALLOW_LIST` | `WEBHOOK_ALLOW_LIST` | The allow list for error URLs |
-| `WEBHOOK_ERROR_DENY_LIST` | None | More refusals for error URLs |
-| `API_DOWNLOAD_FROM_ALLOW_LIST` | None | The allow list for `downloadFrom` |
-| `API_DOWNLOAD_FROM_DENY_LIST` | None | The deny list for `downloadFrom` |
-
-The lists hold comma-separated regular expressions, matched against the URL with its host normalised, on every route. Deny wins. A refusal is `403`. They add to the refusal of private addresses and never relax it. An invalid one stops the service from starting.
+A certificate that expires while the service runs makes signing answer `503` from then on. Replace the files and restart.
 
 ## Passed to engines and otherwise unused
 
-The service hands these on to child engines from its own environment, and passes nothing else. `TZ` is also what `/debug` reports. `TMPDIR` also moves the temp directory the service itself uses.
+The service hands these on to child engines from its own environment, and passes nothing else. `TMPDIR` also moves the temp directory the service itself uses.
 
 `PATH`, `LANG`, `LC_ALL`, `HOME`, `TMPDIR`, `FONTCONFIG_FILE`, `TZ`, `PYTHONPATH`, `UNO_PATH`, `URE_BOOTSTRAP`
 

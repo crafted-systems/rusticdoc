@@ -1,5 +1,4 @@
-//! Metadata under ExifTool's names and value shapes, which is what Gotenberg's
-//! clients read and write: `CreateDate` as `2006:09:18 16:27:50-04:00`,
+//! Metadata under ExifTool's names and value shapes: `CreateDate` as `2006:09:18 16:27:50-04:00`,
 //! `Marked` as a boolean, `Keywords` as a list, `PDFVersion` as a number.
 //!
 //! A write goes to the Info dictionary and to the XMP packet together, so a

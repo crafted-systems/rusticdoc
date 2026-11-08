@@ -10,7 +10,7 @@ This page shows where to put tags in Word, LibreOffice, Excel and PowerPoint fil
 A template is an ordinary file with tags typed into its text. You need no add-in, field or special style.
 
 :::note
-Generated files have been opened in LibreOffice, not in Word, Excel or PowerPoint. See [known limits](/docs/project/known-limits/).
+Templates typed in Word, Excel and PowerPoint 16.114 for Mac have been filled, and the results open in those apps without a repair prompt. Office for Windows has not been tried. See [known limits](/docs/project/known-limits/).
 :::
 
 ## Typing tags in a word processor
@@ -35,6 +35,7 @@ There are no special loop tags. The positions of a block's opening and closing t
 | In two rows of one table | Those rows, and everything between |
 | In different paragraphs | Those paragraphs, and everything between |
 | On different slides (PPTX) or pages (ODP) | That run of slides |
+| In different shapes of one slide (PPTX) | That slide |
 | In rows of a sheet (XLSX, ODS) | Those rows |
 
 Tags in different parts of a package cannot form a block, such as a `{% for %}` in the body and its `{% endfor %}` in a header, or tags on two sheets of an XLSX: `a block cannot span parts`. PPTX slides are the exception, as the table says.
@@ -185,12 +186,12 @@ Put the opening tag on one slide and the closing tag on the same or a later slid
 | `{% for %}` on slide 2, `{% endfor %}` on slide 3 | Slides 2 and 3, once per item, in order |
 | Both in one shape, in the same paragraph | The text between them |
 | Both in one shape, in different paragraphs | Those paragraphs |
-| In different shapes on one slide | Those shapes |
+| In different shapes on one slide, such as the title and the body | That slide, once per item |
 | In rows of a table | Those rows |
 
 Each copy of a slide gets its own parts, relationships and ids, and the original's speaker notes are not shared with the copies. An empty list removes the slides, and slides with no tags stay where they are.
 
-For a condition across slides, the slide holding `{% else %}` starts the second branch, even if text sits before the tag on that slide.
+For a condition across slides, the slide holding `{% else %}` starts the second branch, even if text sits before the tag on that slide. A block that repeats one slide cannot hold an `{% else %}` or `{% elif %}`: `cannot divide a slide`.
 
 ```bash test
 mkdir t && cd t && unzip -q ../deck.pptx

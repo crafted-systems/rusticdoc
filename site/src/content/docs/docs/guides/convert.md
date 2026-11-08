@@ -108,7 +108,7 @@ curl -F files=@report.docx -F pdfa=PDF/A-2b -F nativePageRanges=1 \
 grep -aq pdfaid report.pdf
 ```
 
-`/forms/libreoffice/convert` reads more fields than this, such as `initialView`, `updateIndexes` and `nativeWatermarkText`. `/v1/convert` ignores them, and it does not refresh indexes and tables of contents before exporting, while `/forms/libreoffice/convert` does by default. See [moving from Gotenberg 8](/docs/guides/from-gotenberg/).
+`/v1/convert` does not refresh indexes and tables of contents before exporting. Update them in the document before you send it.
 
 ## Finish the result in one request
 

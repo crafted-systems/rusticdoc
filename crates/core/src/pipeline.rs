@@ -10,6 +10,7 @@ use crate::job;
 use crate::job::{Document, Format, Output, RenderRequest, Step};
 use crate::limits;
 use crate::pdfops::MultiEngine;
+use crate::pdfops::sign::{self, Signer};
 use crate::render::Renderer;
 use crate::template;
 
@@ -21,10 +22,11 @@ pub struct Engines {
     /// PDF operations, tried in order: lopdf, then qpdf and pdfcpu when
     /// configured.
     pub pdf: MultiEngine,
-    /// PDF operations for Gotenberg's routes, in the order they use.
-    pub forms: MultiEngine,
-    /// `LIBREOFFICE_DISABLE_ROUTES`: conversion steps on `/v1/*` refuse too.
+    /// `RUSTICDOC_CONVERT_DISABLED`: conversion steps refuse.
     pub office_routes_disabled: bool,
+    /// The key for cryptographic signatures, from `RUSTICDOC_SIGNING_KEY` and
+    /// `RUSTICDOC_SIGNING_CERT`. Without it, `sign` steps answer 503.
+    pub signer: Option<Arc<Signer>>,
 }
 
 impl Engines {
@@ -44,24 +46,52 @@ impl Engines {
                 .with_lists(
                     config.qpdf_bin.clone(),
                     config.pdfcpu_bin.clone(),
-                    &config.compat.engine_orders,
+                    &config.engine_orders,
                 ),
-            forms: MultiEngine::for_forms(
-                config.qpdf_bin.clone(),
-                config.pdfcpu_bin.clone(),
-                &config.compat.engine_orders,
-            ),
-            office_routes_disabled: config.compat.libreoffice_disable_routes,
+            office_routes_disabled: config.convert_disabled,
+            // `Config::check` has refused a key that does not load before a
+            // service starts; a library or CLI caller that skipped it gets no
+            // signer and a 503 that says why.
+            signer: match config.signer() {
+                Ok(signer) => signer.map(Arc::new),
+                Err(problem) => {
+                    tracing::error!("{problem}");
+                    None
+                }
+            },
         }
     }
 
-    /// What `/version` reports.
+    /// What `/v1/version` reports.
     pub fn describe(&self) -> serde_json::Value {
         serde_json::json!({
             "libreoffice": self.libreoffice.as_ref().map(|l| l.bin().display().to_string()),
             "pdf": self.pdf.names(),
             "templates": { "text": template::TEXT_FORMATS, "office": template::OFFICE_FORMATS },
+            "signing": self.signer.is_some(),
         })
+    }
+
+    /// The signing key, or why there is none: a 503 whose text the client
+    /// reads, since it names a setting and nothing internal.
+    pub fn signer(&self) -> Result<&Arc<Signer>> {
+        self.signer.as_ref().ok_or_else(|| {
+            Error::Status(
+                503,
+                "cryptographic signing is not configured on this service; its operator sets RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT"
+                    .into(),
+            )
+        })
+    }
+
+    /// Refuses a step list before any work is done: `sign` must come last,
+    /// cannot be combined with `encrypt`, and needs a key.
+    pub fn check_steps(&self, steps: &[Step]) -> Result<()> {
+        check_steps(steps)?;
+        if steps.iter().any(|s| matches!(s, Step::Sign { .. })) {
+            self.signer()?;
+        }
+        Ok(())
     }
 
     fn libreoffice(&self) -> Result<&LibreOffice> {
@@ -137,6 +167,7 @@ impl Pipeline {
                 req.steps.len()
             )));
         }
+        self.engines.check_steps(&req.steps)?;
 
         let has_data = !is_empty_object(&req.data);
         let ext = req.template.extension();
@@ -291,13 +322,38 @@ impl Pipeline {
                 user_password,
                 owner_password,
             } => pdf.encrypt(doc, user_password, owner_password, t).await?,
+            Step::Sign { options } => {
+                sign::sign(doc, self.engines.signer()?.clone(), options, t).await?
+            }
             Step::Merge | Step::Split { .. } => unreachable!("handled by run"),
         })
     }
 }
 
-/// A step may send LibreOffice what `/forms/*` would, or a text template it has
-/// just filled.
+/// The order rules of `sign`, which need no engine to check. A signature
+/// covers the exact bytes it is made over, so any step after it would break
+/// it; and signing an encrypted file, or encrypting a signed one, is not
+/// something this service does.
+pub fn check_steps(steps: &[Step]) -> Result<()> {
+    let Some(at) = steps.iter().position(|s| matches!(s, Step::Sign { .. })) else {
+        return Ok(());
+    };
+    if steps.iter().any(|s| matches!(s, Step::Encrypt { .. })) {
+        return Err(Error::InvalidRequest(
+            "'sign' and 'encrypt' cannot be combined: this service does not sign encrypted files or encrypt signed ones".into(),
+        ));
+    }
+    if at != steps.len() - 1 {
+        return Err(Error::InvalidRequest(format!(
+            "'sign' must be the last step, and here '{}' follows it: a later step would change the signed bytes",
+            steps[at + 1].name()
+        )));
+    }
+    Ok(())
+}
+
+/// A step may send LibreOffice what `/v1/convert` would, or a text template it
+/// has just filled.
 fn check_convertible(doc: &Document) -> Result<()> {
     if crate::convert::accepts(doc) || template::is_text_template(&doc.extension()) {
         return Ok(());
@@ -387,5 +443,65 @@ mod tests {
         req.data = json!({"a": 1});
         let err = pipeline().run(req).await.unwrap_err();
         assert!(matches!(err, Error::Template(_)), "{err}");
+    }
+
+    fn sign_step() -> Step {
+        Step::Sign {
+            options: sign::SignOptions::default(),
+        }
+    }
+
+    #[test]
+    fn sign_comes_last_and_never_with_encrypt() {
+        let encrypt = Step::Encrypt {
+            user_password: "u".into(),
+            owner_password: "o".into(),
+        };
+        assert!(check_steps(&[Step::Flatten, sign_step()]).is_ok());
+        assert!(check_steps(&[Step::Flatten, encrypt.clone()]).is_ok());
+        let err = check_steps(&[sign_step(), Step::Flatten]).unwrap_err();
+        assert!(err.is_client_error());
+        assert!(err.to_string().contains("last step"), "{err}");
+        for steps in [
+            vec![encrypt.clone(), sign_step()],
+            vec![sign_step(), encrypt.clone()],
+        ] {
+            let err = check_steps(&steps).unwrap_err();
+            assert!(err.to_string().contains("cannot be combined"), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_without_a_key_is_refused_before_any_work() {
+        let mut req =
+            RenderRequest::new(Document::new("in.pdf", crate::pdfops::fixtures::pages(1)));
+        req.steps = vec![sign_step()];
+        let err = pipeline().run(req).await.unwrap_err();
+        assert!(matches!(err, Error::Status(503, _)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn sign_as_a_step_appends_a_signature() {
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["signer.test".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let signer =
+            Signer::from_pem(key.serialize_pem().as_bytes(), cert.pem().as_bytes()).unwrap();
+        let engines = Engines {
+            signer: Some(Arc::new(signer)),
+            ..Engines::default()
+        };
+        let original = crate::pdfops::fixtures::pages(1);
+        let mut req = RenderRequest::new(Document::new("in.pdf", original.clone()));
+        req.templating = false;
+        req.steps = vec![sign_step()];
+        let out = Pipeline::new(Arc::new(engines), Duration::from_secs(5))
+            .run(req)
+            .await
+            .unwrap();
+        assert!(out.bytes.starts_with(&original));
+        assert!(out.bytes.windows(19).any(|w| w == b"ETSI.CAdES.detached"));
     }
 }

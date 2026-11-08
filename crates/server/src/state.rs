@@ -55,7 +55,6 @@ impl AppState {
             .with_max_output(config.max_render_bytes)
             .with_renderer(renderer);
         let oidc = config
-            .compat
             .oidc
             .clone()
             .map(|oidc| Arc::new(crate::oidc::Verifier::new(oidc)));

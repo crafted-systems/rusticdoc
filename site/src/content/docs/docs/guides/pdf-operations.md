@@ -1,6 +1,6 @@
 ---
 title: PDF operations
-description: Merge, split, rotate, mark, sign with an image, secure, describe and fill PDFs through the /v1/pdf routes.
+description: Merge, split, rotate, mark, sign with an image or a certificate, secure, describe and fill PDFs through the /v1/pdf routes.
 sidebar: { order: 3 }
 ---
 
@@ -109,10 +109,15 @@ Text a mark draws uses Helvetica. See [known limits](/docs/project/known-limits/
 
 ### `POST /v1/pdf/sign`
 
-Places images of signatures at exact coordinates.
+Signs a PDF in one of two ways, chosen by the `signature` field:
+
+- `signature=image`, the default, places images of signatures at exact coordinates. It draws a picture on the page and is **not** a cryptographic signature.
+- `signature=certificate` signs cryptographically with the deployment's key. A PDF reader that validates signatures shows the document as signed, and any later change to the signed bytes breaks the signature.
+
+#### With an image
 
 :::caution
-This draws a picture on the page. It is not a cryptographic signature: it adds no certificate, no timestamp and no protection against later changes. A PDF reader will not show the document as signed. rusticdoc has no cryptographic signing.
+This draws a picture on the page. It adds no certificate, no timestamp and no protection against later changes, and a PDF reader will not show the document as signed.
 :::
 
 | Field | Required | Meaning |
@@ -130,6 +135,47 @@ curl -F files=@a.pdf -F files=@logo.png -F page=1 -F x=72 -F y=72 -F width=120 \
   http://localhost:9027/v1/pdf/sign -o signed.pdf
 head -c4 signed.pdf | grep -q %PDF
 ```
+
+#### With a certificate
+
+The service signs with the key and certificate in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT` (see [configuration](/docs/reference/configuration/#pdf-signing)). A request never carries a key. Without them configured, this answers `503` and says so.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `files` | Yes | The PDF first, then at most one PNG or JPEG to show the signature with |
+| `signature` | Yes | `certificate` |
+| `page`, `x`, `y`, `width` | With an image | Where the image goes, as above. `page` defaults to 1. Without an image the signature is invisible, and these must be left out |
+| `reason` | No | Why the document was signed |
+| `location` | No | Where it was signed |
+| `contactInfo` | No | How to reach the signer |
+| `signerName` | No | The signer's name as shown. Validators identify the signer by the certificate, not by this |
+
+Each text field holds at most 1,024 bytes.
+
+```bash
+curl -F files=@contract.pdf -F signature=certificate \
+  -F reason=Approved -F location=Nairobi \
+  http://localhost:9027/v1/pdf/sign -o signed.pdf
+pdfsig signed.pdf
+```
+
+What the service writes:
+
+- An incremental update. The original bytes stay as they are, at the start of the file, and the signature follows them, so an earlier signature in the file stays valid for its revision.
+- A signature field in the AcroForm, with its widget on the page, and a `/Sig` dictionary with `/Filter /Adobe.PPKLite`, `/SubFilter /ETSI.CAdES.detached`, `/ByteRange` covering the whole file but the signature, and the signing time in `/M`.
+- In `/Contents`, a detached CMS signature over the SHA-256 of those byte ranges. Its signed attributes are content-type, message-digest and ESS signing-certificate-v2. It carries no signing-time attribute, because PAdES puts the time in `/M`. The signer's certificate and any chain certificates are included.
+- With an image, the image as the widget's appearance, so it is part of the signature rather than of the page.
+
+That is PAdES baseline B-B style. It has been checked with poppler's `pdfsig`, which reports the signature as valid and covering the total document, and with pyHanko, which reports it `VALID`. It has not been opened in Adobe Acrobat.
+
+:::note[Limits]
+- There is no timestamp from a timestamp authority, so this is B-B, not B-T or LTV. A validator knows when the document was signed only from the signer's own claim, and cannot validate the signature once the certificate has expired.
+- One key per deployment, RSA or ECDSA P-256. Everyone who can call this route signs as that certificate, so put it behind [authentication](/docs/guides/authentication/).
+- One signature per request. To sign again, send the signed file back.
+- A self-signed certificate gives a signature that validates as intact, with the signer reported as untrusted.
+:::
+
+`sign` is also a [pipeline step](/docs/guides/pipeline/), and `rusticdoc pdf sign --key key.pem --cert cert.pem` signs from the command line with local files.
 
 ## Finish and secure
 

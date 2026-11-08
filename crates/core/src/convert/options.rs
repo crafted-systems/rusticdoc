@@ -10,8 +10,7 @@ use crate::job::PdfaLevel;
 /// Image resolutions LibreOffice's PDF export can reduce to, in DPI.
 pub const IMAGE_RESOLUTIONS: [u16; 5] = [75, 150, 300, 600, 1200];
 
-/// Options of a LibreOffice conversion, after Gotenberg's LibreOffice
-/// route. Each field maps to a property of LibreOffice's PDF export filter
+/// Options of a LibreOffice conversion. Each field maps to a property of LibreOffice's PDF export filter
 /// (`writer_pdf_Export`, `calc_pdf_Export`, `impress_pdf_Export`, ...);
 /// they are ignored for non-PDF targets. `landscape` is applied to the
 /// loaded document's page styles before export, best effort. `password`
@@ -318,7 +317,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_follow_gotenberg() {
+    fn defaults_export_forms_and_bookmarks_at_quality_90() {
         let data = ConvertOptions::default().filter_data();
         assert_eq!(data["ExportFormFields"], true);
         assert_eq!(data["ExportBookmarks"], true);

@@ -8,13 +8,13 @@ use utoipa::ToSchema;
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, request_id, zip};
 use crate::routes::forms::finish_within;
-use crate::routes::gotenberg;
+use crate::routes::options;
 use crate::state::AppState;
 use crate::webhook::{self, Hook, Webhook};
 
-/// The multipart form `/v1/convert` and `/forms/libreoffice/convert` accept.
-/// Gotenberg's LibreOffice options (`landscape`, `nativePageRanges`,
-/// `exportFormFields`, `singlePageSheets`, `password`, ...) and its
+/// The multipart form `/v1/convert` and `/v1/pdf/convert` accept.
+/// LibreOffice options (`landscape`, `nativePageRanges`,
+/// `exportFormFields`, `singlePageSheets`, `password`, ...) and
 /// post-processing fields (`merge`, `splitMode`, `watermarkSource`,
 /// `stampSource`, `rotateAngle`, `flatten`, `metadata`, `bookmarks`,
 /// `embeds`, `facturxXml`, `userPassword`, ...) are accepted as well.
@@ -75,10 +75,10 @@ pub async fn convert(
         )));
     }
     let to = Format::parse(form.field("to").unwrap_or("pdf"))?;
-    let options = gotenberg::convert_options(&form)?;
+    let options = options::convert_options(&form)?;
     // PDF/A and PDF/UA are exported natively by LibreOffice here, so they
     // leave the post-processing chain.
-    let post: Vec<Step> = gotenberg::post_steps(&mut form, true)?
+    let post: Vec<Step> = options::post_steps(&mut form, true)?
         .into_iter()
         .filter(|s| !matches!(s, Step::Pdfa { .. } | Step::Pdfua))
         .collect();
@@ -132,8 +132,8 @@ pub async fn convert(
     .await
 }
 
-/// Gotenberg's `/forms/pdfengines/convert`: PDFs to PDF/A or PDF/UA through
-/// LibreOffice, with the same post-processing fields.
+/// PDFs to PDF/A or PDF/UA through LibreOffice, with the same
+/// post-processing fields as `/v1/convert`.
 #[utoipa::path(
     post, path = "/v1/pdf/convert", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = ConvertForm),
@@ -159,8 +159,8 @@ pub async fn convert_pdf(
     for doc in &form.files {
         rusticdoc_core::pdfops::require_pdf(doc)?;
     }
-    let options = gotenberg::convert_options(&form)?;
-    let steps = gotenberg::post_steps(&mut form, false)?;
+    let options = options::convert_options(&form)?;
+    let steps = options::post_steps(&mut form, false)?;
     if !steps
         .iter()
         .any(|s| matches!(s, Step::Pdfa { .. } | Step::Pdfua))

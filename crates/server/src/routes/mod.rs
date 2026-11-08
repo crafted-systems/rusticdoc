@@ -1,10 +1,9 @@
-pub mod compat;
 pub mod convert;
 pub mod fonts;
 pub mod form;
 pub mod forms;
-pub mod gotenberg;
 pub mod health;
+pub mod options;
 pub mod pdf;
 pub mod pdfops;
 pub mod render;
@@ -21,8 +20,8 @@ use utoipa_scalar::{Scalar, Servable};
 use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
-/// The service's own routes behind authentication. Gotenberg's paths are in
-/// [`compat`]. Its switches for whole groups of routes hold here too.
+/// The service's routes behind authentication, less the groups the
+/// configuration switches off.
 pub fn router(config: &Config) -> Router<AppState> {
     let mut router = Router::new()
         .route("/v1/render", post(render::render))
@@ -42,7 +41,7 @@ pub fn router(config: &Config) -> Router<AppState> {
         .route("/fonts", get(fonts::list))
         .route("/v1/fonts/reload", post(fonts::reload))
         .route("/fonts/reload", post(fonts::reload));
-    if !config.compat.pdfengines_disable_routes {
+    if !config.pdf_disabled {
         router = router
             .route("/v1/pdf/merge", post(pdf::merge))
             .route("/v1/pdf/encrypt", post(pdf::encrypt))
@@ -62,7 +61,7 @@ pub fn router(config: &Config) -> Router<AppState> {
             .route("/v1/pdf/forms/fields", post(forms::fields))
             .route("/v1/pdf/forms/fill", post(forms::fill))
             .route("/v1/pdf/overlay", post(forms::overlay));
-        if !config.compat.libreoffice_disable_routes {
+        if !config.convert_disabled {
             router = router.route("/v1/pdf/convert", post(convert::convert_pdf));
         }
     }
@@ -76,7 +75,7 @@ pub fn router(config: &Config) -> Router<AppState> {
 /// inside still has its own, shorter limit when it is a single document.
 pub fn long_router(config: &Config) -> Router<AppState> {
     let mut router = Router::new().route("/v1/render/batch", post(render::batch));
-    if !config.compat.libreoffice_disable_routes {
+    if !config.convert_disabled {
         router = router.route("/v1/convert", post(convert::convert));
     }
     router

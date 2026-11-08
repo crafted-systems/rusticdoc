@@ -26,13 +26,10 @@ Reported by the docs authors with a reproduction, and not re-run separately:
 - A `413` from a template answers `"error":"reported"`.
 - The access log's `bytes_out` is always 0.
 - Unparseable sizes and durations, such as `RUSTICDOC_RENDER_MEMORY=2g`, are ignored without a warning, and `RUSTICDOC_METRICS_PUBLIC=TRUE` reads as off.
-- `/forms/*` over the body limit answers `400` Malformed body, not `413`.
-- The timeout message names an `--api-timeout` option that doesn't exist.
 - A private `downloadFrom` error names the webhook variable.
 - `steps=watermark,watermark` with two sources draws four.
 - A bookmark for page 99 of a one-page PDF lands on page 1.
 - A `501 not_supported` hides its reason.
-- Webhook events have no `X-Request-Id`, so receivers verify with `correlationId`.
 - `{% raw %}` in an Office template prints stray `{# #}`.
 - An ODS loop across sheets duplicates sheets with `200`.
 - Validation stops at the first undefined value in an expression group, and reports `ok:false` for PDFs.
@@ -53,7 +50,7 @@ Then point the domain's DNS at the host and turn on HTTPS.
 ## Decide before announcing
 
 - [ ] **Check the claims on `/status/` are still true**, and update it as Office and PDF viewer checks finish.
-- [ ] **Review `/compare/`.** It describes Gotenberg and Carbone as of 6 November 2026 and has to stay accurate. Check the name "rusticdoc" for conflicts as well.
+- [ ] **Check the name "rusticdoc" for conflicts.**
 - [ ] **Add a security contact.** `/.well-known/security.txt` and a contact on `/security/` need a real address, so none was invented.
 - [ ] **Decide on analytics.** The site has none, and `_headers` would need changing to add a third-party one.
 

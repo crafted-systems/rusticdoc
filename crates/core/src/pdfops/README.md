@@ -27,12 +27,11 @@ exercised by `tests/pdfops-container.sh`, which runs the exact flags and
 description strings against the real binaries, and by the engine tests when
 a binary exists on the machine.
 
-Gotenberg's routes use their own order (`MultiEngine::for_forms`): qpdf first
-for merge, flatten and encrypt, lopdf first otherwise. There an engine that
-fails hands over to the next one, and `PDFENGINES_*_ENGINES` can set the order
-per operation. They also use `read_exif` and `write_exif` (ExifTool's key names
-and value shapes, in `exif.rs`), `optimize_images` (`images.rs`),
-`encrypt_with`, `set_embed_metadata` and `facturx_with`.
+`RUSTICDOC_PDF_ENGINES_*` sets another order for one operation
+(`MultiEngine::with_lists`). Engines also implement `read_exif` and
+`write_exif` (ExifTool's key names and value shapes, in `exif.rs`),
+`optimize_images` (`images.rs`), `encrypt_with`, `set_embed_metadata` and
+`facturx_with`.
 
 ## Limits
 
@@ -89,5 +88,10 @@ and value shapes, in `exif.rs`), `optimize_images` (`images.rs`),
   attachments; content-stream drawing).
 - `qpdf.rs`, `pdfcpu.rs`: the process engines.
 - `pages.rs`: page selections (`1-3,5`). `xmp.rs`: XMP packet editing.
+- `sign/`: cryptographic signatures, outside the engine chain because they
+  need the deployment's key: `keys.rs` (PEM loading and checks, signing in
+  aws-lc-rs), `cms.rs` (the detached CMS `SignedData`), `incremental.rs` (the
+  update appended after the original bytes), `tests.rs` (independent
+  verification of each signature).
 - `fixtures.rs`: PDFs built in code for the tests and
   `examples/pdfops_fixtures.rs`; `tests.rs`: the engine tests.

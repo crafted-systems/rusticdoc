@@ -51,7 +51,7 @@ fn winansi(c: char) -> u8 {
     }
 }
 
-fn num(v: f32) -> String {
+pub(super) fn num(v: f32) -> String {
     let s = format!("{v:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() || s == "-" {

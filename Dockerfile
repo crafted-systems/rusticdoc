@@ -51,6 +51,7 @@ LABEL org.opencontainers.image.title="rusticdoc" \
       org.opencontainers.image.source="https://github.com/vmosoti/rusticdoc" \
       org.opencontainers.image.base.name="debian:13-slim"
 
+COPY deploy/dpkg-excludes /etc/dpkg/dpkg.cfg.d/rusticdoc
 RUN groupadd --gid 1001 rusticdoc \
     && useradd --uid 1001 --gid rusticdoc --shell /usr/sbin/nologin --home /home/rusticdoc --no-create-home rusticdoc \
     && mkdir -p /home/rusticdoc /fonts \

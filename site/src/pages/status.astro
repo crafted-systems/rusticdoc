@@ -1,25 +1,29 @@
 ---
 import Base from '../layouts/Base.astro';
 const proven: [string, string][] = [
-  ['Gotenberg 8.39 parity', '310 of its 326 scenarios behave the same. The other 16 select PDFtk or expect Chromium in a status response.'],
   ['Automated tests', 'The unit and integration tests pass on every commit, along with the linter and a dependency audit.'],
   ['Several containers on one store', 'Run with three replicas on minikube, and against an S3 gateway and a shared volume.'],
   ['Attacks at full size', 'Run in a container limited to 3 GiB. See the security page for the results.'],
   ['Documentation examples', 'The shell examples marked as tested run against the real image.'],
+  ['Microsoft Office on a Mac', 'Templates typed in Word, Excel and PowerPoint 16.114 for Mac were filled, and the results open in the same apps with no repair prompt. The run found three faults, now fixed: Excel repaired workbooks with a stale calculation chain, a loop across two shapes on one slide printed copies on top of each other, and charts and pictures in unmoved placeholders went to the corner.'],
+  ['PDF viewers', 'Filled forms, editable and flattened, show their values in Chrome 154 and in Preview on macOS 27.'],
+  ['Barcodes', 'All five symbologies decode to their exact value with ZXing and ZBar, from the document and from its PDF at 150 and 300 dpi.'],
+  ['Output across architectures', 'Fourteen outputs rendered by the amd64 and arm64 images: the Office and text files and a filled PDF form are byte-identical, and LibreOffice\'s PDFs match as page images or in layout within 0.25 pt.'],
+  ['PDF signatures', 'Signed files validate in poppler\'s pdfsig, which finds the signature valid and covering the whole document, and in pyHanko, which judges them VALID.'],
 ];
 const open: [string, string][] = [
-  ['Microsoft Office', 'Generated DOCX, XLSX and PPTX files have been opened in LibreOffice, not in Word, Excel or PowerPoint. A repair prompt hasn\'t been ruled out.'],
-  ['PDF viewers', 'Filled forms haven\'t been viewed in Chrome, Acrobat Reader or Preview.'],
-  ['Barcode readers', 'One QR code was decoded with OpenCV. No barcode has been scanned with a physical reader.'],
+  ['Office for Windows', 'Only the Mac versions of Word, Excel and PowerPoint have opened the output.'],
+  ['Adobe Acrobat', 'Filled forms and signed files haven\'t been opened in Acrobat or Acrobat Reader.'],
+  ['Barcode scanners', 'Software decoders read every code. No hardware or phone scanner has been tried.'],
   ['AWS and production Kubernetes', 'Storage has run on an S3 gateway and minikube, not on AWS itself or a production cluster.'],
-  ['Output across architectures', 'Output is checked by content. There\'s no set of reference PDFs to compare byte for byte on amd64 and arm64.'],
   ['Production use', 'This is a first release, and it hasn\'t carried production traffic yet.'],
 ];
 const missing = [
   'Text the service draws into a PDF is Latin only. Other characters draw as ?, though the stored field value stays complete.',
-  'A template using a font the service lacks isn\'t reported.',
+  'A template using a font the service lacks isn\'t reported. Word\'s default font, Aptos, isn\'t in the image, so upload it or use another font.',
   'Repeating a whole sheet in XLSX or ODS isn\'t supported, nor are charts in ODF templates.',
   'Stored templates have no versions or aliases, so an edit produces a new id.',
+  'PDF signatures have no timestamp from a timestamp authority (PAdES B-B only, not B-T or LTV), and there is one signing key per deployment.',
 ];
 ---
 <Base title="Status: rusticdoc" description="What has been proven in rusticdoc 0.1, what hasn't, and what's still missing." path="/status/">

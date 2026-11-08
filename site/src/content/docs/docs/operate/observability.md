@@ -15,9 +15,7 @@ Every response carries `x-request-id`. Send your own and the service uses it:
 curl -D - -o /dev/null -H 'x-request-id: order-2041' http://localhost:9027/v1/version
 ```
 
-The response has `x-request-id: order-2041` and `gotenberg-trace: order-2041`. If you send none, the service makes one. A client's id is kept to printable ASCII and 128 bytes.
-
-The trace header, `Gotenberg-Trace` by default, wins over `x-request-id` when a request has both. `API_TRACE_HEADER` renames it. The same id appears in the logs and on webhook deliveries.
+The response has `x-request-id: order-2041`. If you send none, the service makes one. A client's id is kept to printable ASCII and 128 bytes. The same id appears in the logs and on webhook deliveries.
 
 An error from an engine reads only as the status's name in the response, such as `Service Unavailable`. The detail is in the log, under the request id.
 
@@ -48,7 +46,7 @@ There is one line per request with `log_type` set to `access`. Lines for status 
 | `bytes_in` | The request's `Content-Length` |
 | `bytes_out` | Meant to be the response's `Content-Length`. It showed `0` on all 1,002 access lines checked, including responses that had a length, so do not rely on it |
 
-These routes are left out of the access log by default: `/health`, `/ready`, `/`, `/debug`, `/version` and the Gotenberg metrics route. `/metrics` is logged. The [configuration reference](/docs/reference/configuration/) lists the variables that change this.
+`/health` and `/ready` are left out of the access log. Every other route is logged, `/metrics` included.
 
 ### Audit log
 
@@ -98,8 +96,6 @@ Some questions these answer:
 | 95th percentile of conversion time | `histogram_quantile(0.95, sum by (le) (rate(rusticdoc_stage_seconds_bucket{stage="convert"}[5m])))` |
 | Webhooks that were given up on | `rate(rusticdoc_webhook_deliveries_total{outcome="gave_up"}[1h])` |
 | A replica that cannot sync fonts | `rate(rusticdoc_store_font_syncs_total{outcome="failed"}[5m]) > 0` |
-
-Gotenberg's metrics route is separate. `/prometheus/metrics` serves `gotenberg_*` metrics for clients that expect them, behind the same credentials as the other routes.
 
 ## Health and readiness
 

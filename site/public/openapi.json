@@ -480,7 +480,7 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Gotenberg's `/forms/pdfengines/convert`: PDFs to PDF/A or PDF/UA through\nLibreOffice, with the same post-processing fields.",
+        "summary": "PDFs to PDF/A or PDF/UA through LibreOffice, with the same\npost-processing fields as `/v1/convert`.",
         "operationId": "convert_pdf",
         "requestBody": {
           "content": {
@@ -1244,7 +1244,7 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Places signature images at exact coordinates. This draws the image; it\nis not a cryptographic signature.",
+        "summary": "Signs a PDF. With `signature=certificate`, a cryptographic signature with\nthe key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`: an\nincremental update with a PAdES B-B style `/ETSI.CAdES.detached`\nsignature (no timestamp), invisible, or shown with the one image sent.\nWithout a configured key that answers 503. By default\n(`signature=image`) the images are drawn at exact coordinates, which is\nnot a cryptographic signature.",
         "operationId": "sign",
         "requestBody": {
           "content": {
@@ -1272,6 +1272,16 @@
           },
           "400": {
             "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "signature=certificate and no signing key is configured, or the certificate has expired",
             "content": {
               "application/json": {
                 "schema": {
@@ -1577,7 +1587,7 @@
         "tags": [
           "render"
         ],
-        "summary": "Renders the template once per element of an array in the data and\nreturns the files in a ZIP, as Carbone's batch rendering does.",
+        "summary": "Renders the template once per element of an array in the data and\nreturns the files in a ZIP.",
         "description": "`splitBy` names the array with a dotted path such as `items` or\n`order.lines`. Each render sees the whole data with that array replaced\nby the one element, plus `item` (the element) and `batch` (`index`,\n`count`). `batchName` is a template for each file's name, default\n`{{ batch.index }}`.",
         "operationId": "batch",
         "parameters": [
@@ -2157,7 +2167,7 @@
       },
       "ConvertForm": {
         "type": "object",
-        "description": "The multipart form `/v1/convert` and `/forms/libreoffice/convert` accept.\nGotenberg's LibreOffice options (`landscape`, `nativePageRanges`,\n`exportFormFields`, `singlePageSheets`, `password`, ...) and its\npost-processing fields (`merge`, `splitMode`, `watermarkSource`,\n`stampSource`, `rotateAngle`, `flatten`, `metadata`, `bookmarks`,\n`embeds`, `facturxXml`, `userPassword`, ...) are accepted as well.",
+        "description": "The multipart form `/v1/convert` and `/v1/pdf/convert` accept.\nLibreOffice options (`landscape`, `nativePageRanges`,\n`exportFormFields`, `singlePageSheets`, `password`, ...) and\npost-processing fields (`merge`, `splitMode`, `watermarkSource`,\n`stampSource`, `rotateAngle`, `flatten`, `metadata`, `bookmarks`,\n`embeds`, `facturxXml`, `userPassword`, ...) are accepted as well.",
         "required": [
           "files"
         ],
@@ -2528,7 +2538,7 @@
         ],
         "properties": {
           "details": {
-            "description": "Per-module status in Gotenberg's shape."
+            "description": "Per-module status: `libreoffice`, and `store` when one is configured."
           },
           "engines": {
             "$ref": "#/components/schemas/EngineStatus"
@@ -2663,6 +2673,13 @@
           "files"
         ],
         "properties": {
+          "contactInfo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `sign`: how to reach the signer."
+          },
           "ctx": {
             "description": "JSON object visible as `ctx`, sent as text or as a file."
           },
@@ -2676,6 +2693,13 @@
               "format": "binary"
             },
             "description": "Further files, used by `merge`."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `sign`: where it was signed."
           },
           "metadata": {
             "description": "JSON object of metadata fields for `metadata`."
@@ -2700,12 +2724,26 @@
             ],
             "description": "PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`."
           },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `sign`: why the document was signed."
+          },
+          "signerName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `sign`: the signer's name as shown."
+          },
           "steps": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`.",
+            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`, `sign`. `sign` signs cryptographically with the\nservice's key; it must be last and cannot be combined with `encrypt`.",
             "example": "convert,pdfa,encrypt"
           },
           "template": {
@@ -2769,19 +2807,30 @@
       "SignForm": {
         "type": "object",
         "required": [
-          "files",
-          "page",
-          "x",
-          "y"
+          "files"
         ],
         "properties": {
+          "contactInfo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `signature=certificate`: how to reach the signer."
+          },
           "files": {
             "type": "array",
             "items": {
               "type": "string",
               "format": "binary"
             },
-            "description": "The PDF first, then one PNG or JPEG per placement."
+            "description": "The PDF first, then one PNG or JPEG per placement. With\n`signature=certificate`, at most one image: the visible appearance."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `signature=certificate`: where it was signed."
           },
           "outputFilename": {
             "type": [
@@ -2790,10 +2839,35 @@
             ]
           },
           "page": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "1-based page of each signature; repeat the field for several.",
+            "description": "1-based page of each image; repeat the field for several.",
             "minimum": 0
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `signature=certificate`: why the document was signed."
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`image` (default) draws the images and is not a cryptographic\nsignature. `certificate` signs with the service's key (PAdES B-B,\n`/ETSI.CAdES.detached`), invisibly unless an image is sent.",
+            "example": "certificate"
+          },
+          "signerName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `signature=certificate`: the signer's name as shown. Validators\nidentify the signer by the certificate, not by this."
           },
           "width": {
             "type": [
@@ -2804,12 +2878,18 @@
             "description": "Width in points. Default the image's natural size."
           },
           "x": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "float",
             "description": "Points from the page's left edge to the image's left edge."
           },
           "y": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "float",
             "description": "Points from the page's bottom edge to the image's bottom edge."
           }

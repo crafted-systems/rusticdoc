@@ -54,6 +54,11 @@ pub struct Config {
     pub basic_auth: Option<(String, String)>,
     /// Secret for the HMAC signature on webhook deliveries.
     pub webhook_secret: Option<String>,
+    /// PEM private key (PKCS#8, PKCS#1 or SEC1) for cryptographic PDF
+    /// signatures. Set with [`Config::signing_cert`] or not at all.
+    pub signing_key: Option<PathBuf>,
+    /// PEM certificate for the signing key, then any chain certificates.
+    pub signing_cert: Option<PathBuf>,
     /// Allow webhooks to private or loopback addresses. Off by default.
     pub webhook_allow_private: bool,
     /// Attempts per webhook delivery.
@@ -112,8 +117,29 @@ pub struct Config {
     pub log_format: String,
     /// A `tracing` filter such as `info` or `rusticdoc=debug`.
     pub log_level: String,
-    /// Gotenberg's settings, read from its variable names.
-    pub compat: CompatConfig,
+    /// Conversion routes answer 404, and conversion steps 503.
+    pub convert_disabled: bool,
+    /// The `/v1/pdf/*` routes answer 404.
+    pub pdf_disabled: bool,
+    /// Webhook headers are ignored on every route.
+    pub webhook_disabled: bool,
+    /// Bearer tokens from an OpenID Connect provider, when set.
+    pub oidc: Option<OidcConfig>,
+    /// Engine lists by variable name, as set. Unset lists use the default order.
+    pub engine_orders: BTreeMap<String, Vec<String>>,
+    /// Regular expressions a webhook URL must match one of. Empty allows all,
+    /// subject to the refusal of private addresses.
+    pub webhook_allow_list: Vec<String>,
+    /// Regular expressions no webhook URL may match.
+    pub webhook_deny_list: Vec<String>,
+    /// The allow list for error URLs, when set. The webhook list otherwise.
+    pub webhook_error_allow_list: Vec<String>,
+    /// More refusals for error URLs.
+    pub webhook_error_deny_list: Vec<String>,
+    /// As `webhook_allow_list`, for `downloadFrom`.
+    pub download_allow_list: Vec<String>,
+    /// As `webhook_deny_list`, for `downloadFrom`.
+    pub download_deny_list: Vec<String>,
     /// What the environment got wrong, for [`Config::check`] to refuse.
     pub problems: Vec<String>,
 }
@@ -127,104 +153,25 @@ pub enum RenderMode {
     Isolated,
 }
 
-/// One operation's engine list, from a `PDFENGINES_*_ENGINES` variable.
+/// One operation's engine list, from a `RUSTICDOC_PDF_ENGINES_*` variable.
 pub const ENGINE_VARIABLES: &[&str] = &[
-    "PDFENGINES_MERGE_ENGINES",
-    "PDFENGINES_SPLIT_ENGINES",
-    "PDFENGINES_FLATTEN_ENGINES",
-    "PDFENGINES_CONVERT_ENGINES",
-    "PDFENGINES_OPTIMIZE_IMAGES_ENGINES",
-    "PDFENGINES_READ_METADATA_ENGINES",
-    "PDFENGINES_WRITE_METADATA_ENGINES",
-    "PDFENGINES_ENCRYPT_ENGINES",
-    "PDFENGINES_EMBED_ENGINES",
-    "PDFENGINES_EMBED_METADATA_ENGINES",
-    "PDFENGINES_READ_BOOKMARKS_ENGINES",
-    "PDFENGINES_WRITE_BOOKMARKS_ENGINES",
-    "PDFENGINES_WATERMARK_ENGINES",
-    "PDFENGINES_STAMP_ENGINES",
-    "PDFENGINES_ROTATE_ENGINES",
-    "PDFENGINES_FACTUR_X_ENGINES",
+    "RUSTICDOC_PDF_ENGINES_MERGE",
+    "RUSTICDOC_PDF_ENGINES_SPLIT",
+    "RUSTICDOC_PDF_ENGINES_FLATTEN",
+    "RUSTICDOC_PDF_ENGINES_ROTATE",
+    "RUSTICDOC_PDF_ENGINES_OPTIMIZE_IMAGES",
+    "RUSTICDOC_PDF_ENGINES_ENCRYPT",
+    "RUSTICDOC_PDF_ENGINES_WATERMARK",
+    "RUSTICDOC_PDF_ENGINES_STAMP",
+    "RUSTICDOC_PDF_ENGINES_EMBED",
+    "RUSTICDOC_PDF_ENGINES_EMBED_METADATA",
+    "RUSTICDOC_PDF_ENGINES_READ_BOOKMARKS",
+    "RUSTICDOC_PDF_ENGINES_WRITE_BOOKMARKS",
+    "RUSTICDOC_PDF_ENGINES_READ_METADATA",
+    "RUSTICDOC_PDF_ENGINES_WRITE_METADATA",
+    "RUSTICDOC_PDF_ENGINES_FACTUR_X",
 ];
 
-/// The behaviour of Gotenberg's routes and of the service around them.
-#[derive(Debug, Clone)]
-pub struct CompatConfig {
-    /// `LIBREOFFICE_DISABLE_ROUTES`: `/forms/libreoffice/*` answers 404.
-    pub libreoffice_disable_routes: bool,
-    /// `PDFENGINES_DISABLE_ROUTES`: `/forms/pdfengines/*` answers 404.
-    pub pdfengines_disable_routes: bool,
-    /// `API_ENABLE_DEBUG_ROUTE`: serve `/debug`.
-    pub enable_debug_route: bool,
-    /// `GOTENBERG_BUILD_DEBUG_DATA`: fill `/debug` in.
-    pub build_debug_data: bool,
-    /// The header that carries a request's correlation id.
-    pub trace_header: String,
-    /// Routes left out of the access log.
-    pub health_telemetry_off: bool,
-    pub root_telemetry_off: bool,
-    pub debug_telemetry_off: bool,
-    pub version_telemetry_off: bool,
-    pub prometheus_telemetry_off: bool,
-    /// `PROMETHEUS_DISABLE_COLLECT`: no Gotenberg metrics route at all.
-    pub prometheus_disabled: bool,
-    pub prometheus_namespace: String,
-    /// `/prometheus/metrics` by default.
-    pub prometheus_path: String,
-    /// `WEBHOOK_ENABLE_SYNC_MODE`: answer only after the delivery.
-    pub webhook_sync: bool,
-    /// `WEBHOOK_DISABLE`: `/forms/*` ignores the webhook headers.
-    pub webhook_disabled: bool,
-    /// `API_ENABLE_OIDC_AUTH` and friends.
-    pub oidc: Option<OidcConfig>,
-    /// Engine lists by variable name, as set. Unset lists use the defaults.
-    pub engine_orders: BTreeMap<String, Vec<String>>,
-    /// `WEBHOOK_ALLOW_LIST`: regular expressions a webhook URL must match one of.
-    /// Empty allows all, subject to the refusal of private addresses.
-    pub webhook_allow_list: Vec<String>,
-    /// `WEBHOOK_DENY_LIST`: regular expressions no webhook URL may match.
-    pub webhook_deny_list: Vec<String>,
-    /// `WEBHOOK_ERROR_ALLOW_LIST`: the allow list for error URLs, when set.
-    pub webhook_error_allow_list: Vec<String>,
-    /// `WEBHOOK_ERROR_DENY_LIST`: more refusals for error URLs.
-    pub webhook_error_deny_list: Vec<String>,
-    /// `API_DOWNLOAD_FROM_ALLOW_LIST`, as `webhook_allow_list` for `downloadFrom`.
-    pub download_allow_list: Vec<String>,
-    /// `API_DOWNLOAD_FROM_DENY_LIST`, as `webhook_deny_list` for `downloadFrom`.
-    pub download_deny_list: Vec<String>,
-}
-
-impl Default for CompatConfig {
-    fn default() -> Self {
-        Self {
-            libreoffice_disable_routes: false,
-            pdfengines_disable_routes: false,
-            enable_debug_route: false,
-            build_debug_data: true,
-            trace_header: "Gotenberg-Trace".into(),
-            health_telemetry_off: true,
-            root_telemetry_off: true,
-            debug_telemetry_off: true,
-            version_telemetry_off: true,
-            prometheus_telemetry_off: true,
-            prometheus_disabled: false,
-            prometheus_namespace: "gotenberg".into(),
-            prometheus_path: "/prometheus/metrics".into(),
-            webhook_sync: false,
-            webhook_disabled: false,
-            oidc: None,
-            engine_orders: BTreeMap::new(),
-            webhook_allow_list: Vec::new(),
-            webhook_deny_list: Vec::new(),
-            webhook_error_allow_list: Vec::new(),
-            webhook_error_deny_list: Vec::new(),
-            download_allow_list: Vec::new(),
-            download_deny_list: Vec::new(),
-        }
-    }
-}
-
-/// Bearer tokens accepted on the protected routes.
 /// The port the service listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 9027;
 
@@ -239,6 +186,7 @@ pub enum StoreScope {
     Shared,
 }
 
+/// Bearer tokens accepted on the protected routes.
 #[derive(Debug, Clone, Default)]
 pub struct OidcConfig {
     pub issuer: String,
@@ -285,6 +233,8 @@ impl Default for Config {
             api_keys: Vec::new(),
             basic_auth: None,
             webhook_secret: None,
+            signing_key: None,
+            signing_cert: None,
             webhook_allow_private: false,
             webhook_attempts: 3,
             cors_origins: Vec::new(),
@@ -313,7 +263,17 @@ impl Default for Config {
             download_from_allow_private: false,
             log_format: "json".into(),
             log_level: "info".into(),
-            compat: CompatConfig::default(),
+            convert_disabled: false,
+            pdf_disabled: false,
+            webhook_disabled: false,
+            oidc: None,
+            engine_orders: BTreeMap::new(),
+            webhook_allow_list: Vec::new(),
+            webhook_deny_list: Vec::new(),
+            webhook_error_allow_list: Vec::new(),
+            webhook_error_deny_list: Vec::new(),
+            download_allow_list: Vec::new(),
+            download_deny_list: Vec::new(),
             problems: Vec::new(),
         }
     }
@@ -329,8 +289,18 @@ impl Config {
     pub fn from_vars(vars: &dyn Fn(&str) -> Option<String>) -> Self {
         let mut c = Self::default();
         let get = |k: &str| vars(&format!("RUSTICDOC_{k}")).filter(|v| !v.is_empty());
+        let on = |k: &str| get(k).map(|v| matches!(v.as_str(), "1" | "true" | "yes"));
+        let list = |k: &str| -> Vec<String> {
+            get(k)
+                .map(|v| {
+                    v.split(',')
+                        .map(|e| e.trim().to_string())
+                        .filter(|e| !e.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
 
-        c.apply_gotenberg_names(vars);
         if let Some(v) = get("BIND") {
             c.bind = v;
         }
@@ -465,6 +435,18 @@ impl Config {
             ),
         }
         c.webhook_secret = get("WEBHOOK_SECRET");
+        match (get("SIGNING_KEY"), get("SIGNING_CERT")) {
+            (Some(key), Some(cert)) => {
+                c.signing_key = Some(PathBuf::from(key));
+                c.signing_cert = Some(PathBuf::from(cert));
+            }
+            (None, None) => {}
+            // A key without its certificate, or the reverse, is a deployment
+            // half done: refuse it rather than answer 503 to every signature.
+            _ => c
+                .problems
+                .push("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
+        }
         if let Some(v) = get("WEBHOOK_ALLOW_PRIVATE") {
             c.webhook_allow_private = matches!(v.as_str(), "1" | "true" | "yes");
         }
@@ -558,207 +540,41 @@ impl Config {
         if let Some(v) = get("LOG_LEVEL") {
             c.log_level = v;
         }
+        if let Some(v) = on("CONVERT_DISABLED") {
+            c.convert_disabled = v;
+        }
+        if let Some(v) = on("PDF_DISABLED") {
+            c.pdf_disabled = v;
+        }
+        if let Some(v) = on("WEBHOOK_DISABLED") {
+            c.webhook_disabled = v;
+        }
+        let (issuer, audience) = (get("OIDC_ISSUER"), get("OIDC_AUDIENCE"));
+        if issuer.is_some() || audience.is_some() {
+            c.oidc = Some(OidcConfig {
+                issuer: issuer.unwrap_or_default(),
+                audience: audience.unwrap_or_default(),
+                jwks_url: get("OIDC_JWKS_URL").unwrap_or_default(),
+            });
+        }
+        c.webhook_allow_list = list("WEBHOOK_ALLOW_LIST");
+        c.webhook_deny_list = list("WEBHOOK_DENY_LIST");
+        c.webhook_error_allow_list = list("WEBHOOK_ERROR_ALLOW_LIST");
+        c.webhook_error_deny_list = list("WEBHOOK_ERROR_DENY_LIST");
+        c.download_allow_list = list("DOWNLOAD_FROM_ALLOW_LIST");
+        c.download_deny_list = list("DOWNLOAD_FROM_DENY_LIST");
+        for variable in ENGINE_VARIABLES {
+            let name = variable.trim_start_matches("RUSTICDOC_");
+            if get(name).is_some() {
+                c.engine_orders.insert((*variable).to_string(), list(name));
+            }
+        }
         c
-    }
-
-    /// Gotenberg's variable names are accepted too, so a deployment moves
-    /// over by changing the image. `RUSTICDOC_*` wins when both are set.
-    fn apply_gotenberg_names(&mut self, vars: &dyn Fn(&str) -> Option<String>) {
-        let get = |k: &str| vars(k).filter(|v| !v.is_empty());
-        let port = get("API_PORT");
-        let ip = get("API_BIND_IP");
-        if port.is_some() || ip.is_some() {
-            self.bind = format!(
-                "{}:{}",
-                ip.unwrap_or_else(|| "0.0.0.0".into()),
-                port.unwrap_or_else(|| DEFAULT_PORT.to_string())
-            );
-        }
-        if let Some(v) = get("API_ROOT_PATH") {
-            self.root_path = normalise_root(&v);
-        }
-        if let Some(v) = get("API_TIMEOUT").and_then(|v| parse_duration(&v)) {
-            self.api_timeout = v;
-        }
-        if let Some(v) = get("API_BODY_LIMIT").and_then(|v| parse_bytes(&v)) {
-            self.body_limit = v;
-        }
-        if let Some(flag) = get("API_ENABLE_BASIC_AUTH") {
-            match parse_go_bool(&flag) {
-                Some(true) => match (
-                    get("GOTENBERG_API_BASIC_AUTH_USERNAME"),
-                    get("GOTENBERG_API_BASIC_AUTH_PASSWORD"),
-                ) {
-                    (Some(u), Some(p)) => self.basic_auth = Some((u, p)),
-                    _ => self.problems.push(
-                        "API_ENABLE_BASIC_AUTH needs GOTENBERG_API_BASIC_AUTH_USERNAME and GOTENBERG_API_BASIC_AUTH_PASSWORD".into(),
-                    ),
-                },
-                Some(false) => {}
-                None => self
-                    .problems
-                    .push(format!("API_ENABLE_BASIC_AUTH is '{flag}', not a boolean")),
-            }
-        }
-        if let Some(v) = get("LIBREOFFICE_BIN_PATH") {
-            self.libreoffice_bin = Some(PathBuf::from(v));
-        }
-        if let Some(v) = get("QPDF_BIN_PATH") {
-            self.qpdf_bin = Some(PathBuf::from(v));
-        }
-        if let Some(v) = get("PDFCPU_BIN_PATH") {
-            self.pdfcpu_bin = Some(PathBuf::from(v));
-        }
-        if let Some(v) = get("LOG_LEVEL") {
-            self.log_level = v;
-        }
-        if let Some(v) = get("LOG_FORMAT") {
-            self.log_format = match v.as_str() {
-                "text" | "pretty" => "pretty".into(),
-                _ => "json".into(),
-            };
-        }
-        if matches!(get("WEBHOOK_ALLOW_PRIVATE").as_deref(), Some("true" | "1")) {
-            self.webhook_allow_private = true;
-        }
-        if matches!(
-            get("API_DISABLE_DOWNLOAD_FROM").as_deref(),
-            Some("true" | "1")
-        ) {
-            self.download_from_disabled = true;
-        }
-        if let Some(v) = get("API_DOWNLOAD_FROM_MAX_ENTRIES").and_then(|v| v.parse().ok()) {
-            self.download_from_max_entries = v;
-        }
-        self.apply_compat_names(vars);
-    }
-
-    fn apply_compat_names(&mut self, vars: &dyn Fn(&str) -> Option<String>) {
-        let get = |k: &str| vars(k).filter(|v| !v.is_empty());
-        let on = |k: &str| get(k).and_then(|v| parse_go_bool(&v));
-        let compat = &mut self.compat;
-        if let Some(v) = on("LIBREOFFICE_DISABLE_ROUTES") {
-            compat.libreoffice_disable_routes = v;
-        }
-        if let Some(v) = on("PDFENGINES_DISABLE_ROUTES") {
-            compat.pdfengines_disable_routes = v;
-        }
-        if let Some(v) = on("API_ENABLE_DEBUG_ROUTE") {
-            compat.enable_debug_route = v;
-        }
-        if let Some(v) = on("GOTENBERG_BUILD_DEBUG_DATA") {
-            compat.build_debug_data = v;
-        }
-        if let Some(v) = get("API_TRACE_HEADER").or_else(|| get("API_CORRELATION_ID_HEADER")) {
-            compat.trace_header = v;
-        }
-        // The older `*_LOGGING` names still work; the newer ones win.
-        for (slot, names) in [
-            (
-                &mut compat.health_telemetry_off,
-                [
-                    "API_DISABLE_HEALTH_CHECK_LOGGING",
-                    "API_DISABLE_HEALTH_CHECK_ROUTE_TELEMETRY",
-                ],
-            ),
-            (
-                &mut compat.root_telemetry_off,
-                [
-                    "API_DISABLE_ROOT_ROUTE_LOGGING",
-                    "API_DISABLE_ROOT_ROUTE_TELEMETRY",
-                ],
-            ),
-            (
-                &mut compat.debug_telemetry_off,
-                [
-                    "API_DISABLE_DEBUG_ROUTE_LOGGING",
-                    "API_DISABLE_DEBUG_ROUTE_TELEMETRY",
-                ],
-            ),
-            (
-                &mut compat.version_telemetry_off,
-                [
-                    "API_DISABLE_VERSION_ROUTE_LOGGING",
-                    "API_DISABLE_VERSION_ROUTE_TELEMETRY",
-                ],
-            ),
-            (
-                &mut compat.prometheus_telemetry_off,
-                [
-                    "PROMETHEUS_DISABLE_ROUTE_LOGGING",
-                    "PROMETHEUS_DISABLE_ROUTE_TELEMETRY",
-                ],
-            ),
-        ] {
-            for name in names {
-                if let Some(v) = on(name) {
-                    *slot = v;
-                }
-            }
-        }
-        if let Some(v) = on("PROMETHEUS_DISABLE_COLLECT") {
-            compat.prometheus_disabled = v;
-        }
-        if let Some(v) = get("PROMETHEUS_NAMESPACE") {
-            compat.prometheus_namespace = v;
-        }
-        if let Some(v) = get("PROMETHEUS_METRICS_PATH") {
-            compat.prometheus_path = format!("/{}", v.trim_matches('/'));
-        }
-        if let Some(v) = on("WEBHOOK_ENABLE_SYNC_MODE") {
-            compat.webhook_sync = v;
-        }
-        if let Some(v) = on("WEBHOOK_DISABLE") {
-            compat.webhook_disabled = v;
-        }
-        if let Some(flag) = get("API_ENABLE_OIDC_AUTH") {
-            match parse_go_bool(&flag) {
-                Some(true) => {
-                    compat.oidc = Some(OidcConfig {
-                        issuer: get("API_OIDC_ISSUER").unwrap_or_default(),
-                        audience: get("API_OIDC_AUDIENCE").unwrap_or_default(),
-                        jwks_url: get("API_OIDC_JWKS_URL").unwrap_or_default(),
-                    });
-                }
-                Some(false) => {}
-                None => self
-                    .problems
-                    .push(format!("API_ENABLE_OIDC_AUTH is '{flag}', not a boolean")),
-            }
-        }
-        let list = |name: &str| -> Vec<String> {
-            get(name)
-                .map(|v| {
-                    v.split(',')
-                        .map(|e| e.trim().to_string())
-                        .filter(|e| !e.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        compat.webhook_allow_list = list("WEBHOOK_ALLOW_LIST");
-        compat.webhook_deny_list = list("WEBHOOK_DENY_LIST");
-        compat.webhook_error_allow_list = list("WEBHOOK_ERROR_ALLOW_LIST");
-        compat.webhook_error_deny_list = list("WEBHOOK_ERROR_DENY_LIST");
-        compat.download_allow_list = list("API_DOWNLOAD_FROM_ALLOW_LIST");
-        compat.download_deny_list = list("API_DOWNLOAD_FROM_DENY_LIST");
-        let compat = &mut self.compat;
-        for name in ENGINE_VARIABLES.iter().chain(["PDFENGINES_ENGINES"].iter()) {
-            if let Some(list) = get(name) {
-                compat.engine_orders.insert(
-                    (*name).to_string(),
-                    list.split(',')
-                        .map(|e| e.trim().to_string())
-                        .filter(|e| !e.is_empty())
-                        .collect(),
-                );
-            }
-        }
     }
 
     /// True when requests must carry credentials.
     pub fn auth_configured(&self) -> bool {
-        !self.api_keys.is_empty() || self.basic_auth.is_some() || self.compat.oidc.is_some()
+        !self.api_keys.is_empty() || self.basic_auth.is_some() || self.oidc.is_some()
     }
 
     /// True when `/metrics` needs credentials.
@@ -766,8 +582,20 @@ impl Config {
         self.auth_configured() && !self.metrics_public
     }
 
-    /// Settings the service refuses to start with. PDFtk and ExifTool are
-    /// not part of this build, so a list that names them cannot be honoured.
+    /// The signing key and certificate, read and checked against each other,
+    /// or `None` when signing is not configured. Errors name the variable and
+    /// the file, never what the key file holds.
+    pub fn signer(&self) -> Result<Option<crate::pdfops::sign::Signer>, String> {
+        match (&self.signing_key, &self.signing_cert) {
+            (Some(key), Some(cert)) => crate::pdfops::sign::Signer::from_files(key, cert)
+                .map(Some)
+                .map_err(|e| format!("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT: {e}")),
+            (None, None) => Ok(None),
+            _ => Err("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
+        }
+    }
+
+    /// Settings the service refuses to start with.
     pub fn check(&self) -> Result<(), String> {
         if let Some(problem) = self.problems.first() {
             return Err(problem.clone());
@@ -775,38 +603,26 @@ impl Config {
         if let Some(url) = &self.store {
             crate::store::Store::open(url)?;
         }
-        for (variable, engines) in &self.compat.engine_orders {
+        self.signer()?;
+        for (variable, engines) in &self.engine_orders {
             for engine in engines {
-                match engine.as_str() {
-                    "qpdf" | "pdfcpu" | "lopdf" | "qpdf-metadata" | "libreoffice-pdfengine" => {}
-                    "pdftk" | "exiftool" => {
-                        return Err(format!(
-                            "{variable} names '{engine}', which this build does not include; use qpdf, pdfcpu, lopdf or qpdf-metadata"
-                        ));
-                    }
-                    other => {
-                        return Err(format!("{variable} names an unknown engine '{other}'"));
-                    }
+                if !matches!(
+                    engine.as_str(),
+                    "qpdf" | "pdfcpu" | "lopdf" | "qpdf-metadata"
+                ) {
+                    return Err(format!(
+                        "{variable} names an unknown engine '{engine}'; use lopdf, qpdf, pdfcpu or qpdf-metadata"
+                    ));
                 }
             }
         }
-        let trace_header = &self.compat.trace_header;
-        if trace_header.is_empty()
-            || !trace_header
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
-            return Err(format!("'{trace_header}' cannot be a header name"));
-        }
-        if let Some(oidc) = &self.compat.oidc {
+        if let Some(oidc) = &self.oidc {
             if oidc.issuer.is_empty() || oidc.audience.is_empty() {
-                return Err(
-                    "API_ENABLE_OIDC_AUTH needs API_OIDC_ISSUER and API_OIDC_AUDIENCE".into(),
-                );
+                return Err("RUSTICDOC_OIDC_ISSUER and RUSTICDOC_OIDC_AUDIENCE go together".into());
             }
             for (name, url) in [
-                ("API_OIDC_ISSUER", oidc.issuer.as_str()),
-                ("API_OIDC_JWKS_URL", oidc.jwks_url.as_str()),
+                ("RUSTICDOC_OIDC_ISSUER", oidc.issuer.as_str()),
+                ("RUSTICDOC_OIDC_JWKS_URL", oidc.jwks_url.as_str()),
             ] {
                 if !url.is_empty() && !is_secure_url(url) {
                     return Err(format!(
@@ -815,14 +631,25 @@ impl Config {
                 }
             }
         }
-        let compat = &self.compat;
         for (name, list) in [
-            ("WEBHOOK_ALLOW_LIST", &compat.webhook_allow_list),
-            ("WEBHOOK_DENY_LIST", &compat.webhook_deny_list),
-            ("WEBHOOK_ERROR_ALLOW_LIST", &compat.webhook_error_allow_list),
-            ("WEBHOOK_ERROR_DENY_LIST", &compat.webhook_error_deny_list),
-            ("API_DOWNLOAD_FROM_ALLOW_LIST", &compat.download_allow_list),
-            ("API_DOWNLOAD_FROM_DENY_LIST", &compat.download_deny_list),
+            ("RUSTICDOC_WEBHOOK_ALLOW_LIST", &self.webhook_allow_list),
+            ("RUSTICDOC_WEBHOOK_DENY_LIST", &self.webhook_deny_list),
+            (
+                "RUSTICDOC_WEBHOOK_ERROR_ALLOW_LIST",
+                &self.webhook_error_allow_list,
+            ),
+            (
+                "RUSTICDOC_WEBHOOK_ERROR_DENY_LIST",
+                &self.webhook_error_deny_list,
+            ),
+            (
+                "RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST",
+                &self.download_allow_list,
+            ),
+            (
+                "RUSTICDOC_DOWNLOAD_FROM_DENY_LIST",
+                &self.download_deny_list,
+            ),
         ] {
             for pattern in list {
                 if let Err(e) = regex::Regex::new(pattern) {
@@ -848,15 +675,6 @@ pub fn is_secure_url(url: &str) -> bool {
             None => false,
         },
         _ => false,
-    }
-}
-
-/// Go's `strconv.ParseBool`, which Gotenberg's flags go through.
-pub fn parse_go_bool(s: &str) -> Option<bool> {
-    match s {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
-        _ => None,
     }
 }
 
@@ -928,27 +746,19 @@ mod tests {
     #[test]
     fn half_configured_authentication_stops_the_service() {
         for vars in [
-            &[("API_ENABLE_BASIC_AUTH", "true")][..],
-            &[("API_ENABLE_BASIC_AUTH", "yes")],
-            &[
-                ("API_ENABLE_BASIC_AUTH", "true"),
-                ("GOTENBERG_API_BASIC_AUTH_USERNAME", "u"),
-            ],
-            &[("RUSTICDOC_BASIC_AUTH_USERNAME", "u")],
+            &[("RUSTICDOC_BASIC_AUTH_USERNAME", "u")][..],
             &[("RUSTICDOC_BASIC_AUTH_PASSWORD", "p")],
             &[("RUSTICDOC_API_KEYS", " , ")],
-            &[("API_ENABLE_OIDC_AUTH", "yes")],
-            &[("API_ENABLE_OIDC_AUTH", "true")],
+            &[("RUSTICDOC_OIDC_ISSUER", "https://idp.example.com")],
+            &[("RUSTICDOC_OIDC_AUDIENCE", "a")],
             &[
-                ("API_ENABLE_OIDC_AUTH", "true"),
-                ("API_OIDC_ISSUER", "http://idp.example.com"),
-                ("API_OIDC_AUDIENCE", "a"),
+                ("RUSTICDOC_OIDC_ISSUER", "http://idp.example.com"),
+                ("RUSTICDOC_OIDC_AUDIENCE", "a"),
             ],
             &[
-                ("API_ENABLE_OIDC_AUTH", "true"),
-                ("API_OIDC_ISSUER", "https://idp.example.com"),
-                ("API_OIDC_AUDIENCE", "a"),
-                ("API_OIDC_JWKS_URL", "http://idp.example.com/keys"),
+                ("RUSTICDOC_OIDC_ISSUER", "https://idp.example.com"),
+                ("RUSTICDOC_OIDC_AUDIENCE", "a"),
+                ("RUSTICDOC_OIDC_JWKS_URL", "http://idp.example.com/keys"),
             ],
         ] {
             assert!(from(vars).check().is_err(), "{vars:?}");
@@ -956,44 +766,52 @@ mod tests {
     }
 
     #[test]
-    fn authentication_is_read_as_gotenberg_reads_it() {
+    fn authentication_settings_are_read() {
         let basic = [
-            ("API_ENABLE_BASIC_AUTH", "True"),
-            ("GOTENBERG_API_BASIC_AUTH_USERNAME", "u"),
-            ("GOTENBERG_API_BASIC_AUTH_PASSWORD", "p"),
+            ("RUSTICDOC_BASIC_AUTH_USERNAME", "u"),
+            ("RUSTICDOC_BASIC_AUTH_PASSWORD", "p"),
         ];
         let config = from(&basic);
         assert!(config.check().is_ok());
         assert!(config.basic_auth.is_some());
-        let off = [
-            ("API_ENABLE_BASIC_AUTH", "false"),
-            ("GOTENBERG_API_BASIC_AUTH_USERNAME", "u"),
-        ];
-        assert!(from(&off).check().is_ok());
-        assert!(from(&off).basic_auth.is_none());
         // Left empty is left unset, as compose passes it.
         assert!(from(&[("RUSTICDOC_API_KEYS", "")]).check().is_ok());
         assert_eq!(from(&[("RUSTICDOC_API_KEYS", "a, b")]).api_keys.len(), 2);
         let local = [
-            ("API_ENABLE_OIDC_AUTH", "1"),
-            ("API_OIDC_ISSUER", "http://127.0.0.1:8080"),
-            ("API_OIDC_AUDIENCE", "a"),
+            ("RUSTICDOC_OIDC_ISSUER", "http://127.0.0.1:8080"),
+            ("RUSTICDOC_OIDC_AUDIENCE", "a"),
         ];
         assert!(from(&local).check().is_ok());
+        assert!(from(&local).auth_configured());
         assert!(from(&[]).check().is_ok());
+        assert!(!from(&[]).auth_configured());
     }
 
     #[test]
     fn invalid_url_patterns_stop_the_service() {
         for name in [
-            "WEBHOOK_ALLOW_LIST",
-            "WEBHOOK_DENY_LIST",
-            "API_DOWNLOAD_FROM_ALLOW_LIST",
-            "API_DOWNLOAD_FROM_DENY_LIST",
+            "RUSTICDOC_WEBHOOK_ALLOW_LIST",
+            "RUSTICDOC_WEBHOOK_DENY_LIST",
+            "RUSTICDOC_WEBHOOK_ERROR_ALLOW_LIST",
+            "RUSTICDOC_WEBHOOK_ERROR_DENY_LIST",
+            "RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST",
+            "RUSTICDOC_DOWNLOAD_FROM_DENY_LIST",
         ] {
             assert!(from(&[(name, "(")]).check().is_err(), "{name}");
             assert!(from(&[(name, "^https://a,^https://b")]).check().is_ok());
         }
+    }
+
+    #[test]
+    fn route_switches_are_rusticdoc_booleans() {
+        let c = from(&[
+            ("RUSTICDOC_CONVERT_DISABLED", "true"),
+            ("RUSTICDOC_PDF_DISABLED", "1"),
+            ("RUSTICDOC_WEBHOOK_DISABLED", "yes"),
+        ]);
+        assert!(c.convert_disabled && c.pdf_disabled && c.webhook_disabled);
+        let c = from(&[("RUSTICDOC_CONVERT_DISABLED", "TRUE")]);
+        assert!(!c.convert_disabled);
     }
 
     #[test]
@@ -1014,44 +832,27 @@ mod tests {
     }
 
     #[test]
-    fn removed_engines_stop_the_service() {
-        let mut config = Config::default();
-        assert!(config.check().is_ok());
-        config
-            .compat
-            .engine_orders
-            .insert("PDFENGINES_MERGE_ENGINES".into(), vec!["qpdf".into()]);
-        assert!(config.check().is_ok());
+    fn engine_lists_are_read_and_unknown_engines_stop_the_service() {
+        assert!(Config::default().check().is_ok());
+        let c = from(&[("RUSTICDOC_PDF_ENGINES_MERGE", "qpdf, lopdf")]);
+        assert!(c.check().is_ok());
+        assert_eq!(
+            c.engine_orders["RUSTICDOC_PDF_ENGINES_MERGE"],
+            ["qpdf", "lopdf"]
+        );
         for bad in ["pdftk", "exiftool", "nonsense"] {
-            config
-                .compat
-                .engine_orders
-                .insert("PDFENGINES_STAMP_ENGINES".into(), vec![bad.into()]);
-            assert!(config.check().unwrap_err().contains(bad));
+            let err = from(&[("RUSTICDOC_PDF_ENGINES_STAMP", bad)])
+                .check()
+                .unwrap_err();
+            assert!(err.contains(bad), "{err}");
         }
     }
 
     #[test]
-    fn trace_headers_must_be_header_names() {
-        let mut config = Config::default();
-        config.compat.trace_header = "bad header".into();
-        assert!(config.check().is_err());
-    }
-
-    #[test]
-    fn go_booleans() {
-        assert_eq!(parse_go_bool("True"), Some(true));
-        assert_eq!(parse_go_bool("0"), Some(false));
-        assert_eq!(parse_go_bool("yes"), None);
-    }
-
-    #[test]
-    fn the_port_defaults_to_9027_and_either_variable_changes_it() {
+    fn the_port_defaults_to_9027() {
         assert_eq!(Config::default().bind, "0.0.0.0:9027");
-        assert_eq!(from(&[("API_BIND_IP", "127.0.0.1")]).bind, "127.0.0.1:9027");
-        assert_eq!(from(&[("API_PORT", "3000")]).bind, "0.0.0.0:3000");
         assert_eq!(
-            from(&[("RUSTICDOC_BIND", "127.0.0.1:8000"), ("API_PORT", "3000")]).bind,
+            from(&[("RUSTICDOC_BIND", "127.0.0.1:8000")]).bind,
             "127.0.0.1:8000"
         );
     }
@@ -1086,6 +887,58 @@ mod tests {
             &[("RUSTICDOC_STORE_SYNC_INTERVAL", "0s")],
         ] {
             assert!(from(bad).check().is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn signing_needs_both_files_and_a_key_that_fits() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["signer.test".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let other = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let key_path = dir.path().join("key.pem");
+        let other_path = dir.path().join("other.pem");
+        let cert_path = dir.path().join("cert.pem");
+        std::fs::write(&key_path, key.serialize_pem()).unwrap();
+        std::fs::write(&other_path, other.serialize_pem()).unwrap();
+        std::fs::write(&cert_path, cert.pem()).unwrap();
+        let (key_path, other_path, cert_path) = (
+            key_path.to_str().unwrap(),
+            other_path.to_str().unwrap(),
+            cert_path.to_str().unwrap(),
+        );
+
+        assert!(from(&[]).signer().unwrap().is_none());
+        let c = from(&[
+            ("RUSTICDOC_SIGNING_KEY", key_path),
+            ("RUSTICDOC_SIGNING_CERT", cert_path),
+        ]);
+        assert!(c.check().is_ok(), "{:?}", c.check());
+        assert!(c.signer().unwrap().is_some());
+
+        for (bad, says) in [
+            (&[("RUSTICDOC_SIGNING_KEY", key_path)][..], "go together"),
+            (&[("RUSTICDOC_SIGNING_CERT", cert_path)], "go together"),
+            (
+                &[
+                    ("RUSTICDOC_SIGNING_KEY", other_path),
+                    ("RUSTICDOC_SIGNING_CERT", cert_path),
+                ],
+                "does not belong",
+            ),
+            (
+                &[
+                    ("RUSTICDOC_SIGNING_KEY", "/nonexistent/key.pem"),
+                    ("RUSTICDOC_SIGNING_CERT", cert_path),
+                ],
+                "cannot read",
+            ),
+        ] {
+            let err = from(bad).check().unwrap_err();
+            assert!(err.contains(says), "{bad:?}: {err}");
         }
     }
 

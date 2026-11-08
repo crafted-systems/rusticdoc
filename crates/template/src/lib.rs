@@ -289,6 +289,11 @@ impl Compiled {
                         );
                     }
                 }
+                // Excel's calculation chain lists formula cells where they
+                // were. Once loops move rows it names cells that hold no
+                // formula, and Excel reports unreadable content and offers a
+                // repair. It is only a cache, rebuilt when Excel calculates.
+                package::remove_part(&mut entries, "xl/calcChain.xml", "xl/workbook.xml");
             }
             _ => {
                 for (name, content) in &outputs {

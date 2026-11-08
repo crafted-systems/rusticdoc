@@ -770,6 +770,43 @@ fn plan_block(
         return Ok(h);
     }
 
+    // On one slide, a block whose tags sit in different shapes repeats the
+    // slide, as PowerPoint authors mean when they open a loop in the title
+    // and close it in the body. Repeating the shapes would print each copy
+    // over the last, since a copied shape keeps its position.
+    if format == Format::Pptx && o.para != c.para {
+        let lcp = common_prefix(&o.para, &c.para);
+        let across_shapes = elem_at(&parts[o.part].nodes, &o.para[..lcp]).is_some_and(|e| {
+            matches!(e.name.as_str(), "p:spTree" | "p:grpSp" | "p:cSld" | "p:sld")
+        });
+        if across_shapes {
+            if let Some(&m) = b.middles.first() {
+                return Err(err(format!(
+                    "{} cannot divide a slide that {} and {} repeat; put it on a slide of its own",
+                    describe(m),
+                    describe(b.open),
+                    describe(b.close)
+                )));
+            }
+            return Ok(vec![
+                (
+                    b.open,
+                    Target::Part {
+                        part: o.part,
+                        before: true,
+                    },
+                ),
+                (
+                    b.close,
+                    Target::Part {
+                        part: c.part,
+                        before: false,
+                    },
+                ),
+            ]);
+        }
+    }
+
     if o.para == c.para {
         for &m in &b.middles {
             if ctxs[m].para != o.para {

@@ -54,8 +54,8 @@ Needs credentials, if any are configured.
 
 ## POST /v1/pdf/convert
 
-Gotenberg's `/forms/pdfengines/convert`: PDFs to PDF/A or PDF/UA through
-LibreOffice, with the same post-processing fields.
+PDFs to PDF/A or PDF/UA through LibreOffice, with the same
+post-processing fields as `/v1/convert`.
 
 Needs credentials, if any are configured.
 
@@ -294,8 +294,13 @@ Needs credentials, if any are configured.
 
 ## POST /v1/pdf/sign
 
-Places signature images at exact coordinates. This draws the image; it
-is not a cryptographic signature.
+Signs a PDF. With `signature=certificate`, a cryptographic signature with
+the key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`: an
+incremental update with a PAdES B-B style `/ETSI.CAdES.detached`
+signature (no timestamp), invisible, or shown with the one image sent.
+Without a configured key that answers 503. By default
+(`signature=image`) the images are drawn at exact coordinates, which is
+not a cryptographic signature.
 
 Needs credentials, if any are configured.
 
@@ -305,12 +310,17 @@ Needs credentials, if any are configured.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `files` | files | Yes | The PDF first, then one PNG or JPEG per placement. |
-| `page` | integer | Yes | 1-based page of each signature; repeat the field for several. |
-| `x` | number | Yes | Points from the page's left edge to the image's left edge. |
-| `y` | number | Yes | Points from the page's bottom edge to the image's bottom edge. |
+| `files` | files | Yes | The PDF first, then one PNG or JPEG per placement. With `signature=certificate`, at most one image: the visible appearance. |
+| `contactInfo` | string | No | With `signature=certificate`: how to reach the signer. |
+| `location` | string | No | With `signature=certificate`: where it was signed. |
 | `outputFilename` | string | No |  |
+| `page` | integer | No | 1-based page of each image; repeat the field for several. |
+| `reason` | string | No | With `signature=certificate`: why the document was signed. |
+| `signature` | string | No | `image` (default) draws the images and is not a cryptographic signature. `certificate` signs with the service's key (PAdES B-B, `/ETSI.CAdES.detached`), invisibly unless an image is sent. |
+| `signerName` | string | No | With `signature=certificate`: the signer's name as shown. Validators identify the signer by the certificate, not by this. |
 | `width` | number | No | Width in points. Default the image's natural size. |
+| `x` | number | No | Points from the page's left edge to the image's left edge. |
+| `y` | number | No | Points from the page's bottom edge to the image's bottom edge. |
 
 ### Responses
 
@@ -319,6 +329,7 @@ Needs credentials, if any are configured.
 | 200 | The signed PDF | File |
 | 204 | Accepted; the result goes to the webhook |  |
 | 400 | The request is wrong | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
+| 503 | signature=certificate and no signing key is configured, or the certificate has expired | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 
 ## POST /v1/pdf/split
 

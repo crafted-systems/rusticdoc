@@ -231,6 +231,11 @@ pub enum Step {
         user_password: String,
         owner_password: String,
     },
+    /// Sign cryptographically with the service's key. Always the last step,
+    /// and never with `encrypt`.
+    Sign {
+        options: pdfops::sign::SignOptions,
+    },
 }
 
 impl Step {
@@ -251,6 +256,7 @@ impl Step {
             Step::Embed { .. } => "embed",
             Step::Facturx { .. } => "factur-x",
             Step::Encrypt { .. } => "encrypt",
+            Step::Sign { .. } => "sign",
         }
     }
 }
@@ -402,6 +408,23 @@ pub fn parse_steps(list: &str, fields: &BTreeMap<String, String>) -> Result<Vec<
                     user_password: user,
                     owner_password: owner,
                 }
+            }
+            "sign" => {
+                let text = |name: &str| {
+                    fields
+                        .get(name)
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
+                };
+                let options = pdfops::sign::SignOptions {
+                    reason: text("reason"),
+                    location: text("location"),
+                    contact_info: text("contactInfo"),
+                    signer_name: text("signerName"),
+                    appearance: None,
+                };
+                options.validate()?;
+                Step::Sign { options }
             }
             "merge" => Step::Merge,
             "flatten" => Step::Flatten,

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use crate::package::{self, Entry};
 use crate::rich::html;
 use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK, REL_IMAGE};
 use crate::rich::{
@@ -98,9 +99,86 @@ fn run(rpr: &Elem, raw_text: &str) -> Node {
     ))
 }
 
+/// The shape's own offset, when its properties give one.
+fn offset_of(shape: &Elem) -> Option<(i64, i64)> {
+    let off = shape.find("a:off")?;
+    let at = |name: &str| off.attr(name).and_then(|v| v.parse::<i64>().ok());
+    Some((at("x")?, at("y")?))
+}
+
+/// What a placeholder's type means for inheritance: PowerPoint treats a
+/// missing type as a body, and a centred title or subtitle as a title or body
+/// on the master.
+fn placeholder_kind(ty: Option<&str>) -> &str {
+    match ty {
+        None | Some("obj") | Some("subTitle") => "body",
+        Some("ctrTitle") => "title",
+        Some(other) => other,
+    }
+}
+
+/// The part that `part`'s relationship of this type points at, such as a
+/// slide's layout.
+fn linked_part(entries: &[Entry], part: &str, rel_suffix: &str) -> Option<String> {
+    let base = part.rsplit_once('/').map_or("", |(dir, _)| dir);
+    package::relationships(entries, &package::rels_name(part), base)
+        .into_iter()
+        .find(|(_, ty, _)| ty.ends_with(rel_suffix))
+        .map(|(_, _, target)| target)
+}
+
+/// The offset of the placeholder in `part` that a slide's placeholder takes
+/// after: the same `idx` on a layout when there is one, else the same kind.
+fn placeholder_offset(
+    entries: &[Entry],
+    part: &str,
+    idx: Option<&str>,
+    ty: Option<&str>,
+    by_kind_only: bool,
+) -> Option<(i64, i64)> {
+    let nodes = xml::parse(&package::text_of(entries, part)?).ok()?;
+    let tree = xml::root(&nodes)?.find("p:spTree")?;
+    let shapes: Vec<&Elem> = tree
+        .children
+        .iter()
+        .filter_map(|n| match n {
+            Node::Elem(e) if e.find("p:ph").is_some() => Some(e),
+            _ => None,
+        })
+        .collect();
+    let ph = |e: &Elem| e.find("p:ph").cloned();
+    let by_idx = (!by_kind_only).then_some(idx).flatten().and_then(|idx| {
+        shapes
+            .iter()
+            .find(|e| ph(e).and_then(|p| p.attr("idx")).as_deref() == Some(idx))
+    });
+    let found = by_idx.or_else(|| {
+        shapes.iter().find(|e| {
+            ph(e).is_some_and(|p| {
+                placeholder_kind(p.attr("type").as_deref()) == placeholder_kind(ty)
+            })
+        })
+    })?;
+    offset_of(found)
+}
+
 impl Pptx<'_, '_> {
     fn fail(&self, message: &str) -> TemplateError {
         misplaced(self.part, "slide", message)
+    }
+
+    /// Where a placeholder sits when the slide does not say: PowerPoint leaves
+    /// the position out of a slide's placeholders until they are moved, and
+    /// takes it from the slide's layout, or failing that its master.
+    fn inherited_offset(&self, shape: &Elem) -> Option<(i64, i64)> {
+        let ph = shape.find("p:ph")?;
+        let (idx, ty) = (ph.attr("idx"), ph.attr("type"));
+        let entries: &[Entry] = self.pkg.entries;
+        let layout = linked_part(entries, self.part, "/slideLayout")?;
+        placeholder_offset(entries, &layout, idx.as_deref(), ty.as_deref(), false).or_else(|| {
+            let master = linked_part(entries, &layout, "/slideMaster")?;
+            placeholder_offset(entries, &master, idx.as_deref(), ty.as_deref(), true)
+        })
     }
 
     /// Goes through a shape tree or group. New shapes join the same container
@@ -114,13 +192,9 @@ impl Pptx<'_, '_> {
                     self.container(e)?
                 }
                 _ if has_mark(&e.children) => {
-                    let off = e.find("a:off");
-                    let at = |name: &str| {
-                        off.and_then(|o| o.attr(name))
-                            .and_then(|v| v.parse::<i64>().ok())
-                            .unwrap_or(0)
-                    };
-                    let (x, mut y) = (at("x"), at("y"));
+                    let (x, mut y) = offset_of(e)
+                        .or_else(|| self.inherited_offset(e))
+                        .unwrap_or((0, 0));
                     self.paragraphs(&mut e.children, x, &mut y, &mut added)?;
                 }
                 _ => {}

@@ -117,6 +117,36 @@ pub fn set(entries: &mut Vec<Entry>, name: &str, data: Vec<u8>) {
     }
 }
 
+/// Removes `part`, its content-type override and the relationships from
+/// `source` that point at it. Nothing changes when the part is absent.
+pub fn remove_part(entries: &mut Vec<Entry>, part: &str, source: &str) {
+    if get(entries, part).is_none() {
+        return;
+    }
+    entries.retain(|e| e.name != part);
+    let edit = |entries: &mut Vec<Entry>, name: &str, drop: &dyn Fn(&Elem) -> bool| {
+        let Some(mut nodes) = text_of(entries, name).and_then(|s| xml::parse(&s).ok()) else {
+            return;
+        };
+        if let Some(root) = xml::root_mut(&mut nodes) {
+            root.children
+                .retain(|n| !matches!(n, Node::Elem(e) if drop(e)));
+        }
+        set(entries, name, xml::to_xml(&nodes).into_bytes());
+    };
+    let override_name = format!("/{part}");
+    edit(entries, "[Content_Types].xml", &|e| {
+        e.name == "Override" && e.attr("PartName").as_deref() == Some(override_name.as_str())
+    });
+    let base = source
+        .rsplit_once('/')
+        .map_or("", |(dir, _)| dir)
+        .to_string();
+    edit(entries, &rels_name(source), &|e| {
+        e.name == "Relationship" && e.attr("Target").is_some_and(|t| resolve(&base, &t) == part)
+    });
+}
+
 /// A relationship: `(id, type, resolved target part)`.
 pub fn relationships(
     entries: &[Entry],

@@ -124,7 +124,7 @@ curl -F template=@invoice.docx -F "data=<invoice.json" http://localhost:9027/v1/
 unzip -l out.docx | grep -o 'word/media/rich1.png'
 ```
 
-A barcode counts as an image for placement and limits. Barcodes have not been scanned with a reader, as [known limits](/docs/project/known-limits/) says, so test yours on your own hardware.
+A barcode counts as an image for placement and limits. Every symbology decodes to its exact value with ZXing and ZBar, from the document and from its PDF at 150 and 300 dpi, and EAN codes come back with the check digit the service adds. At 100 dpi a long Code 128 or Code 39 at the default size is too fine to read, so give it a larger `size` for screens. No code has been scanned with a hardware or phone reader, as [known limits](/docs/project/known-limits/) says, so test yours on your own hardware.
 
 ## link
 
@@ -242,7 +242,7 @@ Values must be numbers. A `null` or missing value is a gap, while a key with no 
 
 - **DOCX and PPTX.** The chart carries its values inline and has no embedded workbook. It renders, but its data cannot be edited in Word or PowerPoint.
 - **XLSX.** The chart is anchored at the tag's cell, and a hidden sheet named `RichChartData` holds the values.
-- **PPTX.** The chart goes at the position of the shape that held the tag.
+- **PPTX.** The chart goes at the position of the shape that held the tag. A placeholder PowerPoint has not moved has no position of its own, so the chart takes the one its layout or master gives it.
 - **ODT, ODS and ODP.** Refused: `charts are not supported in ODT templates yet`. To show a chart there, draw it yourself and print it with `image`.
 
 ## pagebreak

@@ -24,11 +24,9 @@ curl -H "X-Rusticdoc-Webhook-Url: https://receiver.example.com/documents" \
 
 Extra headers cannot set `host`, `content-length`, `content-type`, `transfer-encoding`, `connection`, `x-request-id` or anything starting with `x-rusticdoc-`. Those are a `400`.
 
-Gotenberg's `Gotenberg-Webhook-*` headers work as well. See [moving from Gotenberg 8](/docs/guides/from-gotenberg/).
-
 ### Routes that take a webhook
 
-Every route that produces a file: `/v1/render`, `/v1/render/batch`, `/v1/convert`, `/v1/pdf/*` and `/forms/*`.
+Every route that produces a file: `/v1/render`, `/v1/render/batch`, `/v1/convert` and `/v1/pdf/*`.
 
 Routes that answer in JSON, such as `/v1/pdf/metadata/read`, `/v1/pdf/bookmarks/read` and `/v1/pdf/forms/fields`, ignore the headers and answer at once.
 
@@ -53,8 +51,6 @@ content-type: application/pdf
 content-disposition: attachment; filename="letter.pdf"
 x-rusticdoc-event: render.completed
 x-request-id: my-id-1
-gotenberg-trace: my-id-1
-gotenberg-version: 0.1.0
 x-rusticdoc-timestamp: 1793997426
 x-rusticdoc-attempt: 1
 x-rusticdoc-signature: v1=7ced1242...
@@ -109,9 +105,9 @@ A job has the same time limit as a synchronous request. Nothing is queued on dis
 - `http` or `https` only, with no user or password in the URL. Use extra headers for credentials.
 - Private addresses are refused with a `400`: loopback, private ranges, link-local, and names such as `localhost` or `*.internal`. `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true` allows them.
 - The address is checked when the request arrives, then the delivery is pinned to it, so a DNS change cannot redirect it.
-- `WEBHOOK_ALLOW_LIST` and `WEBHOOK_DENY_LIST` (and `WEBHOOK_ERROR_ALLOW_LIST`, `WEBHOOK_ERROR_DENY_LIST`) are comma-separated regular expressions. A refusal is a `403`.
+- `RUSTICDOC_WEBHOOK_ALLOW_LIST` and `RUSTICDOC_WEBHOOK_DENY_LIST` (and `RUSTICDOC_WEBHOOK_ERROR_ALLOW_LIST`, `RUSTICDOC_WEBHOOK_ERROR_DENY_LIST`) are comma-separated regular expressions. A refusal is a `403`.
 
-`WEBHOOK_DISABLE=true` makes the service ignore the headers, on every route, so the request runs synchronously.
+`RUSTICDOC_WEBHOOK_DISABLED=true` makes the service ignore the headers, on every route, so the request runs synchronously.
 
 ## Signatures
 
@@ -253,15 +249,3 @@ curl -H "X-Api-Key: my-key" \
 ```
 
 `host.docker.internal` reaches the host from Docker Desktop. On Linux, add `--add-host=host.docker.internal:host-gateway` to `docker run`.
-
-## Events
-
-On `/forms/*`, `Gotenberg-Webhook-Events-Url` asks for one more call after the delivery, once only, as JSON:
-
-```json
-{ "event": "webhook.success", "correlationId": "9bc4032a-b540-4e62-9f50-bf520f6664b3", "timestamp": "2026-11-06T20:37:13Z" }
-```
-
-A failure has `"event": "webhook.error"` and an `error` object with `status` and `message`.
-
-An event is signed the same way, but it has no `x-request-id` or `x-rusticdoc-attempt` header. To verify one, take the request id from `correlationId` in the body. The receivers above expect the header, so they reject events as they stand.

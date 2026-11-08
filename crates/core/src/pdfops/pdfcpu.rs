@@ -215,7 +215,7 @@ impl PdfEngine for PdfcpuEngine {
     ///
     /// pdfcpu only takes passwords as arguments, so they are visible to this
     /// user's other processes while it runs. It only gets here when a deployment
-    /// names it in `PDFENGINES_ENCRYPT_ENGINES` or has no qpdf: encryption does not
+    /// names it in `RUSTICDOC_PDF_ENGINES_ENCRYPT` or has no qpdf: encryption does not
     /// fall through to it after a qpdf failure. Arguments are not logged either
     /// way (see [`process::run`]).
     async fn encrypt_with(

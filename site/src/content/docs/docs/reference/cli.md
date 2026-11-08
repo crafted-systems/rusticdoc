@@ -21,7 +21,7 @@ Commands:
   openapi         Print the OpenAPI description as JSON
   health          Check a running service, for container health checks. Exits 0 when up
   engines         Show the engines this machine has
-  pdf             PDF operations: merge, split, rotate, flatten, optimize, encrypt, metadata, bookmarks, embed, watermark, stamp, factur-x, forms
+  pdf             PDF operations: merge, split, rotate, flatten, optimize, encrypt, metadata, bookmarks, embed, watermark, stamp, sign, factur-x, forms
   validate        Check a template against sample data and list every problem
   webhook-secret  Print the key a caller's webhook deliveries are signed with, in hex, from RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it
   help            Print this message or the help of the given subcommand(s)
@@ -50,7 +50,7 @@ Options:
       --ctx <CTX>
           JSON file visible as `ctx`
   -s, --steps <STEPS>
-          Steps in order: convert, pdfa, metadata, encrypt, merge [default: ""]
+          Steps in order: convert, pdfa, metadata, encrypt, merge, sign. `sign` comes last and uses RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT [default: ""]
       --to <TO>
           Output format for `convert` [default: pdf]
       --pdfa <PDFA>
@@ -141,7 +141,7 @@ Options:
 ### rusticdoc pdf
 
 ```text
-PDF operations: merge, split, rotate, flatten, optimize, encrypt, metadata, bookmarks, embed, watermark, stamp, factur-x, forms
+PDF operations: merge, split, rotate, flatten, optimize, encrypt, metadata, bookmarks, embed, watermark, stamp, sign, factur-x, forms
 
 Usage: rusticdoc pdf [OPTIONS] <COMMAND>
 
@@ -157,7 +157,7 @@ Commands:
   embed      Attach files to a PDF
   watermark  Put text, an image or a PDF under the page content
   stamp      Put text, an image or a PDF over the page content
-  sign       Place a signature image at exact coordinates (not a cryptographic signature)
+  sign       Sign cryptographically with --key and --cert (PAdES B-B, invisible unless --image is given), or, without them, place a signature image at exact coordinates, which is not a cryptographic signature
   facturx    Embed Factur-X invoice XML
   fields     List a form's fields as JSON
   fill       Fill a form from JSON data; tags in annotations are applied too
@@ -376,22 +376,28 @@ Options:
 #### rusticdoc pdf sign
 
 ```text
-Place a signature image at exact coordinates (not a cryptographic signature)
+Sign cryptographically with --key and --cert (PAdES B-B, invisible unless --image is given), or, without them, place a signature image at exact coordinates, which is not a cryptographic signature
 
-Usage: rusticdoc pdf sign [OPTIONS] --image <IMAGE> --x <X> --y <Y> --output <OUTPUT> <FILE>
+Usage: rusticdoc pdf sign [OPTIONS] --output <OUTPUT> <FILE>
 
 Arguments:
   <FILE>  
 
 Options:
-      --image <IMAGE>    PNG or JPEG
-  -v, --verbose...       Log verbosity: -v for debug, -vv for trace
-      --page <PAGE>      [default: 1]
-      --x <X>            Points from the page's left edge
-      --y <Y>            Points from the page's bottom edge
-      --width <WIDTH>    Width in points; default the image's natural size
-  -o, --output <OUTPUT>  
-  -h, --help             Print help
+      --key <KEY>                    PEM private key (PKCS#8, PKCS#1 or SEC1; RSA or ECDSA P-256)
+  -v, --verbose...                   Log verbosity: -v for debug, -vv for trace
+      --cert <CERT>                  PEM certificate for --key, then any chain certificates
+      --image <IMAGE>                PNG or JPEG. With --key, the visible appearance of the signature
+      --page <PAGE>                  [default: 1]
+      --x <X>                        Points from the page's left edge
+      --y <Y>                        Points from the page's bottom edge
+      --width <WIDTH>                Width in points; default the image's natural size
+      --reason <REASON>              Why the document was signed (with --key)
+      --location <LOCATION>          Where it was signed (with --key)
+      --contact-info <CONTACT_INFO>  How to reach the signer (with --key)
+      --signer-name <SIGNER_NAME>    The signer's name as shown; validators read the certificate (with --key)
+  -o, --output <OUTPUT>              
+  -h, --help                         Print help
 ```
 
 #### rusticdoc pdf facturx

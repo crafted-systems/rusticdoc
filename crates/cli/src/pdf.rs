@@ -2,6 +2,7 @@
 //! the same engines the service uses.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -9,7 +10,7 @@ use clap::{Args, Subcommand};
 use rusticdoc_core::pdfform;
 use rusticdoc_core::pdfops::{
     Attachment, Bookmark, FacturxProfile, Metadata, MultiEngine, Overlay, OverlayKind, Position,
-    Rotation, SplitMode,
+    Rotation, SplitMode, sign,
 };
 use rusticdoc_core::{Config, Document, Engines};
 
@@ -117,24 +118,43 @@ pub enum PdfOp {
         #[arg(short, long)]
         output: PathBuf,
     },
-    /// Place a signature image at exact coordinates (not a cryptographic
-    /// signature).
+    /// Sign cryptographically with --key and --cert (PAdES B-B, invisible
+    /// unless --image is given), or, without them, place a signature image at
+    /// exact coordinates, which is not a cryptographic signature.
     Sign {
         file: PathBuf,
-        /// PNG or JPEG.
-        #[arg(long)]
-        image: PathBuf,
+        /// PEM private key (PKCS#8, PKCS#1 or SEC1; RSA or ECDSA P-256).
+        #[arg(long, requires = "cert")]
+        key: Option<PathBuf>,
+        /// PEM certificate for --key, then any chain certificates.
+        #[arg(long, requires = "key")]
+        cert: Option<PathBuf>,
+        /// PNG or JPEG. With --key, the visible appearance of the signature.
+        #[arg(long, requires_all = ["x", "y"])]
+        image: Option<PathBuf>,
         #[arg(long, default_value_t = 1)]
         page: u32,
         /// Points from the page's left edge.
-        #[arg(long)]
-        x: f32,
+        #[arg(long, requires = "image")]
+        x: Option<f32>,
         /// Points from the page's bottom edge.
-        #[arg(long)]
-        y: f32,
+        #[arg(long, requires = "image")]
+        y: Option<f32>,
         /// Width in points; default the image's natural size.
-        #[arg(long)]
+        #[arg(long, requires = "image")]
         width: Option<f32>,
+        /// Why the document was signed (with --key).
+        #[arg(long, requires = "key")]
+        reason: Option<String>,
+        /// Where it was signed (with --key).
+        #[arg(long, requires = "key")]
+        location: Option<String>,
+        /// How to reach the signer (with --key).
+        #[arg(long, requires = "key")]
+        contact_info: Option<String>,
+        /// The signer's name as shown; validators read the certificate (with --key).
+        #[arg(long, requires = "key")]
+        signer_name: Option<String>,
         #[arg(short, long)]
         output: PathBuf,
     },
@@ -377,13 +397,53 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
         ),
         PdfOp::Sign {
             file,
+            key,
+            cert,
             image,
             page,
             x,
             y,
             width,
+            reason,
+            location,
+            contact_info,
+            signer_name,
             output,
         } => {
+            if let (Some(key), Some(cert)) = (key, cert) {
+                let signer = sign::Signer::from_files(&key, &cert).map_err(anyhow::Error::msg)?;
+                for warning in signer.warnings() {
+                    eprintln!("warning: {warning}");
+                }
+                let appearance = match image {
+                    Some(path) => {
+                        let mark = read(&path)?;
+                        Some(sign::Appearance {
+                            page,
+                            x: x.unwrap_or(0.0),
+                            y: y.unwrap_or(0.0),
+                            width,
+                            image: mark.bytes.to_vec(),
+                            name: mark.name,
+                        })
+                    }
+                    None => None,
+                };
+                let options = sign::SignOptions {
+                    reason,
+                    location,
+                    contact_info,
+                    signer_name,
+                    appearance,
+                };
+                let signed = sign::sign(&read(&file)?, Arc::new(signer), &options, t).await?;
+                return write(&output, &signed);
+            }
+            let (Some(image), Some(x), Some(y)) = (image, x, y) else {
+                bail!(
+                    "give --key and --cert for a cryptographic signature, or --image, --x and --y to place an image"
+                );
+            };
             let mark = read(&image)?;
             let overlay = Overlay {
                 placement: Some(rusticdoc_core::pdfops::Placement { x, y, width }),

@@ -3,7 +3,7 @@
 //!
 //! A token passes when its signature checks out against the provider's keys
 //! and its issuer, audience and expiry are right. The keys are fetched when the
-//! first token arrives, from `API_OIDC_JWKS_URL` or the issuer's discovery
+//! first token arrives, from `RUSTICDOC_OIDC_JWKS_URL` or the issuer's discovery
 //! document, kept for a while, and fetched again when a token names a key they
 //! lack. Anyone can send a token, so fetches are rationed: one at a time, and at
 //! most one per [`REFETCH_AFTER`] whether it worked or not. Only asymmetric

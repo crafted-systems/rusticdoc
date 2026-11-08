@@ -40,7 +40,7 @@ pub struct Form {
     pub multi: BTreeMap<String, Vec<String>>,
 }
 
-/// One entry of Gotenberg's `downloadFrom` field.
+/// One entry of the `downloadFrom` field.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DownloadFrom {
@@ -376,7 +376,7 @@ pub async fn download(out: Output) -> Response {
     res
 }
 
-/// Several outputs as one ZIP, as Gotenberg returns them.
+/// Several outputs as one ZIP.
 pub async fn zip(name: &str, outputs: &[Output], timeout: Duration) -> ApiResult<Output> {
     let docs = outputs
         .iter()

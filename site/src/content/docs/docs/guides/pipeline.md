@@ -99,6 +99,7 @@ Each step works on the document or documents in flight, in the order `steps` lis
 | `embed` | `embeds`; `embedsMetadata`, a JSON object mapping a file name to `{"mimeType": "..."}` | Attaches files |
 | `factur-x` | `facturxXml`; `facturxConformanceLevel`, default `EN16931`: `MINIMUM`, `BASIC_WL`, `BASIC`, `EN16931`, `EXTENDED` | Embeds Factur-X invoice XML |
 | `encrypt` | `userPassword`, `ownerPassword`; at least one. A missing owner password takes the user password | Encrypts the PDF |
+| `sign` | `reason`, `location`, `contactInfo`, `signerName`, all optional | Signs the PDF cryptographically with the deployment's key, invisibly. See [signing with a certificate](/docs/guides/pdf-operations/#with-a-certificate) |
 
 Every step from `merge` down needs a PDF, so one of `convert`, `pdfa` or `pdfua` comes first when the template is not a PDF. Otherwise the response is a `400` that says `'letter.txt' is not a PDF`.
 
@@ -134,6 +135,12 @@ Repeat the `Source`, `Expression`, `Options` and `Pages` fields for several mark
 - Fields of a step you did not name have no effect, but they are still checked. `-F rotateAngle=45` is a `400` even without `rotate` in `steps`.
 - The order of `steps` decides the order of work. The fields only give each step its options.
 - `encrypt` goes last. A later PDF step gets a `400` that says the file is encrypted.
+- `sign` must be the last step, because any later step would change the signed bytes, and it cannot be combined with `encrypt` in either order. Both are refused with a `400` before any work starts. Without `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT` configured, a request with `sign` gets a `503`. After a `split`, each part is signed.
+
+```bash
+curl -F template=@invoice.docx -F data=@data.json -F steps=convert,sign \
+  -F reason=Issued http://localhost:9027/v1/render -o invoice.pdf
+```
 - A request runs at most 50 steps.
 
 ## Several documents in flight
@@ -176,7 +183,6 @@ The file is named after `outputFilename`, or else after the template, with the e
 | `server-timing` | Files | Milliseconds per stage, such as `template;dur=18, convert;dur=67` |
 | `x-rusticdoc-version` | Authenticated routes, and every route when no credentials are configured | The service version |
 | `x-content-type-options` | Every response | `nosniff` |
-| `gotenberg-trace`, `gotenberg-version` | See [moving from Gotenberg 8](/docs/guides/from-gotenberg/) | The request id and version under Gotenberg's names |
 
 ```bash test
 curl -F template=@invoice.docx -F "data=<invoice.json" -F steps=convert \

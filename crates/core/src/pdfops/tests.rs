@@ -1064,7 +1064,13 @@ mod encrypt_order {
             "pdfcpu",
             &format!("echo \"$@\" > {}", called.display()),
         );
-        let engines = MultiEngine::for_forms(Some(qpdf), Some(pdfcpu), &BTreeMap::new());
+        let lists = BTreeMap::from([(
+            "RUSTICDOC_PDF_ENGINES_ENCRYPT".to_string(),
+            vec!["qpdf".to_string(), "pdfcpu".to_string()],
+        )]);
+        let engines = MultiEngine::standard(Some(qpdf.clone()), Some(pdfcpu.clone()))
+            .with_lists(Some(qpdf), Some(pdfcpu), &lists)
+            .falling_through();
         let doc = Document::new("a.pdf", fixtures::pages(1));
         let options = EncryptOptions {
             user_password: "secret".into(),
@@ -1084,7 +1090,7 @@ mod encrypt_order {
         let dir = tempfile::tempdir().unwrap();
         let called = dir.path().join("called");
         let qpdf = script(dir.path(), "qpdf", &format!("touch {}", called.display()));
-        let engines = MultiEngine::for_forms(Some(qpdf), None, &BTreeMap::new());
+        let engines = MultiEngine::standard(Some(qpdf), None);
         let doc = Document::new("a.pdf", fixtures::pages(1));
         let err = engines
             .encrypt(&doc, "a\nb", "c", Duration::from_secs(5))

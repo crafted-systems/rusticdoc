@@ -17,7 +17,6 @@ const canonical = new URL(path, Astro.site).href;
 const image = new URL('/og.png', Astro.site).href;
 const nav = [
   { href: '/docs/', label: 'Docs' },
-  { href: '/compare/', label: 'Compare' },
   { href: '/security/', label: 'Security' },
   { href: '/status/', label: 'Status' },
 ];
@@ -38,14 +37,6 @@ const footer = [
       { href: '/docs/operate/kubernetes/', label: 'Kubernetes' },
       { href: '/docs/operate/observability/', label: 'Logs and metrics' },
       { href: '/security/', label: 'Security' },
-    ],
-  },
-  {
-    title: 'Move to it',
-    links: [
-      { href: '/docs/guides/from-gotenberg/', label: 'From Gotenberg' },
-      { href: '/docs/guides/from-carbone/', label: 'From Carbone' },
-      { href: '/compare/', label: 'Compare all three' },
     ],
   },
   {

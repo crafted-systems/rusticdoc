@@ -13,7 +13,7 @@ use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::metrics::StageLabels;
 use crate::routes::form::{Form, request_id};
 use crate::routes::forms::{finish, finish_within};
-use crate::routes::{gotenberg, templates};
+use crate::routes::{options, templates};
 use crate::state::AppState;
 use crate::webhook::{self, Hook, Webhook};
 
@@ -34,7 +34,8 @@ pub struct RenderForm {
     /// JSON object visible as `ctx`, sent as text or as a file.
     pub ctx: Option<serde_json::Value>,
     /// Comma-separated steps in order: `convert`, `pdfa`, `metadata`,
-    /// `encrypt`, `merge`.
+    /// `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the
+    /// service's key; it must be last and cannot be combined with `encrypt`.
     #[schema(example = "convert,pdfa,encrypt")]
     pub steps: Option<String>,
     /// Output format for `convert`. Default `pdf`.
@@ -45,6 +46,16 @@ pub struct RenderForm {
     pub metadata: Option<serde_json::Value>,
     pub user_password: Option<String>,
     pub owner_password: Option<String>,
+    /// For `sign`: why the document was signed.
+    pub reason: Option<String>,
+    /// For `sign`: where it was signed.
+    pub location: Option<String>,
+    /// For `sign`: how to reach the signer.
+    #[schema(rename = "contactInfo")]
+    pub contact_info: Option<String>,
+    /// For `sign`: the signer's name as shown.
+    #[schema(rename = "signerName")]
+    pub signer_name: Option<String>,
     /// File name of the result, without extension.
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
@@ -127,13 +138,15 @@ pub async fn render(
     let mut req = RenderRequest::new(template);
     req.data = data;
     req.ctx = ctx;
-    let mut options = gotenberg::convert_options(&form)?;
+    let mut options = options::convert_options(&form)?;
     // Here PDF/A and PDF/UA happen where the step list says, not on every
     // conversion.
     options.pdfa = None;
     options.pdfua = false;
     req.convert_options = options;
     req.steps = named_steps(&mut form)?;
+    // Here, so a webhook request hears about a bad step list at once.
+    state.engines.check_steps(&req.steps)?;
     req.output_name = form.output_name();
     req.extra = std::mem::take(&mut form.files);
 
@@ -175,7 +188,7 @@ pub async fn render(
 /// fields, in the position the list names.
 fn named_steps(form: &mut Form) -> ApiResult<Vec<Step>> {
     let list = form.field("steps").unwrap_or("").to_string();
-    let carried = gotenberg::post_steps(form, false)?;
+    let carried = options::post_steps(form, false)?;
     let mut steps = Vec::new();
     for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
         let wanted: Option<fn(&Step) -> bool> = match name.to_ascii_lowercase().as_str() {
@@ -219,7 +232,7 @@ pub async fn run(
 }
 
 /// Renders the template once per element of an array in the data and
-/// returns the files in a ZIP, as Carbone's batch rendering does.
+/// returns the files in a ZIP.
 ///
 /// `splitBy` names the array with a dotted path such as `items` or
 /// `order.lines`. Each render sees the whole data with that array replaced
@@ -269,6 +282,7 @@ pub async fn batch(
         },
     };
     let steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
+    state.engines.check_steps(&steps)?;
     let split_by = form
         .field("splitBy")
         .map(str::trim)

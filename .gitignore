@@ -3,8 +3,10 @@
 Cargo.lock.orig
 /scan-reports
 /.claude/
-/parity-results*/
 /sdk/typescript/
 /sdk/python/
 /sdk/go/
 /.upstream/
+/test/office/out/
+/test/golden/out/
+/test/barcodes/out/

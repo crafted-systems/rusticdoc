@@ -29,8 +29,6 @@ This release is 0.1.0, which is not published yet. Read the [known limits](/docs
 - [Fonts](/docs/guides/fonts/)
 - [Webhooks](/docs/guides/webhooks/)
 - [Authentication](/docs/guides/authentication/)
-- [Moving from Gotenberg](/docs/guides/from-gotenberg/)
-- [Moving from Carbone](/docs/guides/from-carbone/)
 
 ## Run it
 

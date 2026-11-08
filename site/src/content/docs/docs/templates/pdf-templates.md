@@ -147,7 +147,7 @@ Anything other than two PDFs is a `400`.
 - `/v1/render/batch` does not take a PDF template. It answers `501`.
 - Encrypted PDF forms answer `501`.
 - Rich text, comb fields, date formats and JavaScript actions in a form are not interpreted.
-- Filled forms have not been viewed in Chrome, Acrobat or Preview. See [known limits](/docs/project/known-limits/).
+- Filled forms, editable and flattened, show their values in Chrome and in Preview. They have not been opened in Acrobat. See [known limits](/docs/project/known-limits/).
 
 ## On the command line
 

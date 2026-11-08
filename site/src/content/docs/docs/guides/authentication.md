@@ -38,18 +38,15 @@ curl -u ada:a-long-password http://localhost:9027/v1/version
 
 There is one user. A refused request gets a `WWW-Authenticate: Basic realm="rusticdoc"` header. Basic auth cannot change fonts, because that takes an admin key.
 
-Gotenberg's `API_ENABLE_BASIC_AUTH`, `GOTENBERG_API_BASIC_AUTH_USERNAME` and `GOTENBERG_API_BASIC_AUTH_PASSWORD` work too.
-
 ## OpenID Connect
 
-The service accepts bearer tokens from one provider:
+The service accepts bearer tokens from one provider. Setting the issuer turns it on, and the audience is required with it:
 
 ```bash
-API_ENABLE_OIDC_AUTH=true
-API_OIDC_ISSUER=https://id.example.com
-API_OIDC_AUDIENCE=rusticdoc
+RUSTICDOC_OIDC_ISSUER=https://id.example.com
+RUSTICDOC_OIDC_AUDIENCE=rusticdoc
 # Optional. Otherwise the keys come from the issuer's discovery document.
-API_OIDC_JWKS_URL=https://id.example.com/keys
+RUSTICDOC_OIDC_JWKS_URL=https://id.example.com/keys
 ```
 
 ```bash
@@ -60,7 +57,7 @@ A token passes when its signature checks out and its issuer, audience and expiry
 
 - `exp`, `iss` and `aud` are required.
 - Only `RS256` and `ES256` are accepted.
-- `API_OIDC_ISSUER` and `API_OIDC_JWKS_URL` must be `https`, or `http` on a loopback host.
+- `RUSTICDOC_OIDC_ISSUER` and `RUSTICDOC_OIDC_JWKS_URL` must be `https`, or `http` on a loopback host.
 - Keys are fetched when the first token arrives, kept for 5 minutes, and fetched at most once every 30 seconds.
 
 The caller is the token's `sub`, so each subject has its own templates and webhook signing key. Tokens without a `sub` are treated as a caller of their own.
@@ -79,7 +76,8 @@ The service refuses to start rather than run half-protected, and says why:
 |---|---|
 | `RUSTICDOC_API_KEYS=" , "` | `RUSTICDOC_API_KEYS is set but holds no key` |
 | A basic-auth username without a password | `RUSTICDOC_BASIC_AUTH_USERNAME and RUSTICDOC_BASIC_AUTH_PASSWORD go together` |
-| `API_ENABLE_OIDC_AUTH=true` alone | `API_ENABLE_OIDC_AUTH needs API_OIDC_ISSUER and API_OIDC_AUDIENCE` |
+| An OpenID Connect issuer without an audience, or the reverse | `RUSTICDOC_OIDC_ISSUER and RUSTICDOC_OIDC_AUDIENCE go together` |
+| `RUSTICDOC_OIDC_ISSUER=http://id.example.com` | `RUSTICDOC_OIDC_ISSUER must be https, or http on a loopback host, not 'http://id.example.com'` |
 
 An empty `RUSTICDOC_API_KEYS=` counts as unset, which leaves the service open.
 
@@ -94,12 +92,11 @@ With credentials configured:
 | `GET /openapi.json` | `200` | `200` |
 | `GET /metrics` | `401`, unless `RUSTICDOC_METRICS_PUBLIC=true` | `200` |
 | `GET /docs` | `401`, or `200` with `RUSTICDOC_ENABLE_DOCS=true` | `404`, or `200` with `RUSTICDOC_ENABLE_DOCS=true` |
-| Every `/v1/*` and `/forms/*` route | `401` | Served |
-| `GET /`, `/favicon.ico`, `/version`, `/debug`, `/prometheus/metrics` | `401` | Served |
+| Every `/v1/*` route | `401` | Served |
 
 With credentials configured, responses from the open routes carry no version header.
 
-A `401` on `/v1/*` is JSON: `{"error":"unauthorized","message":"Unauthorized"}`. On `/forms/*` it is the text `Unauthorized`.
+A `401` is JSON: `{"error":"unauthorized","message":"Unauthorized"}`.
 
 ## Admin keys
 

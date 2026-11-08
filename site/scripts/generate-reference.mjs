@@ -166,9 +166,7 @@ ${NOTICE}
 
 This reference is generated from the service's OpenAPI ${spec.openapi} description, version ${spec.info.version}. The same description is at [\`/openapi.json\`](/openapi.json) on this site and on your own service.
 
-Requests are multipart forms unless a route says otherwise. Send credentials with \`X-Api-Key\` or \`Authorization: Bearer\`, or use basic auth, as [Authentication](/docs/guides/authentication/) explains. Failures on \`/v1/*\` are JSON, as [Errors](/docs/reference/errors/) describes.
-
-Gotenberg's \`/forms/*\` routes are not listed here. See [Moving from Gotenberg](/docs/guides/from-gotenberg/).
+Requests are multipart forms unless a route says otherwise. Send credentials with \`X-Api-Key\` or \`Authorization: Bearer\`, or use basic auth, as [Authentication](/docs/guides/authentication/) explains. Failures are JSON, as [Errors](/docs/reference/errors/) describes.
 
 ${overview}
 `);

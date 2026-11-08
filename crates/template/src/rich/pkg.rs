@@ -290,6 +290,10 @@ impl<'a> Pkg<'a> {
             manifest,
             ..
         } = self;
+        // In name order: a new rels file joins the end of the ZIP, and a map's
+        // order changes from run to run, which made the same render differ.
+        let mut rels: Vec<_> = rels.into_iter().collect();
+        rels.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, file) in rels {
             package::set(entries, &name, xml::to_xml(&file.nodes).into_bytes());
         }

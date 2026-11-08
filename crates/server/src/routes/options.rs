@@ -1,11 +1,10 @@
-//! Gotenberg's post-processing chain, read from its form fields.
+//! The post-processing fields of a conversion form, as pipeline steps.
 //!
-//! Gotenberg's convert, merge and split routes all accept the same extra
+//! `/v1/convert`, `/v1/pdf/convert` and `/v1/render` accept the same extra
 //! fields and apply them in one fixed order after the main operation:
 //! merge, split, watermark, stamp, rotate, flatten, optimize, PDF/A and
 //! PDF/UA, bookmarks, metadata, embeds, Factur-X, encrypt. This module turns
-//! those fields into the pipeline's steps in that order, so the aliases
-//! behave as Gotenberg's clients expect and `/v1/*` gains the same options.
+//! those fields into the pipeline's steps in that order.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +22,7 @@ use crate::routes::form::Form;
 /// document.
 const MAX_OVERLAYS: usize = 5;
 
-/// Steps for the fields present in the form, in Gotenberg's order. `merge`
+/// Steps for the fields present in the form, in that order. `merge`
 /// is included only when `allow_merge` (the convert route); the merge
 /// route merges first on its own.
 pub fn post_steps(form: &mut Form, allow_merge: bool) -> ApiResult<Vec<Step>> {
@@ -304,7 +303,7 @@ fn overlays(form: &mut Form, prefix: &str) -> ApiResult<Vec<Overlay>> {
     Ok(out)
 }
 
-/// A boolean field in Gotenberg's strict form: `true` or `false`, or a 400.
+/// A strict boolean field: `true` or `false`, or a 400.
 fn bool_field(form: &Form, name: &str) -> ApiResult<Option<bool>> {
     match form.field(name).map(|v| v.trim().to_ascii_lowercase()) {
         None => Ok(None),
@@ -316,7 +315,7 @@ fn bool_field(form: &Form, name: &str) -> ApiResult<Option<bool>> {
     }
 }
 
-/// LibreOffice conversion options from Gotenberg's field names.
+/// LibreOffice conversion options from their form field names.
 pub fn convert_options(form: &Form) -> ApiResult<rusticdoc_core::convert::ConvertOptions> {
     use rusticdoc_core::convert::ConvertOptions;
     let mut o = ConvertOptions::default();

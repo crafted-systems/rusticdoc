@@ -68,7 +68,7 @@ What an upload stored.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `details` | JSON | Yes | Per-module status in Gotenberg's shape. |
+| `details` | JSON | Yes | Per-module status: `libreoffice`, and `store` when one is configured. |
 | `engines` | EngineStatus | Yes |  |
 | `status` | string | Yes | `up` when the service answers. |
 | `uptime_seconds` | integer | Yes |  |

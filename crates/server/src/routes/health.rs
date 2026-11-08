@@ -18,7 +18,7 @@ pub struct Health {
     pub status: &'static str,
     pub uptime_seconds: u64,
     pub engines: EngineStatus,
-    /// Per-module status in Gotenberg's shape.
+    /// Per-module status: `libreoffice`, and `store` when one is configured.
     pub details: serde_json::Value,
 }
 
@@ -47,7 +47,7 @@ pub async fn health(State(state): State<AppState>, headers: HeaderMap) -> Respon
     } else {
         Json(serde_json::json!({ "status": "up" })).into_response()
     };
-    // Gotenberg's clients match on this exact value.
+    // Some clients match on this exact value.
     res.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json; charset=utf-8"),
@@ -70,7 +70,7 @@ async fn status(state: &AppState) -> Health {
             "pool": pool,
         }
     });
-    // Only with a store: Gotenberg's clients read this object.
+    // Only with a store.
     if let Some(store) = &state.store {
         details["store"] = serde_json::json!({
             "location": store.description(),

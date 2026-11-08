@@ -138,7 +138,7 @@ const stack = [
   { icon: 'list', title: 'JSON logs', text: 'Access and audit lines, with the request id on every one.', href: '/docs/operate/observability/' },
   { icon: 'key', title: 'Your sign-in', text: 'API keys, basic auth or tokens from OpenID Connect.', href: '/docs/guides/authentication/' },
   { icon: 'pulse', title: 'Kubernetes probes', text: '/ready waits until a new replica has its fonts.', href: '/docs/operate/kubernetes/' },
-  { icon: 'swap', title: 'Gotenberg clients', text: '/forms/* answers the way Gotenberg 8.39 does.', href: '/docs/guides/from-gotenberg/' },
+  { icon: 'swap', title: 'Your egress proxy', text: 'Webhooks and downloads can leave through RUSTICDOC_OUTBOUND_PROXY.', href: '/docs/reference/configuration/' },
 ] as const;
 
 const faq = [
@@ -148,7 +148,7 @@ const faq = [
   },
   {
     q: 'Can it turn web pages into PDFs?',
-    a: 'No. rusticdoc has no browser. LibreOffice can convert a simple HTML file, but pages that need a browser’s layout or JavaScript belong on Gotenberg with Chromium.',
+    a: 'No. rusticdoc has no browser. LibreOffice can convert a simple HTML file, but pages that need a browser’s layout or JavaScript need a tool that runs one.',
   },
   {
     q: 'Does it need internet access?',
@@ -156,7 +156,7 @@ const faq = [
   },
   {
     q: 'Is it ready for production?',
-    a: 'Version 0.1 is the first release. The service, CLI and template engine are built and tested, but some outputs haven’t been opened in Word, Excel or Acrobat yet. The status page lists what has and hasn’t been checked.',
+    a: 'Version 0.1 is the first release. The service, CLI and template engine are built and tested, but nothing has been opened in Office for Windows or in Acrobat yet. The status page lists what has and hasn’t been checked.',
   },
   {
     q: 'Which scripts and languages can templates use?',
@@ -388,26 +388,6 @@ Total due {{ total | currency(currency) }}
           </tbody>
         </table>
       </div>
-    </div>
-  </section>
-
-  <section class="band">
-    <header class="section-head">
-      <h2>Moving from another tool</h2>
-    </header>
-    <div class="moves">
-      <article class="move">
-        <h3>From Gotenberg 8</h3>
-        <p>The <code>/forms/*</code> routes answer the way Gotenberg 8.39 does, with its file names, headers and error text. Replayed against both images, 310 of Gotenberg’s own 326 scenarios behave the same. The other 16 select PDFtk or expect Chromium.</p>
-        <p>There’s no browser, so keep Gotenberg for turning web pages into PDFs.</p>
-        <a class="way-link" href="/docs/guides/from-gotenberg/">Read the migration guide <Icon name="arrow" /></a>
-      </article>
-      <article class="move">
-        <h3>From Carbone</h3>
-        <p>You keep your Office files and rewrite their tags: <code>{'{d.customer.name}'}</code> becomes <code>{'{{ customer.name }}'}</code>. Images, barcodes, colours, charts and HTML are all in the open-source build.</p>
-        <a class="way-link" href="/docs/guides/from-carbone/">Read the template guide <Icon name="arrow" /></a>
-        <a class="way-link" href="/compare/">Compare all three <Icon name="arrow" /></a>
-      </article>
     </div>
   </section>
 

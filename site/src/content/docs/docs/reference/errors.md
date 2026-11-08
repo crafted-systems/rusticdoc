@@ -1,9 +1,9 @@
 ---
 title: Errors
-description: Every error status and code on /v1/*, the JSON body, what to do about each, and how /forms/* differs.
+description: Every error status and code, the JSON body, and what to do about each.
 ---
 
-Use this page to work out what an error means and what to change. `/v1/*` routes answer in JSON, and `/forms/*` routes answer in text as Gotenberg does.
+Use this page to work out what an error means and what to change. Errors are JSON on every route, apart from the few answers listed under [responses that are not JSON](#responses-that-are-not-json).
 
 ## The JSON body
 
@@ -52,7 +52,7 @@ A step that needs a PDF, run on something else, is also here: `'letter.txt' is n
 |---|---|---|
 | `admin_required` | This route changes fonts, and the credential is not an admin key | Send one of `RUSTICDOC_ADMIN_KEYS`. See [fonts](/docs/guides/fonts/#admin-keys) |
 | `quota_exceeded` | Stored templates or fonts are at a limit | Delete some, or raise `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS` or `RUSTICDOC_MAX_FONT_STORAGE` |
-| `url_not_allowed` | A webhook or `downloadFrom` URL fails an allow or deny list | Change the URL, or `WEBHOOK_ALLOW_LIST`, `WEBHOOK_DENY_LIST`, `API_DOWNLOAD_FROM_ALLOW_LIST`, `API_DOWNLOAD_FROM_DENY_LIST` |
+| `url_not_allowed` | A webhook or `downloadFrom` URL fails an allow or deny list | Change the URL, or the lists in `RUSTICDOC_WEBHOOK_ALLOW_LIST`, `RUSTICDOC_WEBHOOK_DENY_LIST`, `RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST` or `RUSTICDOC_DOWNLOAD_FROM_DENY_LIST` |
 
 A private address is a `400`, not a `403`.
 
@@ -117,8 +117,8 @@ An unhandled fault also answers `500`, with no JSON body.
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `timeout` | The job ran past its limit | Raise `RUSTICDOC_API_TIMEOUT` (default `30s`) or `RUSTICDOC_BATCH_TIMEOUT` (default `5m`), or send less work. The message mentions `--api-timeout`, which is Gotenberg's flag: on rusticdoc use the variable |
-| `engine_unavailable` | An engine is not configured, or conversion is disabled with `LIBREOFFICE_DISABLE_ROUTES` | Check `GET /v1/version` and the settings |
+| `timeout` | The job ran past its limit | Raise `RUSTICDOC_API_TIMEOUT` (default `30s`) or `RUSTICDOC_BATCH_TIMEOUT` (default `5m`), or send less work |
+| `engine_unavailable` | An engine is not configured, or conversion is disabled with `RUSTICDOC_CONVERT_DISABLED` | Check `GET /v1/version` and the settings |
 | `busy` | Request bodies in memory have reached `RUSTICDOC_MAX_INFLIGHT_BYTES`, or the service is shutting down. Comes with `Retry-After: 5` | Retry after that time |
 | `store_unavailable` | The store cannot be reached | Retry. Check the store. Requests that send their template as a file keep working |
 
@@ -126,7 +126,7 @@ An unhandled fault also answers `500`, with no JSON body.
 
 ## Responses that are not JSON
 
-Some answers on `/v1/*` come from the HTTP layer, before a route's code runs, so they are not in the JSON shape. Check `content-type` before you parse.
+Some answers come from the HTTP layer, before a route's code runs, so they are not in the JSON shape. Check `content-type` before you parse.
 
 | Case | Status | Body |
 |---|---|---|
@@ -145,25 +145,3 @@ grep -qi "^content-type: text/plain" headers.txt
 ## Failures after a 204
 
 With a webhook, a failure during the job goes to your URL as JSON, with the same `error` and `message`, plus `status` and `requestId`. See [webhooks](/docs/guides/webhooks/#what-a-delivery-looks-like). Mistakes in the form are still answered at once.
-
-## `/forms/*` routes
-
-Gotenberg's paths answer with its status codes and exact strings, as `text/plain`, not JSON. There is no `error` code to match on.
-
-```bash test
-curl -F files=@letter.txt http://localhost:9027/forms/pdfengines/merge \
-  -D headers.txt -o error.txt || true
-grep -qi "^content-type: text/plain" headers.txt
-grep -q "Invalid form data" error.txt
-```
-
-| Case | Status | Body |
-|---|---|---|
-| A missing or wrong file or field | `400` | `Invalid form data: …`, with Gotenberg's wording |
-| The body is not `multipart/form-data` | `415` | `Invalid 'Content-Type' header value: want 'multipart/form-data'` |
-| No valid credentials | `401` | `Unauthorized` |
-| An unknown path, including `/forms/chromium/*` | `404` | `Not Found` |
-| Engine failure | `500` | `Internal Server Error` |
-| A timeout | `503` | `The request exceeded the time limit. Increase it with --api-timeout, or reduce the workload.` |
-
-Each one has `Gotenberg-Trace` alongside `x-request-id`. See [moving from Gotenberg 8](/docs/guides/from-gotenberg/).

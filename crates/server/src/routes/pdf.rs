@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, request_id};
-use crate::routes::gotenberg;
+use crate::routes::options;
 use crate::routes::render;
 use crate::state::AppState;
 use crate::webhook::Hook;
@@ -59,8 +59,8 @@ pub async fn merge(
     for doc in &form.files {
         rusticdoc_core::pdfops::require_pdf(doc)?;
     }
-    let options = gotenberg::convert_options(&form)?;
-    let post = gotenberg::post_steps(&mut form, false)?;
+    let options = options::convert_options(&form)?;
+    let post = options::post_steps(&mut form, false)?;
     let mut files = std::mem::take(&mut form.files);
     let mut req = RenderRequest::new(files.remove(0));
     req.templating = false;
@@ -91,7 +91,7 @@ pub async fn encrypt(
 ) -> ApiResult<Response> {
     let mut form = Form::read(multipart, &state).await?;
     let file = form.require_file("one PDF")?;
-    // Gotenberg accepts either password; the owner password defaults to the
+    // Either password is enough; the owner password defaults to the
     // user password when only that one is given.
     let user_password = form.field("userPassword").unwrap_or("").to_string();
     let owner_password = form

@@ -14,8 +14,10 @@ This page lists what does not work, what has not been checked, and what could su
 
 ## Office output
 
-- **Generated DOCX, XLSX and PPTX files have been opened in LibreOffice, not in Word, Excel or PowerPoint.** A repair prompt there has not been ruled out.
-- **Barcodes have never been scanned with a reader.** OpenCV has decoded a QR code in the sample invoice once. No other symbology has been decoded, and no hardware or phone reader has been tried.
+- **Office has been tried on a Mac only.** Templates typed in Word, Excel and PowerPoint 16.114 for Mac were filled, and the results open in those apps without a repair prompt. Office for Windows and Office on the web have not been tried.
+- **Word's default font, Aptos, is not in the image.** A document set in it converts to PDF in a substitute font, with different line breaks, until you [upload Aptos](/docs/guides/fonts/) or choose a font the image has.
+- **Chinese, Japanese and Korean text in a serif face comes out in sans serif.** Noto Serif CJK is left out of the image, which saves 53 MB, so text set in a face such as SimSun, MS Mincho or Batang converts in Noto Sans CJK. Upload or mount Noto Serif CJK and those faces use it with no other change. See [Chinese, Japanese and Korean fonts](/docs/guides/fonts/#chinese-japanese-and-korean-fonts).
+- **Barcodes have been read by software decoders, not by a scanner.** ZXing and ZBar decode every symbology to its exact value, from the document and from its PDF at 150 and 300 dpi. No hardware or phone reader has been tried.
 - **Repeating a whole sheet in XLSX or ODS is not supported,** only rows within one, and neither is a row loop nested in another row block of the same sheet.
 - **ODS formulas are not re-based.**
 - **Charts are not supported in ODF templates.**
@@ -23,10 +25,21 @@ This page lists what does not work, what has not been checked, and what could su
 
 ## PDF output
 
-- **Filled PDF forms have not been viewed in Chrome, Acrobat or Preview.**
+- **There is no HTML or URL rendering through a browser.** This image has no Chromium.
+- **Filled PDF forms have not been opened in Acrobat.** Editable and flattened forms show their values in Chrome and Preview.
 - **Text the service draws into a PDF is Latin only, in Helvetica.** That means field appearances and annotation values. Other characters draw as `?`. Field values are stored in full, so a viewer that redraws the field still shows them.
-- **`/v1/pdf/sign` places a signature image.** It is not a cryptographic signature.
-- **There is no golden-PDF corpus.** Output is checked by content, not compared byte for byte across architectures.
+- **`/v1/pdf/sign` places only a signature image unless you send `signature=certificate`.** The default is not a cryptographic signature.
+
+## PDF signatures
+
+- **Signatures are PAdES B-B style only.** There is no timestamp from a timestamp authority (B-T), and no revocation data or document timestamp (B-LT, B-LTA). A validator has only the signer's claimed signing time, and cannot validate a signature after the certificate expires.
+- **Signed files have been validated with poppler's `pdfsig` and with pyHanko, not in Adobe Acrobat.**
+- **There is one signing key per deployment,** from `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`. Every caller who can reach the route signs as that certificate. Keys in an HSM or a cloud KMS are not supported, nor are encrypted key files.
+- **RSA and ECDSA P-256 keys only,** always with SHA-256.
+- **One signature per request.** The `sign` step on `/v1/render` is always invisible; a visible signature needs `/v1/pdf/sign`.
+- **The signature image ignores page rotation,** and the image's transparency is dropped, as for stamps.
+- **A document certified with DocMDP is not checked** before another signature is added, so signing one that forbids changes breaks its certification.
+- **PDFs from LibreOffice are not byte-identical across architectures or runs.** Its layout moves text by up to hundredths of a point between processors, and each PDF gets its own dates and ids. `make golden` compares 14 outputs from the amd64 and arm64 images: the Office and text outputs and the PDF form the service fills itself are byte-identical, and LibreOffice's PDFs match as page images or in layout within 0.25 pt.
 
 ## Fonts
 
@@ -47,8 +60,8 @@ This page lists what does not work, what has not been checked, and what could su
 
 ## Configuration
 
-- **Many settings ignore a value they cannot parse, with no warning.** `RUSTICDOC_RENDER_MEMORY=2g`, `RUSTICDOC_BODY_LIMIT=1.5GB` and `RUSTICDOC_API_TIMEOUT=1m30s` all leave the default in place. Gotenberg's `API_TIMEOUT` and `API_BODY_LIMIT` behave the same way. The [configuration reference](/docs/reference/configuration/) says which settings stop the service instead.
-- **A `RUSTICDOC_*` boolean is on only for `1`, `true` or `yes`.** `TRUE` turns it off.
+- **Many settings ignore a value they cannot parse, with no warning.** `RUSTICDOC_RENDER_MEMORY=2g`, `RUSTICDOC_BODY_LIMIT=1.5GB` and `RUSTICDOC_API_TIMEOUT=1m30s` all leave the default in place. The [configuration reference](/docs/reference/configuration/) says which settings stop the service instead.
+- **A boolean setting is on only for `1`, `true` or `yes`.** `TRUE` turns it off.
 
 ## Deployment
 
@@ -68,12 +81,6 @@ This page lists what does not work, what has not been checked, and what could su
 - **The service speaks plain HTTP.** Terminate TLS in front of it.
 - **A compromised LibreOffice runs as the service's user.** It can see other requests' temporary files, and anything else that user can read.
 - **The image has known CVEs in Debian's packages.** [Security](/docs/operate/security/) has the numbers from the last scan.
-
-## Compatibility with other tools
-
-- **`/forms/*` follows Gotenberg 8.39, with exceptions.** In the replay of its own scenarios, 310 of 326 behaved the same as the official image. The other 16 are expected: 10 select PDFtk, which this build leaves out, and 6 expect Chromium in the output of `/health`, `/debug` and the metrics route.
-- **There is no HTML or URL rendering through a browser.** This image has no Chromium.
-- **Carbone's published XLSX and PPTX examples have not been reproduced** with the new syntax.
 
 ## SDKs
 
