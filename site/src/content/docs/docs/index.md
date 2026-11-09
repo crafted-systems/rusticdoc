@@ -6,7 +6,7 @@ template: doc
 
 rusticdoc is a Rust document engine that fills Office and PDF templates from JSON, converts them with LibreOffice and runs PDF operations. It ships as one hardened container image, which you call over HTTP or run as a command-line tool.
 
-This release is 0.1.0, which is not published yet. Read the [known limits](/docs/project/known-limits/) before you depend on it.
+This release is 0.1.0. Read the [known limits](/docs/project/known-limits/) before you depend on it.
 
 ## Start here
 

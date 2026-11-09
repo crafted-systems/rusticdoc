@@ -6,7 +6,7 @@ It covers documents, not live web pages: HTML written for print is laid out by [
 
 Full documentation is at [rusticdoc.com/docs](https://rusticdoc.com/docs/), and its source is in [site/](site/).
 
-**Status: pre-release.** The templating, PDF, service and CLI work described here is built and tested. Generated Office files have only been opened in LibreOffice so far, not in Microsoft Office. [Known limits](#known-limits) lists this and the rest of what has not been checked.
+**Status: 0.1.0, the first release.** The image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, for amd64 and arm64; while this repository is private, pulling it needs `docker login ghcr.io`. Versions follow [ZeroVer](https://0ver.org/): they stay below 1.0, and a new minor number may change behaviour, as the [changelog](site/src/content/docs/docs/project/changelog.md) says. [Known limits](#known-limits) lists what has not been checked.
 
 ## Run it
 
@@ -261,20 +261,17 @@ A compromised LibreOffice still runs as the service's user, in the service's con
 
 ## Known limits
 
-- Office has been tried on a Mac only: templates typed in Word, Excel and PowerPoint 16.114 for Mac were filled, and the results open there without a repair prompt (`test/office`). Office for Windows has not been tried.
-- Word's default font, Aptos, is not in the image, so a document set in it converts in a substitute font until Aptos is uploaded.
+- Office has been tried on a Mac only: templates typed in Word, Excel and PowerPoint 16.114 for Mac were filled, and the results open there without a repair prompt (`test/office`). Office for Windows has not been tried. Placeholder pictures and colour scopes have been checked in LibreOffice, not in Office.
+- Word's default font, Aptos, is not in the image, so a document set in it converts in a substitute font until Aptos is uploaded. Validation reports such fonts in `missing_fonts`.
 - Noto Serif CJK is left out of the image to save 53 MB, so Chinese, Japanese and Korean text in a serif face converts in Noto Sans CJK until Noto Serif CJK is uploaded or mounted at `/fonts`.
-- Barcodes have been read by ZXing and ZBar (`test/barcodes`), not by a hardware or phone scanner.
-- Filled PDF forms show their values in Chrome and Preview, and have not been opened in Acrobat.
-- Text the service draws into a PDF form outside Windows Latin, such as Arabic or Chinese, is shaped and embedded as subset fonts. It has been checked with Poppler (`pdftoppm`, `pdftotext`) and macOS Quick Look, not in Chrome or Acrobat. Poppler extracts an Arabic lam-alef ligature with its two letters swapped; the file maps them in order. Comb fields are drawn as one line. Marks drawn by `watermark` and `stamp` are still Latin only, in Helvetica.
-- A template that uses a font the service lacks is not reported. Check `GET /v1/fonts` and the `x-fonts-used` header.
-- Macros and OLE objects in a template are not stripped. LibreOffice will not run or fetch them when converting, but a request with no conversion step returns them in its output.
-- A stored template cannot be changed: store the new one and use its id. There are no versions or aliases yet.
-- Fonts are one set per deployment, not per caller, and only admin keys can change them, not basic auth or OpenID Connect users.
+- Barcodes have been read by software decoders (rxing and ZBar), not by a hardware or phone scanner.
+- Filled PDF forms show their values in Chrome and Preview, and have not been opened in Acrobat. Text in other scripts has been checked in Preview and with Poppler, not in Chrome. Marks drawn by `watermark` and `stamp` are still Latin only, in Helvetica.
+- Signed files validate in `pdfsig` and pyHanko at PAdES B-B to B-LTA, also with keys on a SoftHSM token, and have not been opened in Adobe Acrobat. Archive timestamps are not renewed, and keys in a cloud KMS are not supported.
 - PDFs from LibreOffice are not byte-identical across architectures or runs, since its layout moves text by hundredths of a point between processors. `make golden` compares 14 outputs from the amd64 and arm64 images: Office and text outputs and the PDF form the service fills itself are byte-identical, and LibreOffice's PDFs match as page images or in layout within 0.25 pt.
-- Repeating a whole sheet in XLSX or ODS is not supported, only rows within one, and neither is a row loop nested in another row block of the same sheet. ODS formulas are not re-based. Charts are not supported in ODF templates.
-- Cryptographic signatures are PAdES B-B style only: no RFC 3161 timestamp (B-T), no revocation data or document timestamp (B-LT, B-LTA). They validate in `pdfsig` and pyHanko but have not been checked in Adobe Acrobat. There is one signing key per deployment, RSA or ECDSA P-256 only, and one signature per request; the `sign` step on `/v1/render` is invisible. The appearance ignores page rotation, and a document certified with DocMDP is not checked before another signature is added.
 - `data` counts against the render memory limit once parsed. At the default limit, a list of 8 million small numbers rendered and one of 16 million got `413`, so raise `RUSTICDOC_RENDER_MEMORY` for data that size.
+- No load test has been run.
+
+The [known limits page](site/src/content/docs/docs/project/known-limits.md) has the full list.
 
 ## Licence
 

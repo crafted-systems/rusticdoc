@@ -16,8 +16,8 @@ docker run -d --name rusticdoc \
   -p 127.0.0.1:9027:9027 ghcr.io/vmosoti/rusticdoc:0.1.0
 ```
 
-:::note[The image is not published yet]
-`ghcr.io/vmosoti/rusticdoc:0.1.0` will exist when 0.1.0 is released. Until then, build it from a checkout of the repository with `docker build -t rusticdoc .` and use `rusticdoc` as the image name in the command above.
+:::note[Pulling the image needs access for now]
+`ghcr.io/vmosoti/rusticdoc:0.1.0` is private while the repository is. Sign in first with `docker login ghcr.io`, using a GitHub token that can read packages, or build the image from a checkout of the repository with `docker build -t rusticdoc .` and use `rusticdoc` as the image name in the command above.
 :::
 
 With no credentials configured, the service answers anyone who can reach it. The `-p 127.0.0.1:` part keeps it on your machine. [Install](/docs/start/install/) explains the other flags.

@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-This page lists what does not work, what has not been checked, and what could surprise you. Read it before you depend on rusticdoc. 0.1.0 is its first release, and it is not published yet.
+This page lists what does not work, what has not been checked, and what could surprise you. Read it before you depend on rusticdoc. 0.1.0 is its first release.
 
 ## Requests
 
@@ -74,7 +74,7 @@ This page lists what does not work, what has not been checked, and what could su
 
 ## Deployment
 
-- **The image is not published yet.** Build it with `docker build -t rusticdoc .` until 0.1.0 is out.
+- **The image is private while the repository is.** Pulling `ghcr.io/vmosoti/rusticdoc:0.1.0` needs `docker login ghcr.io` with a token that can read packages, or build it with `docker build -t rusticdoc .`.
 - **The Kubernetes manifest has run on minikube with an S3 gateway,** not on a production cluster.
 - **The store has run against VersityGW, an S3 gateway, and a shared Docker volume,** not against AWS itself.
 - **No load test has been run.** These docs give no throughput figures, and the memory settings come from arithmetic and one failure, not from measurement under load. See [sizing](/docs/operate/sizing/).

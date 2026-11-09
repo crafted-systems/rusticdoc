@@ -6,10 +6,10 @@ The site builds and is ready to host, but the things below can't be done from th
 
 - [ ] **Register `rusticdoc.com`.** A WHOIS lookup on 6 November 2026 found it unregistered.
 - [ ] **Make `github.com/vmosoti/rusticdoc` public.** The repository is private, so every GitHub link on the site returns 404 to visitors, and GitHub Pages needs a paid plan while it stays private.
-- [ ] **Publish the image as `ghcr.io/vmosoti/rusticdoc:0.1.0`.** The home page and docs pull it. There is no release workflow yet. Build for `linux/amd64` and `linux/arm64` if the docs say both.
-- [ ] **Commit the storage and API work.** The site documents stored templates, font upload and port 9027, which are not on `main` yet.
-- [ ] **Tag `v0.1.0` and date the changelog** in `src/content/docs/docs/project/changelog.md`.
-- [ ] **Remove the "not published yet" notes** that apply until the image exists: `grep -rn "not published" src/content/docs/docs`.
+- [x] **Publish the image as `ghcr.io/vmosoti/rusticdoc:0.1.0`.** `.github/workflows/release.yml` builds amd64 and arm64 on a `v0.*` tag and pushes both under the version. The package stays private while the repository is.
+- [x] **Commit the storage and API work.**
+- [x] **Tag `v0.1.0` and date the changelog** in `src/content/docs/docs/project/changelog.md`. Versions follow ZeroVer.
+- [x] **Remove the "not published yet" notes.** The docs now say the image is private while the repository is; change that when it is made public.
 
 ## Fix or accept these product bugs
 
@@ -43,7 +43,7 @@ README corrections the docs already reflect: webhooks make 3 attempts in total r
 Output is static. Pick one:
 
 - **Cloudflare Pages or Netlify (recommended):** root `site`, build `npm ci && npm run build`, output `dist`. Both apply `public/_headers`, which carries the Content-Security-Policy and other security headers.
-- **GitHub Pages:** set the repository variable `SITE_DEPLOY` to `github-pages` and the Pages source to GitHub Actions. `public/CNAME` sets the domain. Pages ignores `public/_headers`, so those headers will be missing.
+- **GitHub Pages:** set the repository variable `SITE_DEPLOY` to `github-pages` and the Pages source to GitHub Actions. Until `rusticdoc.com` is live the workflow builds the site under `/rusticdoc` for `https://vmosoti.github.io/rusticdoc/` (`scripts/rebase.mjs`) and leaves out `public/CNAME`. Pages needs the repository public, or a plan that allows Pages for private repositories. Pages ignores `public/_headers`, so those headers will be missing.
 
 Then point the domain's DNS at the host and turn on HTTPS.
 

@@ -7,9 +7,13 @@ sidebar:
 
 This page lists what each release contains, so that you can see what you get and what changed.
 
+## Version numbers
+
+rusticdoc follows [ZeroVer](https://0ver.org/): its versions stay below 1.0. A new minor number, such as 0.2.0, may change behaviour you rely on, and this page says what changed. A new patch number, such as 0.1.1, fixes faults without changing what works. Pin the exact version, and read this page before you move to a new minor one.
+
 ## 0.1.0
 
-Not yet released. This is the first release. The image will be `ghcr.io/vmosoti/rusticdoc:0.1.0`.
+Released on 9 November 2026. This is the first release. The image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, for amd64 and arm64.
 
 ### Templates
 

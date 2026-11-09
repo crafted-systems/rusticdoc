@@ -9,7 +9,7 @@ This page shows you how to run the service with the right container flags, with 
 
 ## The image
 
-The image will be `ghcr.io/vmosoti/rusticdoc:0.1.0`. It is not published yet, so for now build it from a checkout of the repository:
+The image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, for amd64 and arm64. While the repository is private, so is the image: sign in with `docker login ghcr.io` and a GitHub token that can read packages before you pull it. You can also build it from a checkout of the repository:
 
 ```bash
 docker build -t rusticdoc .

@@ -3,7 +3,11 @@ import starlight from '@astrojs/starlight';
 import sitemap from '@astrojs/sitemap';
 
 export default defineConfig({
-  site: 'https://rusticdoc.com',
+  // rusticdoc.com at the root by default. A GitHub Pages build sets SITE_URL
+  // and SITE_BASE (https://vmosoti.github.io and /rusticdoc), then
+  // scripts/rebase.mjs prefixes the links written as root paths.
+  site: process.env.SITE_URL ?? 'https://rusticdoc.com',
+  base: process.env.SITE_BASE ?? '/',
   trailingSlash: 'always',
   devToolbar: { enabled: false },
   // Security and Status were pages of their own before they joined the docs.

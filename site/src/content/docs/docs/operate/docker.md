@@ -19,7 +19,7 @@ docker run -d --name rusticdoc --restart unless-stopped \
   -p 127.0.0.1:9027:9027 ghcr.io/vmosoti/rusticdoc:0.1.0
 ```
 
-The image is not published until 0.1.0 is released. Until then, build it with `docker build -t rusticdoc .` and use `rusticdoc` as the image name.
+While the repository is private, pulling the image needs `docker login ghcr.io` first. Or build it with `docker build -t rusticdoc .` and use `rusticdoc` as the image name.
 
 [Install](/docs/start/install/) explains the hardening flags. The others are:
 
