@@ -20,5 +20,11 @@ for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
 done
 soffice --convert-to xlsx --outdir /w /w/sheets.fods
 soffice --convert-to ods --outdir /w /w/sheets.fods
+# A drop() tag for each element, on a condition the data sets.
+for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
+  soffice --convert-to "${pair%:*}" --outdir /w "/w/drop.${pair#*:}"
+done
+python3 drop_fix.py drop.pptx drop.xlsx
+cp drop.docx drop.xlsx drop.pptx ../../../../site/samples/fixtures/
 rm -rf profile
-ls -la invoice.docx invoice.xlsx rich.* sanitize.* sheets.xlsx sheets.ods
+ls -la invoice.docx invoice.xlsx rich.* sanitize.* sheets.xlsx sheets.ods drop.*

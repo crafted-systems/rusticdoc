@@ -375,6 +375,7 @@ impl Docx<'_, '_> {
                 format!("<w:r>{}{}</w:r>", rpr_with(rpr, props), text_runs(text))
             }
             Rich::PageBreak => "<w:r><w:br w:type=\"page\"/></w:r>".to_string(),
+            Rich::Drop(_) => return Err(self.fail("drop() cannot sit here")),
             Rich::Html(_) => {
                 return Err(self.fail("html must sit directly in a paragraph"));
             }

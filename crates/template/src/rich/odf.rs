@@ -556,7 +556,7 @@ impl Odf<'_, '_> {
                 let frame = self.chart_frame(chart)?;
                 Ok(self.place_frame(frame))
             }
-            Rich::PageBreak => Err(self.fail("this value cannot be placed here")),
+            Rich::PageBreak | Rich::Drop(_) => Err(self.fail("this value cannot be placed here")),
         }
     }
 

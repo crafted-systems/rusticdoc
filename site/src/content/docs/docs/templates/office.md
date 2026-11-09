@@ -104,6 +104,166 @@ Putting `{% else %}` in the same paragraph as the block's opening or closing tag
 
 Nesting works: a row loop in a paragraph loop, a row loop in another row loop, or an inline loop in a row.
 
+## Remove an element
+
+A block needs two tags and repeats rows, paragraphs and slides only. To take out one thing on a condition, such as a table column, a whole table from inside it, a picture or a sheet, use `drop`. It prints nothing and removes the element that holds the tag:
+
+```text
+{{ drop("column") if not show_discount }}
+{% if items | length < 6 %}{{ drop("table") }}{% endif %}
+{{ drop("paragraph", 3) if not terms }}
+```
+
+`drop` is an ordinary expression, so a condition goes in the same tag with `if`, or around it in a block. When the condition is false, nothing is removed.
+
+The first argument names the element, and the tag's position says which one:
+
+| Element | Where the tag sits | DOCX | ODT | XLSX | ODS | PPTX | ODP |
+|---|---|---|---|---|---|---|---|
+| `paragraph` | In the paragraph | Yes | Yes | Refused | Refused | Yes | Yes |
+| `row` | In any cell of the table row or sheet row | Yes | Yes | Yes | Yes | Yes | Yes |
+| `column` | In any cell of the column | Yes | Yes | Yes | Yes | Yes | Yes |
+| `table` | In any cell of the table | Yes | Yes | Refused | Refused | Yes | Yes |
+| `picture` | In the picture's alt text | Yes | Yes | Yes | Yes | Yes | Yes |
+| `chart` | In the chart's alt text | Yes | Yes | Yes | Yes | Yes | Yes |
+| `shape` | In the shape's alt text, or in its text | Yes | Yes | Alt text only | Yes | Yes | Yes |
+| `slide` | Anywhere on the slide | Refused | Refused | Refused | Refused | Yes | Yes |
+| `sheet` | In any cell of the sheet | Refused | Refused | Yes | Yes | Refused | Refused |
+
+A shape is any drawn object: a text box, a rectangle, a group, and also a picture, chart or table frame, so `drop("shape")` removes whichever object holds the tag.
+
+The sample document `drop.docx` holds a tag for each element, on a condition its data sets. Its items table has a discount column whose header cell holds `Discount{{ drop("column") if not discount }}`:
+
+```bash test
+jq '.discount = false' drop.json > data.json
+curl -F template=@drop.docx -F "data=<data.json" http://localhost:9027/v1/render -o out.docx
+unzip -p out.docx word/document.xml > out.xml
+! grep -q 'Discount' out.xml
+grep -o 'Amount' out.xml
+```
+
+### Paragraphs and rows
+
+`drop("paragraph", n)` removes the tag's paragraph and the `n - 1` after it, and `drop("row", n)` the tag's row and the `n - 1` below it. Without a count it is one. The other elements take no count.
+
+Inside a loop, each copy has its own tag, so a drop removes that copy only:
+
+```bash test
+mkdir t && cd t && unzip -q ../invoice.docx
+perl -pi -e 's/\{\{ item\.qty \}\}/{{ item.qty }}{{ drop("row") if item.qty == 1 }}/' word/document.xml
+zip -qr ../tagged.docx . && cd ..
+
+curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+unzip -p out.docx word/document.xml > out.xml
+grep -o 'Paper filters, box of 100' out.xml
+! grep -q 'Delivery to Mombasa' out.xml
+```
+
+What stays valid:
+
+- A table cell, text box, header or slide text left without a paragraph gets an empty one, as Word, PowerPoint and LibreOffice need.
+- A Word paragraph that ends a section keeps its section settings, and loses its text.
+- A table left with no rows goes, and so does a list item left empty in an ODT.
+- A row that holds part of a cell merged down across rows that stay is refused: `cannot remove a row that holds part of a cell merged down across rows that stay`.
+
+### Columns
+
+`drop("column")` removes the cell in that column from every row, and the column from the table's grid. A Word table with a fixed width, a PowerPoint table and an ODP table frame get narrower by the column's width. Elsewhere the other columns share the width.
+
+A column that a merged cell spans is refused: `drop("column") cannot remove column 3: a cell merged across columns spans it`. Unmerge the cells, or put the merged cell's text in a column that stays. The sample invoice's total row spans its first three columns, so its unit price column cannot go:
+
+```bash test=fail
+mkdir t && cd t && unzip -q ../invoice.docx
+perl -pi -e 's/>Unit price</>Unit price{{ drop("column") }}</' word/document.xml
+zip -qr ../tagged.docx . && cd ..
+
+curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+```
+
+### Pictures, charts and shapes
+
+Type the tag in the object's alt text. In Word, Excel and PowerPoint, right-click the object and choose View Alt Text; in LibreOffice, choose Description, which has a title and a description. Either field works.
+
+```text
+{{ drop("picture") if not show_logo }}
+```
+
+Alt text can hold other tags too, such as `Logo of {{ company }}`. They print into the alt text, and the `drop` prints nothing. A block in alt text must open and close there: `a block in alt text must open and close in the same alt text`.
+
+A shape's tag can also go in the text it holds, such as `Stamp{{ drop("shape") if paid }}` in a text box. In an XLSX, text in a drawing is not read, so use the shape's alt text there.
+
+When LibreOffice saves a PPTX or an XLSX, it leaves out a chart's alt text. Type the tag in PowerPoint or Excel, or keep the template in ODP or ODS.
+
+The sample deck holds a tag for each element. This leaves out its picture and its appendix slide:
+
+```bash test
+jq '.logo = false | .appendix = false' drop.json > data.json
+curl -F template=@drop.pptx -F "data=<data.json" http://localhost:9027/v1/render -o out.pptx
+test "$(unzip -Z1 out.pptx | grep -c '^ppt/slides/slide[0-9]*\.xml$')" = 2
+! unzip -p out.pptx ppt/slides/slide1.xml | grep -q '<p:pic>'
+! unzip -Z1 out.pptx | grep -q '^ppt/media/'
+```
+
+### In sheets
+
+Rows and columns are removed after loops have numbered the rows, and the cells below or to the right move up or left. Every reference to a moved cell follows it: formulas on the sheet and on other sheets, defined names such as the print area, charts, conditional formats, data validations, hyperlinks, merged cells, column widths, tables and the anchors of pictures. In an ODS, formulas, print ranges and named ranges follow.
+
+A range loses the rows and columns that went, so `=SUM(D2:D5)` becomes `=SUM(D2:D4)` when one of its rows goes. A range whose rows all went becomes the row before them, as a loop over an empty list leaves it. A reference that would point at a removed cell is refused rather than left broken:
+
+```text
+drop("column") in sheet "Summary" removes cell C4, which the formula in D6 (C4*2) points at; remove that reference or keep the cells
+```
+
+A whole-column reference such as `=SUM(C:C)` is refused when a column goes, and a whole-row one such as `=SUM(3:3)` when a row goes; write the range with rows. Merged cells that span a removed column are refused, and merged cells over removed rows shrink. A column of an Excel table goes from the table too; the table's header row, or all of its rows, cannot go.
+
+The sample workbook drops its discount column and the row of each item marked hidden, and the totals follow:
+
+```bash test
+jq '.discount = false' drop.json > data.json
+curl -F template=@drop.xlsx -F "data=<data.json" http://localhost:9027/v1/render -o out.xlsx
+unzip -p out.xlsx xl/worksheets/sheet1.xml > sheet.xml
+! grep -q 'Discount' sheet.xml
+grep -o '<f[^>]*>SUM(C2:C4)</f>' sheet.xml
+grep -o '<f[^>]*>C5\*2</f>' sheet.xml
+```
+
+`drop("sheet")` removes the sheet with its drawings, charts, tables and comments, and with a [sheet loop](#repeating-a-sheet) only the copy that holds it. These are refused:
+
+- Removing every sheet: `drop("sheet") removes every sheet, and a workbook needs one`.
+- Removing a sheet that a formula or a defined name on another sheet points at.
+- In an XLSX, a tag in the alt text of a picture on a sheet that a sheet loop repeats, since a drawing is read once for all copies.
+
+### Slides
+
+`drop("slide")` removes the slide with its speaker notes and what only it used, as a slide loop over an empty list does. Removing every slide is refused: `drop("slide") removes every slide, and a presentation needs one`.
+
+### What goes with an element
+
+Pictures, chart parts, embedded objects, relationships, content types and ODF manifest entries that only the removed element used go too, so the file opens without a repair. What another element still uses stays.
+
+### Mistakes
+
+An element written in the tag is checked when the template is compiled, and [validation](/docs/templates/validate/) reports the tag and where it sits. A name that comes from data, as in `drop(kind)`, is checked when the file is put together.
+
+| Mistake | Error |
+|---|---|
+| An element the format lacks | `a DOCX has no slides; drop("slide") works in PPTX and ODP` |
+| `row` or `column` outside a table | `drop("row") must sit in a table cell` |
+| `picture` in body text | `drop("picture") must sit in the alt text (title or description) of a picture` |
+| `picture` in a chart's alt text | `sits in a chart, not a picture` |
+| A row or paragraph in alt text | `sits in alt text, where drop("row") has no row to remove` |
+| An unknown element | `"cell" is not something drop removes; use paragraph, row, column, table, picture, chart, shape, slide, sheet` |
+| A count on another element | `drop("table") takes no count; only paragraph and row do` |
+| A count past the last paragraph | `drop("paragraph", 3) needs 3 paragraphs in a row, but only 2 come before a table` |
+
+```bash test=fail
+mkdir t && cd t && unzip -q ../invoice.docx
+perl -pi -e 's/>Billed to</>Billed to{{ drop("slide") }}</' word/document.xml
+zip -qr ../tagged.docx . && cd ..
+
+curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+```
+
 ## DOCX
 
 Tags are read in the body, headers, footers, footnotes and endnotes, and in text boxes. A block cannot span a text box and the body.
@@ -328,7 +488,7 @@ unzip -p out.odp content.xml | grep -o 'Q3 results'
 
 ## Not supported in any format
 
-- Tags in attributes, field codes or document properties, apart from sheet names. They stay as written. Custom document properties can hold [settings](/docs/templates/translations/#settings-in-document-properties).
+- Tags in attributes, field codes or document properties, apart from sheet names and the alt text of pictures, charts and shapes. They stay as written. Custom document properties can hold [settings](/docs/templates/translations/#settings-in-document-properties).
 - `{% raw %}`. To print braces, see [printing literal braces](/docs/templates/syntax/#printing-literal-braces).
 
 ## What rendering takes out

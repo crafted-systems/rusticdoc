@@ -248,7 +248,8 @@ fn collect_fragments(
                 }
             }
             Node::Elem(e) => {
-                if d.paragraphs.contains(&e.name.as_str()) {
+                if d.paragraphs.contains(&e.name.as_str()) || d.alt_text.contains(&e.name.as_str())
+                {
                     continue;
                 }
                 if let Some((_, s)) = d.space_like.iter().find(|(n, _)| *n == e.name) {
@@ -480,7 +481,16 @@ impl Walker<'_> {
     }
 
     fn text(&mut self, t: &mut Text, path: Path) {
-        let Some(para) = self.nearest(self.d.paragraphs) else {
+        // Alt text is a paragraph of its own, inside a paragraph or not.
+        let holder = self
+            .anc
+            .iter()
+            .rev()
+            .find(|(n, _)| {
+                self.d.paragraphs.contains(&n.as_str()) || self.d.alt_text.contains(&n.as_str())
+            })
+            .map(|(_, p)| p.clone());
+        let Some(para) = holder else {
             return;
         };
         if let Some(leaves) = self.d.text_leaves {
