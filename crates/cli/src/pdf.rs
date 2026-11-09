@@ -163,8 +163,13 @@ pub enum PdfOp {
         certify: Option<String>,
         /// The RFC 3161 timestamp authority (with --key), instead of
         /// RUSTICDOC_SIGNING_TSA_URL.
-        #[arg(long, requires = "key")]
+        #[arg(long, requires_all = ["key", "tsa_cert"])]
         tsa_url: Option<String>,
+        /// PEM certificate the --tsa-url authority signs with, or the CA it
+        /// chains to, instead of RUSTICDOC_SIGNING_TSA_CERT. Tokens from any
+        /// other signer are refused.
+        #[arg(long, requires = "tsa_url")]
+        tsa_cert: Option<PathBuf>,
         /// Why the document was signed (with --key).
         #[arg(long, requires = "key")]
         reason: Option<String>,
@@ -433,6 +438,7 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
             level,
             certify,
             tsa_url,
+            tsa_cert,
             output,
         } => {
             if let (Some(key), Some(cert)) = (key, cert) {
@@ -471,10 +477,15 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
                     .with_level(config.signing.level)
                     .with_limits(config.signing.revocation.clone());
                 let tsa = match tsa_url {
-                    Some(url) => Some(sign::Tsa::new(url, std::time::Duration::from_secs(10))),
+                    Some(url) => {
+                        let mut tsa = sign::Tsa::new(url, std::time::Duration::from_secs(10));
+                        tsa.cert_file = tsa_cert;
+                        Some(tsa)
+                    }
                     None => config.signing.tsa.clone(),
                 };
-                if let Some(tsa) = tsa {
+                if let Some(mut tsa) = tsa {
+                    tsa.load_anchors().map_err(anyhow::Error::msg)?;
                     signing = signing.with_tsa(tsa);
                 }
                 signing.set_outbound(Arc::new(

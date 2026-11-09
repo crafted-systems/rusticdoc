@@ -107,18 +107,29 @@ struct Openssl {
     pki: PathBuf,
     asked: Mutex<Vec<String>>,
     tsa_down: bool,
+    /// Who signs OCSP answers: `ocsp`, or `rogue` for forgeries.
+    ocsp_signer: &'static str,
+    /// The CRL served: `root.crl`, or `rogue.crl` for a forgery.
+    crl: &'static str,
 }
 
 impl Openssl {
     fn new(pki: &Pki) -> Arc<Self> {
+        Self::forging(pki, "ocsp", "root.crl")
+    }
+
+    fn forging(pki: &Pki, ocsp_signer: &'static str, crl: &'static str) -> Arc<Self> {
         Arc::new(Self {
             pki: pki.path.clone(),
             asked: Mutex::new(Vec::new()),
             tsa_down: false,
+            ocsp_signer,
+            crl,
         })
     }
 
     fn run(&self, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
+        let signer = self.ocsp_signer;
         let dir = tempfile::tempdir().unwrap();
         let (inp, out) = (dir.path().join("in.der"), dir.path().join("out.der"));
         std::fs::write(&inp, input).unwrap();
@@ -126,6 +137,7 @@ impl Openssl {
         for arg in args {
             command.arg(
                 arg.replace("{pki}", &self.pki.to_string_lossy())
+                    .replace("{signer}", signer)
                     .replace("{in}", &inp.to_string_lossy())
                     .replace("{out}", &out.to_string_lossy()),
             );
@@ -183,9 +195,11 @@ impl Outbound for Openssl {
                     "-CA",
                     "{pki}/root.pem",
                     "-rsigner",
-                    "{pki}/ocsp.pem",
+                    "{pki}/{signer}.pem",
                     "-rkey",
-                    "{pki}/ocsp.key",
+                    "{pki}/{signer}.key",
+                    "-nmin",
+                    "60",
                     "-reqin",
                     "{in}",
                     "-respout",
@@ -193,15 +207,18 @@ impl Outbound for Openssl {
                 ],
                 query,
             ),
-            ("/root.crl", None, None) => Ok(std::fs::read(self.pki.join("root.crl")).unwrap()),
+            ("/root.crl", None, None) => Ok(std::fs::read(self.pki.join(self.crl)).unwrap()),
             ("/root.der", None, None) => Ok(std::fs::read(self.pki.join("root.der")).unwrap()),
             _ => Err(upstream(request.purpose, "404")),
         }
     }
 }
 
-fn tsa() -> Tsa {
+/// The test authority, trusting tokens that chain to the PKI's root.
+fn tsa(pki: &Pki) -> Tsa {
     Tsa::new("http://127.0.0.1:8/tsa", Duration::from_secs(10))
+        .with_anchors_pem(pki.text("root.pem").as_bytes())
+        .unwrap()
 }
 
 async fn sign_at_level(
@@ -210,7 +227,16 @@ async fn sign_at_level(
     original: &[u8],
     options: SignOptions,
 ) -> Result<Vec<u8>> {
-    let tsa = tsa();
+    sign_with_tsa(pki, outbound, original, options, tsa(pki)).await
+}
+
+async fn sign_with_tsa(
+    pki: &Pki,
+    outbound: &Openssl,
+    original: &[u8],
+    options: SignOptions,
+    tsa: Tsa,
+) -> Result<Vec<u8>> {
     let limits = Limits::default();
     let network = Network {
         tsa: Some(&tsa),
@@ -425,9 +451,8 @@ async fn b_lta_adds_a_document_timestamp_over_everything() {
 async fn a_failing_timestamp_authority_is_an_error_not_an_unstamped_file() {
     let Some(pki) = Pki::make() else { return };
     let outbound = Arc::new(Openssl {
-        pki: pki.path.clone(),
-        asked: Mutex::new(Vec::new()),
         tsa_down: true,
+        ..Arc::into_inner(Openssl::new(&pki)).unwrap()
     });
     let err = sign_at_level(
         &pki,
@@ -666,4 +691,156 @@ fn levels_and_permissions_parse() {
     assert!(
         SignOptions::from_fields(&|name| (name == "signingKey").then(|| "../x".into())).is_err()
     );
+}
+
+fn level(level: Level) -> SignOptions {
+    SignOptions {
+        level: Some(level),
+        ..SignOptions::default()
+    }
+}
+
+fn certificate(pem: &str) -> x509_cert::Certificate {
+    x509_cert::Certificate::load_pem_chain(pem.as_bytes()).unwrap()[0].clone()
+}
+
+#[tokio::test]
+async fn timestamps_are_trusted_only_through_the_configured_certificates() {
+    let Some(pki) = Pki::make() else { return };
+    let outbound = Openssl::new(&pki);
+    let original = fixtures::pages(1);
+
+    // The authority's own certificate, pinned, is enough.
+    let pinned = Tsa::new("http://127.0.0.1:8/tsa", Duration::from_secs(10))
+        .with_anchors_pem(pki.text("tsa.pem").as_bytes())
+        .unwrap();
+    sign_with_tsa(&pki, &outbound, &original, level(Level::BT), pinned)
+        .await
+        .unwrap();
+
+    // A token whose signer chains to nothing configured is refused, with no
+    // file: here the anchor is an unrelated root, then the impostor that has
+    // the real root's name and another key.
+    for anchor in [
+        super::tests::self_signed(&rcgen::PKCS_ECDSA_P256_SHA256).cert_pem,
+        pki.text("rogue.pem"),
+    ] {
+        let elsewhere = Tsa::new("http://127.0.0.1:8/tsa", Duration::from_secs(10))
+            .with_anchors_pem(anchor.as_bytes())
+            .unwrap();
+        let err = sign_with_tsa(&pki, &outbound, &original, level(Level::BT), elsewhere)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Status(502, _)), "{err}");
+        assert!(err.to_string().contains("not trusted"), "{err}");
+    }
+
+    // And with no anchor at all, the service refuses before any work.
+    let key = super::tests::self_signed(&rcgen::PKCS_ECDSA_P256_SHA256);
+    let signing = Signing::with_default(super::tests::signer(&key))
+        .with_tsa(Tsa::new("http://127.0.0.1:8/tsa", Duration::from_secs(10)))
+        .with_outbound(outbound.clone());
+    let err = signing.check(&level(Level::BT)).unwrap_err();
+    assert!(
+        err.to_string().contains("RUSTICDOC_SIGNING_TSA_CERT"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_timestamp_signer_needs_the_critical_usage_and_validity() {
+    let Some(pki) = Pki::make() else { return };
+    let root = certificate(&pki.text("root.pem"));
+    let tsa = certificate(&pki.text("tsa.pem"));
+    let now = SystemTime::now();
+    assert!(super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), now).is_ok());
+    // Outside its validity: the certificates last 30 days.
+    let later = now + Duration::from_secs(60 * 86_400);
+    let err = super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), later).unwrap_err();
+    assert!(err.contains("not valid"), "{err}");
+    // A signing certificate from the same root has no timestamping usage.
+    let signer = certificate(&pki.text("signer.pem"));
+    let err = super::tsa::check_signer(&signer, &[], std::slice::from_ref(&root), now).unwrap_err();
+    assert!(err.contains("not for timestamping"), "{err}");
+    // A timestamping usage that is not critical does not count either.
+    let ca_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca = rcgen::CertifiedIssuer::self_signed(ca_params, ca_key).unwrap();
+    let leaf_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let mut leaf_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    leaf_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::TimeStamping];
+    let leaf = leaf_params.signed_by(&leaf_key, &ca).unwrap();
+    let leaf = certificate(&leaf.pem());
+    // rcgen writes the extension non-critical.
+    assert!(matches!(
+        super::verify::extended_key_usage(&leaf),
+        Some((false, _))
+    ));
+    let err = super::tsa::check_signer(&leaf, &[], &[certificate(&ca.pem())], now).unwrap_err();
+    assert!(err.contains("critical"), "{err}");
+}
+
+#[tokio::test]
+async fn forged_ocsp_answers_give_way_to_the_crl() {
+    let Some(pki) = Pki::make() else { return };
+    // OCSP answers signed by the impostor: refused, and the CRL used instead.
+    let outbound = Openssl::forging(&pki, "rogue", "root.crl");
+    let original = fixtures::pages(1);
+    let signed = sign_at_level(&pki, &outbound, &original, level(Level::BLt))
+        .await
+        .unwrap();
+    let pdf = Pdf::load_mem(&signed).unwrap();
+    let dss = match pdf.catalog().unwrap().get(b"DSS").unwrap() {
+        Object::Reference(id) => pdf.get_dictionary(*id).unwrap().clone(),
+        other => panic!("unexpected DSS {other:?}"),
+    };
+    assert!(dss.get(b"OCSPs").is_err(), "no forged OCSP answer is kept");
+    assert_eq!(dss.get(b"CRLs").unwrap().as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn forged_revocation_data_fails_the_request() {
+    let Some(pki) = Pki::make() else { return };
+    // Both sources forged: no B-LT file.
+    let outbound = Openssl::forging(&pki, "rogue", "rogue.crl");
+    let err = sign_at_level(&pki, &outbound, &fixtures::pages(1), level(Level::BLt))
+        .await
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(matches!(err, Error::Status(502, _)), "{message}");
+    assert!(message.contains("response's signature"), "{message}");
+    assert!(message.contains("CRL's signature"), "{message}");
+}
+
+#[tokio::test]
+async fn revocation_data_must_be_current() {
+    let Some(pki) = Pki::make() else { return };
+    let outbound = Openssl::new(&pki);
+    let certs = vec![
+        certificate(&pki.text("signer.pem")),
+        certificate(&pki.text("root.pem")),
+    ];
+    let limits = Limits::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let collect = |now| super::revocation::collect(&certs, &*outbound, &limits, deadline, now);
+
+    let now = collect(SystemTime::now()).await.unwrap();
+    assert_eq!((now.ocsps.len(), now.crls.len()), (1, 0));
+    // Two hours on, the OCSP answer (next update in an hour) has expired and
+    // the CRL (seven days) has not.
+    let later = collect(SystemTime::now() + Duration::from_secs(2 * 3600))
+        .await
+        .unwrap();
+    assert_eq!((later.ocsps.len(), later.crls.len()), (0, 1));
+    // Ten days on, neither will do.
+    let err = collect(SystemTime::now() + Duration::from_secs(10 * 86_400))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not current"), "{err}");
+    // An hour back, both are from the future.
+    let err = collect(SystemTime::now() - Duration::from_secs(3600))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("in the future"), "{err}");
 }

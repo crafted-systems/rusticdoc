@@ -245,7 +245,8 @@ Levels from `b-t` on ask a timestamp authority (RFC 3161) for a timestamp over t
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RUSTICDOC_SIGNING_TSA_URL` | None | The timestamp authority, `http` or `https` |
+| `RUSTICDOC_SIGNING_TSA_URL` | None | The timestamp authority, `http` or `https`. Needs `RUSTICDOC_SIGNING_TSA_CERT` |
+| `RUSTICDOC_SIGNING_TSA_CERT` | None | A PEM file of the certificates the authority's tokens are trusted through: its own signing certificate, pinned, or the CA certificates it must chain to. Required with a URL: without it the service does not start |
 | `RUSTICDOC_SIGNING_TSA_USERNAME`, `RUSTICDOC_SIGNING_TSA_PASSWORD` | None | Basic credentials for it |
 | `RUSTICDOC_SIGNING_TSA_HEADERS` | None | Further headers for it, as a JSON object such as `{"X-Api-Key": "..."}` |
 | `RUSTICDOC_SIGNING_TSA_TIMEOUT` | `10s` | Time limit for one timestamp request |
@@ -254,6 +255,8 @@ Levels from `b-t` on ask a timestamp authority (RFC 3161) for a timestamp over t
 | `RUSTICDOC_SIGNING_OUTBOUND_ALLOW_LIST` | None | Regular expressions a timestamp, OCSP, CRL or issuer URL must match one of |
 | `RUSTICDOC_SIGNING_OUTBOUND_DENY_LIST` | None | Regular expressions none of those URLs may match |
 | `RUSTICDOC_SIGNING_OUTBOUND_ALLOW_PRIVATE` | `false` | Allow those URLs to reach private and loopback addresses |
+
+A token is used only when its signature verifies with the certificate it names, and that certificate is one of `RUSTICDOC_SIGNING_TSA_CERT` or chains to one through CA certificates in the token, carries a critical `id-kp-timeStamping` extended key usage, and was valid at the token's time; otherwise the request fails with `502`. Revocation data is checked the same way before it goes in the DSS: an OCSP response must answer for exactly the certificate asked about, be signed by the certificate's issuer or by a responder certificate the issuer signed with `id-kp-OCSPSigning`, and be current (this update no later than now, next update after now, five minutes' clock skew either way); a CRL must be signed with the issuer's key and be current. One that fails is set aside for the next source, OCSP then CRLs, and the request fails with `502` when none is left.
 
 These requests follow the same rules as webhooks: the URL is checked against the lists with its host normalised, private addresses are refused unless allowed, the connection is pinned to the addresses that were checked, redirects are not followed, and `RUSTICDOC_OUTBOUND_PROXY` applies. The whole of a signature, network included, keeps to `RUSTICDOC_API_TIMEOUT`, and one signature makes at most 32 requests for validation data.
 

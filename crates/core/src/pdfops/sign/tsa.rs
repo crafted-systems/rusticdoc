@@ -4,9 +4,12 @@
 //! A request carries the SHA-256 of what is stamped and a fresh nonce, and
 //! asks for the authority's certificate. The answer is checked before it is
 //! used: granted, a `SignedData` over a `TSTInfo` whose message imprint and
-//! nonce are the ones sent, and a signature that verifies with the
-//! certificate the token names. Anything else is an error, never a file
-//! without its timestamp.
+//! nonce are the ones sent, a signature that verifies with the certificate
+//! the token names, and that certificate trusted: it is one of the operator's
+//! `RUSTICDOC_SIGNING_TSA_CERT` certificates or chains to one, carries a
+//! critical `id-kp-timeStamping` extended key usage, and is valid at the
+//! token's time. Anything else is an error, never a file without its
+//! timestamp.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -27,6 +30,10 @@ use super::verify;
 use crate::error::{Error, Result};
 
 const ID_CT_TST_INFO: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.1.4");
+const ID_KP_TIME_STAMPING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.8");
+
+/// Longest chain from the authority's certificate to an anchor.
+const MAX_PATH: usize = 8;
 
 /// Largest timestamp response read. Real ones are a few kilobytes.
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
@@ -43,6 +50,12 @@ pub struct Tsa {
     /// Further headers, such as an API key.
     pub headers: Vec<(String, String)>,
     pub timeout: Duration,
+    /// `RUSTICDOC_SIGNING_TSA_CERT`: a PEM file of the certificates the
+    /// authority's must be, or chain to. Read by [`Tsa::load_anchors`].
+    pub cert_file: Option<std::path::PathBuf>,
+    /// The trust anchors or pinned certificates. Without any, no token is
+    /// accepted.
+    anchors: Vec<Certificate>,
     /// The largest token seen, to size the next placeholder.
     largest: AtomicUsize,
 }
@@ -64,6 +77,8 @@ impl Clone for Tsa {
             password: self.password.clone(),
             headers: self.headers.clone(),
             timeout: self.timeout,
+            cert_file: self.cert_file.clone(),
+            anchors: self.anchors.clone(),
             largest: AtomicUsize::new(self.largest.load(Ordering::Relaxed)),
         }
     }
@@ -76,6 +91,8 @@ impl PartialEq for Tsa {
             && self.password == other.password
             && self.headers == other.headers
             && self.timeout == other.timeout
+            && self.cert_file == other.cert_file
+            && self.anchors == other.anchors
     }
 }
 
@@ -98,8 +115,47 @@ impl Tsa {
             password: None,
             headers: Vec::new(),
             timeout,
+            cert_file: None,
+            anchors: Vec::new(),
             largest: AtomicUsize::new(0),
         }
+    }
+
+    /// Trusts the certificates in `pem`: the authority's own, pinned, or the
+    /// CAs it must chain to.
+    pub fn with_anchors_pem(mut self, pem: &[u8]) -> std::result::Result<Self, String> {
+        let anchors = super::keys::parse_chain(pem)?;
+        if anchors.is_empty() {
+            return Err("it holds no certificate".into());
+        }
+        self.anchors = anchors;
+        Ok(self)
+    }
+
+    /// Reads [`Tsa::cert_file`] into the anchors. Errors name the variable.
+    /// Anchors given in code with [`Tsa::with_anchors_pem`] and no file stay.
+    pub fn load_anchors(&mut self) -> std::result::Result<(), String> {
+        if self.cert_file.is_none() && self.has_anchors() {
+            return Ok(());
+        }
+        let path = self.cert_file.clone().ok_or(
+            "RUSTICDOC_SIGNING_TSA_CERT is needed with RUSTICDOC_SIGNING_TSA_URL: the certificate the timestamp authority signs with, or the CA it chains to",
+        )?;
+        let pem = std::fs::read(&path).map_err(|e| {
+            format!(
+                "RUSTICDOC_SIGNING_TSA_CERT: cannot read {}: {e}",
+                path.display()
+            )
+        })?;
+        *self = std::mem::replace(self, Tsa::new("", Duration::ZERO))
+            .with_anchors_pem(&pem)
+            .map_err(|e| format!("RUSTICDOC_SIGNING_TSA_CERT ({}): {e}", path.display()))?;
+        Ok(())
+    }
+
+    /// True when some certificate is trusted for tokens.
+    pub fn has_anchors(&self) -> bool {
+        !self.anchors.is_empty()
     }
 
     /// Bytes to reserve for a token in a placeholder.
@@ -140,7 +196,7 @@ impl Tsa {
                 purpose: "the timestamp authority",
             })
             .await?;
-        let token = check(&response, digest, &nonce)?;
+        let token = check(&response, digest, &nonce, &self.anchors)?;
         self.largest.fetch_max(token.der.len(), Ordering::Relaxed);
         Ok(token)
     }
@@ -171,8 +227,14 @@ fn refused(what: impl std::fmt::Display) -> Error {
     upstream("the timestamp authority", what)
 }
 
-/// Checks a `TimeStampResp` against what was asked for.
-pub(super) fn check(response: &[u8], digest: &[u8; 32], nonce: &[u8]) -> Result<Token> {
+/// Checks a `TimeStampResp` against what was asked for, and its signer
+/// against `anchors`.
+pub(super) fn check(
+    response: &[u8],
+    digest: &[u8; 32],
+    nonce: &[u8],
+    anchors: &[Certificate],
+) -> Result<Token> {
     let response = TimeStampResp::from_der(response)
         .map_err(|e| refused(format!("its answer is not a timestamp response: {e}")))?;
     use cmpv2::status::PkiStatus;
@@ -210,6 +272,8 @@ pub(super) fn check(response: &[u8], digest: &[u8; 32], nonce: &[u8]) -> Result<
     if parsed.nonce.as_deref() != Some(nonce) {
         return Err(refused("its token does not carry the nonce that was sent"));
     }
+    check_signer(&parsed.signer, &parsed.certificates, anchors, parsed.time)
+        .map_err(|e| refused(format!("its token is not trusted: {e}")))?;
     Ok(Token {
         der,
         certificates: parsed.certificates,
@@ -224,6 +288,8 @@ pub(super) struct Parsed {
     pub nonce: Option<Vec<u8>>,
     pub time: SystemTime,
     pub certificates: Vec<Certificate>,
+    /// The certificate whose key signed the token.
+    pub signer: Certificate,
 }
 
 /// Parses a DER `TimeStampToken` and verifies its signature.
@@ -318,6 +384,62 @@ pub(super) fn parse(der: &[u8]) -> Result<Parsed> {
         imprint: tst.message_imprint.hashed_message.as_bytes().to_vec(),
         nonce: tst.nonce.map(|n| n.as_bytes().to_vec()),
         time: UNIX_EPOCH + tst.gen_time.to_unix_duration(),
+        signer: cert.clone(),
         certificates,
     })
+}
+
+/// Whether the certificate that signed a token at `at` can be trusted: a
+/// critical extended key usage of `id-kp-timeStamping`, valid at `at`, and
+/// either one of `anchors` or issued, through CA certificates from `pool`
+/// that are valid at `at`, by one of them.
+pub(super) fn check_signer(
+    signer: &Certificate,
+    pool: &[Certificate],
+    anchors: &[Certificate],
+    at: SystemTime,
+) -> std::result::Result<(), String> {
+    let subject = signer.tbs_certificate.subject.to_string();
+    if anchors.is_empty() {
+        return Err("no certificate is trusted for timestamps (RUSTICDOC_SIGNING_TSA_CERT)".into());
+    }
+    match verify::extended_key_usage(signer) {
+        Some((true, usages)) if usages.contains(&ID_KP_TIME_STAMPING) => {}
+        Some((false, _)) => {
+            return Err(format!(
+                "the certificate {subject} does not mark its extended key usage critical"
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "the certificate {subject} is not for timestamping (no id-kp-timeStamping)"
+            ));
+        }
+    }
+    if !verify::valid_at(signer, at) {
+        return Err(format!(
+            "the certificate {subject} was not valid at the token's time"
+        ));
+    }
+    if anchors.contains(signer) {
+        return Ok(());
+    }
+    let mut current = signer.clone();
+    for _ in 0..MAX_PATH {
+        if anchors.iter().any(|a| verify::issued_by(&current, a)) {
+            return Ok(());
+        }
+        let Some(next) = pool.iter().find(|c| {
+            *c != &current
+                && verify::is_ca(c)
+                && verify::valid_at(c, at)
+                && verify::issued_by(&current, c)
+        }) else {
+            break;
+        };
+        current = next.clone();
+    }
+    Err(format!(
+        "the certificate {subject} neither is nor chains to a certificate in RUSTICDOC_SIGNING_TSA_CERT"
+    ))
 }

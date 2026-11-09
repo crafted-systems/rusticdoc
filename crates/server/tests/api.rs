@@ -1650,10 +1650,11 @@ async fn timestamped_levels_need_a_timestamp_authority_reached_under_the_outboun
     // One on loopback, which the outbound rules refuse by default: a 502,
     // and no file.
     let mut config = signing_config(dir.path());
-    config.signing.tsa = Some(rusticdoc_core::pdfops::sign::Tsa::new(
-        "http://127.0.0.1:9/tsa",
-        Duration::from_secs(2),
-    ));
+    config.signing.tsa = Some(
+        rusticdoc_core::pdfops::sign::Tsa::new("http://127.0.0.1:9/tsa", Duration::from_secs(2))
+            .with_anchors_pem(&std::fs::read(dir.path().join("cert.pem")).unwrap())
+            .unwrap(),
+    );
     let router = app(AppState::new(config.clone()));
     let res = router
         .oneshot(post_binary("/v1/pdf/sign", &parts("b-lta")))
