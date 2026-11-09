@@ -26,6 +26,8 @@ pub struct Config {
     pub pdfcpu_bin: Option<PathBuf>,
     /// Directory of extra fonts, mounted at runtime.
     pub fonts_dir: PathBuf,
+    /// `<lang>.json` translation dictionaries for `t`, when set.
+    pub translations_dir: Option<PathBuf>,
     /// Where uploaded templates and fonts live: `file:///path` or
     /// `s3://bucket/prefix`. Without it those routes answer 501.
     pub store: Option<String>,
@@ -238,6 +240,7 @@ impl Default for Config {
                 "/usr/local/bin/pdfcpu",
             ]),
             fonts_dir: PathBuf::from("/fonts"),
+            translations_dir: None,
             store: None,
             store_scope: StoreScope::Caller,
             admin_keys: Vec::new(),
@@ -376,6 +379,7 @@ impl Config {
                 Some(PathBuf::from(v))
             };
         }
+        c.translations_dir = get("TRANSLATIONS_DIR").map(PathBuf::from);
         if let Some(v) = get("FONTS_DIR") {
             c.fonts_dir = PathBuf::from(v);
         }
@@ -724,6 +728,8 @@ impl Config {
             crate::store::Store::open(url)?;
         }
         self.signing()?;
+        // A dictionary that cannot be read stops the start, not the first render.
+        crate::dictionaries::Dictionaries::open(self.translations_dir.clone())?;
         for (variable, engines) in &self.engine_orders {
             for engine in engines {
                 if !matches!(

@@ -33,12 +33,20 @@ newline in a value becomes a line break in DOCX and ODT.
 
 ### Filters
 
-- `currency("EUR")` → `EUR 1,234.50`; without an argument the settings
-  currency applies.
+- `currency("EUR")` → `EUR 1,234.50` with no language; without an argument
+  the settings currency applies.
+- `number` → `1,234.5`, `number(2)` → `1,234.50`.
 - `date("%d/%m/%Y")` accepts ISO 8601 strings and unix seconds; zoned
-  values are shown in the settings `timezone` (a fixed offset; default UTC).
-- `t` looks a key up in the settings translations, trying `key.<lang>` then
-  `key`, and falls back to the key.
+  values are shown in the settings `timezone` (an offset or an IANA zone;
+  default UTC).
+- `t` looks a key up in the request's translations, the service's
+  dictionaries and the settings, for the language and then each shorter tag
+  (`fr-ca`, `fr`), then `key`, and falls back to the key.
+- With a `lang` CLDR has data for (`src/locale_data.rs`, written by
+  `scripts/locale-data.mjs`), `number`, `currency` and `date` use its
+  separators, symbol placement and month and day names. `RenderOptions`
+  carries a request's `lang`, `timezone`, `currency` and translations, which
+  win over the template's.
 - Everything minijinja ships: `upper`, `default`, `join`, `sum`, `round`, …
 - From `compute` (every template kind, text and PDF tags too): the `empty`
   test; `truncate`, `unaccent`, `pad_left`, `pad_right`; `avg`, `ceil`,

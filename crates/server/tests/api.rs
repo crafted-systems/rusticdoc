@@ -2139,3 +2139,197 @@ async fn keep_names_only_what_rendering_takes_out() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn language_fields_format_and_translate_in_multipart() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("fr.json"),
+        r#"{"due": "Échéance", "total": "Total (serveur)"}"#,
+    )
+    .unwrap();
+    let state = AppState::new(Config {
+        translations_dir: Some(dir.path().to_path_buf()),
+        ..config()
+    });
+    let template = r#"{% settings t.total="Total" %}{{ "total" | t }}|{{ "due" | t }}|{{ 1500 | currency }}|{{ 1234.5 | number }}|{{ when | date("%d %B %H:%M") }}"#;
+    let res = app(state.clone())
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("t.txt"), template),
+                ("data", None, r#"{"when":"2026-07-01T10:00:00Z"}"#),
+                ("lang", None, "FR_ca"),
+                ("currency", None, "EUR"),
+                ("timezone", None, "America/Toronto"),
+                ("translations", None, r#"{"fr-CA": {"total": "Montant"}}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        text(res).await,
+        "Montant|Échéance|1\u{a0}500,00\u{a0}€|1\u{a0}234,5|01 juillet 06:00"
+    );
+
+    // Without the fields, the same template prints as it always has.
+    let res = app(state.clone())
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("t.txt"), template),
+                ("data", None, r#"{"when":"2026-07-01T10:00:00Z"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(text(res).await, "Total|due|1,500.00|1,234.5|01 July 10:00");
+
+    let long = "X".repeat(20);
+    for (field, value, wanted) in [
+        ("lang", "French!", "'lang'"),
+        ("timezone", "Mars/Olympus", "'timezone'"),
+        ("currency", long.as_str(), "'currency'"),
+        ("translations", r#"{"fr": {"a": 1}}"#, "'translations.fr'"),
+        ("translations", r#"["fr"]"#, "'translations'"),
+        ("translations", "{", "'translations'"),
+    ] {
+        let res = app(state.clone())
+            .oneshot(post_form(
+                "/v1/render",
+                &[("template", Some("t.txt"), "x"), (field, None, value)],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{field}={value}");
+        let body = text(res).await;
+        assert!(body.contains(wanted), "{field}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn validation_and_batches_take_the_language_fields() {
+    let state = AppState::new(config());
+    let res = app(state.clone())
+        .oneshot(post_form(
+            "/v1/templates/validate",
+            &[
+                (
+                    "template",
+                    Some("t.txt"),
+                    r#"{{ "total" | t }} {{ "due" | t }}"#,
+                ),
+                ("lang", None, "de-CH"),
+                ("translations", None, r#"{"de": {"total": "Summe"}}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(body["ok"], true, "{body}");
+    let warnings: Vec<&str> = body["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(warnings.len(), 1, "{body}");
+    assert!(
+        warnings[0].contains("no de-ch translation for \"due\""),
+        "{body}"
+    );
+
+    let res = app(state)
+        .oneshot(post_form(
+            "/v1/render/batch",
+            &[
+                ("template", Some("t.txt"), "{{ item.n | number(2) }}"),
+                ("data", None, r#"{"items":[{"n":1234.5}]}"#),
+                ("splitBy", None, "items"),
+                ("batchName", None, "{{ \"file\" | t }}"),
+                ("lang", None, "de"),
+                ("translations", None, r#"{"de": {"file": "Datei"}}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let zip = res.into_body().collect().await.unwrap().to_bytes();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip.to_vec())).unwrap();
+    let mut entry = archive.by_index(0).unwrap();
+    assert_eq!(entry.name().unwrap(), "Datei.txt");
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut content).unwrap();
+    assert_eq!(content, "1.234,50");
+}
+
+#[tokio::test]
+async fn pdf_form_tags_translate_and_format() {
+    use lopdf::{Document as Pdf, Object, Stream, dictionary};
+    // A text field whose default value is a tag.
+    let mut pdf = Pdf::with_version("1.7");
+    let pages_id = pdf.new_object_id();
+    let font_id = pdf.add_object(
+        dictionary! {"Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica"},
+    );
+    let content_id = pdf.add_object(Stream::new(dictionary! {}, b"".to_vec()));
+    let page_id = pdf.new_object_id();
+    let field_id = pdf.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx", "T" => Object::string_literal("label"),
+        "DV" => Object::string_literal("{{ \"total\" | t }} {{ amount | currency }} {{ day | date(\"%d %B\") }}"),
+        "Rect" => vec![72.into(), 600.into(), 400.into(), 620.into()], "P" => page_id,
+        "DA" => Object::string_literal("/Helv 10 Tf 0 g"), "F" => 4
+    });
+    pdf.objects.insert(page_id, Object::Dictionary(dictionary! {
+        "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Annots" => vec![field_id.into()]
+    }));
+    pdf.objects.insert(
+        pages_id,
+        Object::Dictionary(
+            dictionary! {"Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1},
+        ),
+    );
+    let catalog_id = pdf.add_object(dictionary! {
+        "Type" => "Catalog", "Pages" => pages_id,
+        "AcroForm" => dictionary! {"Fields" => vec![field_id.into()], "DR" => dictionary! {"Font" => dictionary! {"Helv" => font_id}}}
+    });
+    pdf.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).unwrap();
+
+    let res = app(AppState::new(config()))
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("form.pdf"), bytes),
+                (
+                    "data",
+                    None,
+                    br#"{"amount": 1500, "day": "2026-05-01"}"#.to_vec(),
+                ),
+                ("lang", None, b"de".to_vec()),
+                ("currency", None, b"EUR".to_vec()),
+                (
+                    "translations",
+                    None,
+                    br#"{"de": {"total": "Summe"}}"#.to_vec(),
+                ),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let filled = Pdf::load_mem(&bytes_of(res).await).unwrap();
+    let field = filled.get_object(field_id).unwrap().as_dict().unwrap();
+    let value = field.get(b"V").unwrap().as_str().unwrap();
+    // The no-break spaces and the euro sign need UTF-16.
+    let units: Vec<u16> = value[2..]
+        .chunks(2)
+        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+        .collect();
+    let value = String::from_utf16(&units).unwrap();
+    assert!(value.starts_with("Summe 1.500,00\u{a0}€"), "{value}");
+    assert!(value.contains("01 Mai"), "{value}");
+}

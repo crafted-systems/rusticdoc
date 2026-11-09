@@ -1,39 +1,79 @@
 ---
 title: Translations and settings
-description: Set the language, translated labels, time zone and default currency of an Office template, and handle per-request values with data.
+description: Set the language, translated labels, time zone and default currency of a template, per template or per request, and keep translations in dictionaries.
 sidebar:
   order: 6
 ---
 
-This page shows how to translate labels, and set a time zone and a default currency, in an Office template. It also shows what to do when these must change from one request to the next.
+This page shows how to translate labels, and set a language, a time zone and a default currency, so that one template can print an invoice in French for one request and in German for the next. They can live in the template, in each request, and in dictionaries the service holds.
 
-## Settings live in the template
-
-The `{% settings %}` tag holds four kinds of setting:
-
-```text
-{% settings lang="fr" currency="EUR" timezone="+02:00" t.greeting="Bonjour" %}
-```
+## The four settings
 
 | Setting | Does |
 |---|---|
-| `lang` | Picks which translation `t` uses |
+| `lang` | Picks the translations `t` uses. With a language CLDR has data for, it also sets how [`number`, `currency` and `date`](/docs/templates/filters/#language) write numbers, money and names |
+| `timezone`, or `tz` | The zone `date` shows moments in: an offset such as `+02:00`, or an IANA zone such as `Europe/Paris` |
 | `currency` | The code `currency` uses when given none |
-| `timezone`, or `tz` | The offset `date` shows moments in |
-| `t.<key>` | A translation for `t` |
+| translations | The text `t` prints for each key |
+
+Each can be set in three places. For the same setting, the first that sets it wins:
+
+1. The request's fields: `lang`, `timezone`, `currency` and `translations`.
+2. A `{% settings %}` tag in the template.
+3. The template's custom document properties.
+
+Translations add up rather than replace each other: see [how `t` looks a key up](#how-t-finds-a-translation).
+
+They work the same in Office templates, text templates and PDF tags. A PDF holds no settings of its own, so only the request applies there.
+
+## Settings in the request
+
+`/v1/render`, `/v1/render/batch` and `/v1/templates/validate` take these fields, as multipart fields or as members of a [JSON body](/docs/guides/stored-templates/):
+
+| Field | Example | Notes |
+|---|---|---|
+| `lang` | `fr-CA` | Any case, with `-` or `_`. It becomes `fr-ca` |
+| `translations` | `{"fr": {"total": "Montant"}, "en-gb": {"total": "Total"}}` | JSON, by language, each a flat object of keys and texts |
+| `timezone` | `Europe/Paris` | An offset, `UTC`, or an IANA zone |
+| `currency` | `EUR` | At most 16 characters |
+
+```bash test
+cat > label.txt <<'EOF'
+{{ "total" | t }}: {{ total | currency }}, {{ issued | date("%d %B %Y %H:%M") }}
+EOF
+curl -F template=@label.txt \
+  -F 'data={"total":1500,"issued":"2026-07-01T10:00:00Z"}' \
+  -F lang=de -F currency=EUR -F timezone=Europe/Berlin \
+  -F 'translations={"de": {"total": "Summe"}}' \
+  http://localhost:9027/v1/render -o out.txt
+# The no-break space CLDR puts before the euro sign, shown here as _.
+test "$(perl -CSD -pe 's/\x{a0}/_/g' out.txt)" = 'Summe: 1.500,00_€, 01 Juli 2026 12:00'
+```
+
+A field that cannot be used is a `400` that names it, so a typing mistake is not silently ignored:
+
+| Sent | Answer |
+|---|---|
+| `lang=French` | `'lang' is "French", which is not a language tag such as fr, fr-CA or en-us` |
+| `timezone=Mars/Olympus` | `'timezone': timezone "Mars/Olympus" is neither an offset like +02:00 nor an IANA zone like Europe/Paris` |
+| `translations={"fr": {"total": 5}}` | `'translations.fr' has a number for "total"; texts are strings` |
+
+`translations` holds at most 10,000 entries and 2 MiB in all, with keys of up to 256 bytes and texts of up to 16 KiB.
+
+## Settings in the template
+
+The `{% settings %}` tag sets the same things inside the template, with `t.<key>` for a translation and `t.<key>.<lang>` for one in a language:
+
+```text
+{% settings lang="fr" currency="EUR" timezone="Europe/Paris" t.billed.fr="Facturé à" t.billed.de="Rechnung an" %}
+```
 
 - Type it anywhere in the document. It applies to the whole file wherever it sits, and is removed from the output.
-- A paragraph holding only this tag stays as an empty paragraph, so put it in a line that has other text.
+- In an Office template, a paragraph holding only this tag stays as an empty paragraph, so put it in a line that has other text. In a text template the tag leaves nothing, not even its line's text, though a line break after it stays.
 - Several `{% settings %}` tags add up. For a repeated setting, the last one wins.
-- Values must be quoted text. `lang=language` is ignored with no error, because settings are read when the template is parsed, before any data exists.
+- Values must be quoted text. `lang=language` is ignored with no error, because settings are read when the template is parsed, before any data exists. Send what varies as a request field instead.
 
-:::caution[Office templates only, and no request fields]
-There are no `lang`, `timezone`, `currency` or `translations` fields on `/v1/render`. The service ignores them if you send them.
-
-In a text template or a PDF tag, `{% settings %}` is a syntax error (`unknown statement settings`), and `t` and `date` do not exist.
-:::
-
-This example puts all of the settings in the sample invoice:
+This example puts the settings in the sample invoice:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -41,17 +81,25 @@ perl -pi -e 's/Billed to/{% settings lang="fr" currency="EUR" timezone="+02:00" 
 zip -qr ../tagged.docx . && cd ..
 
 curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
-unzip -p out.docx word/document.xml | grep -o 'Facturé à, EUR 5.00, 07/11 01:30'
+unzip -p out.docx word/document.xml | perl -CSD -pe 's/\x{a0}/_/g' | grep -o 'Facturé à, 5,00_€, 07/11 01:30'
+
+# The request's language wins over the template's.
+curl -F template=@tagged.docx -F "data=<invoice.json" -F lang=de http://localhost:9027/v1/render -o out.docx
+unzip -p out.docx word/document.xml | perl -CSD -pe 's/\x{a0}/_/g' | grep -o 'Rechnung an, 5,00_€, 07/11 01:30'
 ```
 
-## Settings in document properties
+:::note
+A template whose `lang` has CLDR data now writes numbers, money and dates in that language, as above (`5,00 €` where it once printed `EUR 5.00`). A template without a `lang`, rendered without one, prints exactly as before.
+:::
+
+### Settings in document properties
 
 The same settings can be custom document properties instead, so that nothing has to be typed on the page. Name each property after its setting (`lang`, `currency`, `timezone` or `tz`, `t.<key>`) and give it a text value:
 
 - In Word, Excel and PowerPoint: File > Properties > Custom.
 - In LibreOffice: File > Properties > Custom Properties.
 
-A `{% settings %}` tag wins over a property that sets the same thing, so a tag on the page can override what the file's properties say. Translations add up: a `t.<key>` property and a `t.<key>` in the tag both count, and for the same key the tag's wins. Properties with other names are ignored.
+A `{% settings %}` tag wins over a property that sets the same thing. Translations add up: a `t.<key>` property and a `t.<key>` in the tag both count, and for the same key the tag's wins. Properties with other names are ignored.
 
 They are read from `docProps/custom.xml` in a DOCX, XLSX or PPTX, and from `meta.xml` in an ODT, ODS or ODP. This example writes the property by hand, as Word would save it:
 
@@ -69,77 +117,68 @@ curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/r
 unzip -p out.docx word/document.xml | grep -o 'EUR 5.00'
 ```
 
-## lang and translations
+## How `t` finds a translation
 
-`{{ "key" | t }}` looks for a translation in this order:
+`{{ "key" | t }}`, or `{{ value | t }}` with a key from the data, looks in the language, then in each shorter tag it falls back to, then in the template's translations with no language, and prints the key itself when nothing has it. For `lang=fr-ca`:
 
-1. `key.<lang>`, when `lang` is set.
-2. `key`.
-3. The key itself, printed as it is, with no error.
+1. `fr-ca`: the request's `translations`, then the service's dictionaries, then the template's `t.key.fr-ca`.
+2. `fr`: the same three, in the same order.
+3. The template's `t.key`, with no language.
+4. The key, printed as it is, with no error.
 
-So one file can hold every language, and changing `lang` changes which one prints:
-
-```text
-{% settings lang="de" t.total="Total" t.total.fr="Montant" t.total.de="Summe" %}
-{{ "total" | t }}
-```
-
-This prints `Summe`, and a template with `lang="es"` would print `Total`.
-
-`lang` affects `t` and nothing else. `date` prints month and day names in English, and `currency` always uses `,` and `.`.
-
-## timezone
-
-`timezone` is a fixed offset such as `+02:00` or `-05:00`, or `UTC`. It applies to a value that is a moment, meaning one with a zone or unix seconds. A value with no zone prints as written.
-
-Named zones are refused when `date` runs:
-
-```bash test=fail
-mkdir t && cd t && unzip -q ../invoice.docx
-perl -pi -e 's/Billed to/{% settings timezone="Europe\/Paris" %}Billed to/' word/document.xml
-zip -qr ../tagged.docx . && cd ..
-
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
-```
-
-```text
-timezone "Europe/Paris" is not a fixed offset like +02:00 (named zones are not supported)
-```
-
-## currency
-
-`currency="EUR"` sets the code for `{{ total | currency }}`. An argument wins over it, and `currency("")` prints no code. See [`currency`](/docs/templates/filters/#currency).
-
-## Changing these per request
-
-Since settings are fixed in the file, send what varies as data. This works in Office and text templates alike.
-
-**Labels.** Send the words the document needs:
+So a more exact language beats a higher source: a template's `t.total.fr-ca` wins over a request's `fr` entry. Within one language, the request beats the dictionaries, and the dictionaries beat the template.
 
 ```bash test
-cat > labels.txt <<'EOF'
-{{ labels.total }}: {{ total | currency(code) }}
+cat > t.txt <<'EOF'
+{% settings t.total="Total" t.tax.fr-ca="TPS" t.note="Note" %}{{ "total" | t }}|{{ "tax" | t }}|{{ "note" | t }}|{{ "other" | t }}
 EOF
-curl -F template=@labels.txt \
-  -F 'data={"labels":{"total":"Montant"},"total":1500,"code":"EUR"}' \
+curl -F template=@t.txt -F lang=fr-CA \
+  -F 'translations={"fr": {"total": "Montant", "tax": "Taxe"}}' \
   http://localhost:9027/v1/render -o out.txt
-grep -x 'Montant: EUR 1,500.00' out.txt
+test "$(cat out.txt)" = 'Montant|TPS|Note|other'
 ```
 
-**Several languages in one file.** Send the language and pick from a table in the data:
+A template written before languages fell back keeps working: `lang="fr-FR"` with `t.total.fr-FR` still finds it, and a `lang` that is not a language tag still finds `t.key.<lang>` as written.
+
+## Dictionaries on the service
+
+Set `RUSTICDOC_TRANSLATIONS_DIR` to a directory of `<lang>.json` files, each a flat object of keys and texts:
+
+```json
+{"total": "Montant", "due": "Échéance"}
+```
+
+- File names are language tags in any case: `fr.json`, `fr-CA.json`. Other files, such as notes, are ignored if they do not end in `.json`.
+- They are read when the service starts. A file that is not a flat object of strings, a `.json` file whose name is not a language, or a missing directory stops the service from starting, naming the file, so a broken deploy is noticed at once.
+- They are read again when a file changes: a request checks the directory's sizes and times at most once a second, so nothing is parsed per request. A file that turns bad while the service runs is logged as a warning, and its last good version stays in use. A deleted file stops applying.
+- Each file may be 1 MiB, with the same limits per entry as the request field. There may be 200 files and 4 MiB in all.
+
+With a request `lang`, a render receives the dictionaries for that language and those it falls back to. Without one, it receives every dictionary, since the template's own `lang` may pick one.
+
+## Finding the keys to translate
+
+`rusticdoc translate` reads Office and text templates, collects the keys they pass to `t` as literal text (`"total" | t`, wherever it sits in a tag) and the keys their settings translate, and writes them to `<dir>/<lang>.json`:
+
+```bash
+rusticdoc translate --lang fr --out translations templates/
+```
+
+- The file is created when missing. When it exists, its translations are kept, and new keys are added with an empty text for a translator to fill.
+- Keys in the file that no template uses any more are listed, and kept.
+- Directories are searched below, for `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp` and text templates.
+- A key that comes from data, as in `{{ label | t }}`, cannot be known before a render, so it is not listed.
+
+The result is a dictionary ready for `RUSTICDOC_TRANSLATIONS_DIR`. `rusticdoc render` takes `--lang`, `--translations FILE` and `--timezone`, and reads the same directory, so the command line renders as the service does.
+
+## Checking translations
+
+`/v1/templates/validate` with a `lang`, from the request or the template, warns about each tag passing `t` a literal key that has no translation in that language or one it falls back to. A translation with no language does not count, since it is what the warning is about. Warnings do not make `ok` false.
 
 ```bash test
-cat > pick.txt <<'EOF'
-{{ labels[lang].total }}
-EOF
-curl -F template=@pick.txt \
-  -F 'data={"lang":"de","labels":{"fr":{"total":"Montant"},"de":{"total":"Summe"}}}' \
-  http://localhost:9027/v1/render -o out.txt
-grep -x 'Summe' out.txt
+printf '{{ "total" | t }} {{ "due" | t }}' > v.txt
+curl -F template=@v.txt -F lang=fr -F 'translations={"fr": {"total": "Montant"}}' \
+  http://localhost:9027/v1/templates/validate -o v.json
+jq -e '.ok and (.diagnostics | length == 1) and (.diagnostics[0].message | startswith("no fr translation for \"due\""))' v.json
 ```
 
-**Currency.** Pass the code to the filter, as the sample invoice does with `{{ total | currency(currency) }}`.
-
-**Dates and time zones.** Format the date in your own code, in the zone you want, and send the text. This is also the way to get month names in another language, or a named zone with daylight saving.
-
-**A whole template per language** also works: store one per language, and pick the [stored template](/docs/guides/stored-templates/) by id.
+`rusticdoc validate --lang fr` does the same on the command line.

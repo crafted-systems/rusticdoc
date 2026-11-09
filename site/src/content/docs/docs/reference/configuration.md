@@ -85,6 +85,7 @@ OpenID Connect is on when `RUSTICDOC_OIDC_ISSUER` is set. Set the issuer and the
 | `RUSTICDOC_RENDER_MEMORY` | `1GB` | Address space of one render worker. A template past it gets `413`. The limit relies on Linux |
 | `RUSTICDOC_RENDER_WORKERS` | `4` | Render workers at once, so peak memory for rendering is this times `RUSTICDOC_RENDER_MEMORY` |
 | `RUSTICDOC_RENDER_WORKER_BIN` | The running binary | The binary with the worker in it |
+| `RUSTICDOC_TRANSLATIONS_DIR` | None | A directory of `<lang>.json` translation dictionaries for `t`, such as `fr.json`, each a flat object of keys and texts. A bad file stops the service from starting; a file changed while it runs is read again within a second, and one that turns bad keeps its last good version. See [translations](/docs/templates/translations/#dictionaries-on-the-service) |
 | `RUSTICDOC_MAX_RENDER_BYTES` | `64MB` | Most a text template, `batchName` or PDF form tag may write. Office templates stop at the package limit of 256 MiB |
 
 [Sizing](/docs/operate/sizing/) shows how these add up.

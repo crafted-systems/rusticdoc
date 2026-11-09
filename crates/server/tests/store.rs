@@ -2099,3 +2099,47 @@ async fn a_tenant_keeps_its_templates_aliases_and_jobs_when_its_key_is_replaced(
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn json_bodies_carry_the_language_fields() {
+    let pair = two_replicas(|_| {});
+    let id = store_text(
+        &pair.a,
+        "label.txt",
+        br#"{{ "total" | t }}: {{ 1500 | currency }} {{ when | date("%H:%M %B") }}"#,
+        None,
+    )
+    .await;
+    let body = serde_json::json!({
+        "templateId": id,
+        "data": {"when": "2026-01-15T12:00:00Z"},
+        "lang": "pt-BR",
+        "currency": "BRL",
+        "timezone": "America/Sao_Paulo",
+        "translations": {"pt": {"total": "Total geral"}, "pt-br": {"total": "Valor"}},
+    });
+    let res = pair
+        .a
+        .clone()
+        .oneshot(post_json("/v1/render", body, None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        String::from_utf8(bytes(res).await).unwrap(),
+        "Valor: R$\u{a0}1.500,00 09:00 janeiro"
+    );
+    let bad = serde_json::json!({"templateId": id, "translations": {"pt": "Valor"}});
+    let res = pair
+        .a
+        .clone()
+        .oneshot(post_json("/v1/render", bad, None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let message = json(res).await["message"].as_str().unwrap().to_string();
+    assert!(
+        message.contains("'translations.pt' must be an object"),
+        "{message}"
+    );
+}

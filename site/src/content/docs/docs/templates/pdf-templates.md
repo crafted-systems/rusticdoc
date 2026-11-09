@@ -91,13 +91,21 @@ Tagged annotations are removed from the output. Send `stripAnnotations=false` to
 
 ### Filters in PDF tags
 
-PDF tags have `currency` and the [built-in filters](/docs/templates/filters/#built-in-filters), such as `upper` and `default`. `date`, `t` and the rich content filters do not exist here. A tag using one is a `422`, with its place in the message:
+PDF tags have `currency`, `number`, `date`, `t` and the [built-in filters](/docs/templates/filters/#built-in-filters), such as `upper` and `default`. A PDF holds no `{% settings %}`, so the request's `lang`, `timezone`, `currency` and `translations` fields, and the service's dictionaries, are what they read. See [Translations and settings](/docs/templates/translations/).
 
-```text
-template error: annotation on page 1: unknown filter: filter date is unknown (in <string>:1)
+```bash test
+curl -F template=@form.pdf \
+  -F 'data={"name":"Ada","date":"2026-05-01","agree":true}' \
+  -F lang=de http://localhost:9027/v1/render -o filled.pdf
 ```
 
-A missing value is an error too, and names the place: ``template error: field `greeting`: undefined value``. Format dates before sending them.
+The rich content filters do not exist here. A tag using one is a `422`, with its place in the message:
+
+```text
+template error: annotation on page 1: unknown filter: filter image is unknown (in <string>:1)
+```
+
+A missing value is an error too, and names the place: ``template error: field `greeting`: undefined value``.
 
 ## Flatten
 
