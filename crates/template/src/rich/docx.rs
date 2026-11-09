@@ -4,10 +4,12 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use crate::rich::html::{self, Block, Inline};
-use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK, REL_IMAGE};
+use crate::rich::media::{self, Fit};
+use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK};
+use crate::rich::placeholder;
 use crate::rich::{
     blank, emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, serialize,
-    shell, text_node, Picture, Rich, Seg,
+    shell, text_node, Picture, Rich, Scope, Seg,
 };
 use crate::xml::{self, Elem, Node};
 use crate::TemplateError;
@@ -36,6 +38,11 @@ const RPR_ORDER: &str =
      w:shd w:fitText w:vertAlign w:rtl w:cs w:em w:lang w:eastAsianLayout w:specVanish \
      w:oMath";
 
+const TCPR_ORDER: &str =
+    "w:cnfStyle w:tcW w:gridSpan w:hMerge w:vMerge w:tcBorders w:shd w:noWrap w:tcMar \
+     w:textDirection w:tcFitText w:vAlign w:hideMark w:headers w:cellIns w:cellDel \
+     w:cellMerge w:tcPrChange";
+
 const PPR_ORDER: &str =
     "w:pStyle w:keepNext w:keepLines w:pageBreakBefore w:framePr w:widowControl w:numPr \
      w:suppressLineNumbers w:pBdr w:shd w:tabs w:suppressAutoHyphens w:kinsoku \
@@ -57,6 +64,15 @@ struct Docx<'a, 'b> {
     items: &'a [Arc<Rich>],
     part: &'a str,
     next_id: u64,
+    /// Colours waiting for the paragraph, cell or row around their tag.
+    effects: Vec<Effect>,
+}
+
+/// A colour for the structure around a tag.
+struct Effect {
+    scope: Scope,
+    color: Option<String>,
+    background: Option<String>,
 }
 
 pub fn rewrite(
@@ -71,11 +87,89 @@ pub fn rewrite(
         items,
         part,
         next_id: max_id(src, "wp:docPr", "id") + 1,
+        effects: Vec::new(),
     };
     if let Some(root) = xml::root_mut(nodes) {
         ensure_ns(root, NAMESPACES);
     }
-    ctx.walk(nodes)
+    ctx.walk(nodes)?;
+    match ctx.effects.first() {
+        Some(effect) => Err(ctx.fail(&format!(
+            "scope=\"{}\" needs the tag inside a table {}",
+            effect.scope.name(),
+            effect.scope.name()
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Sets the colour on every run under `e` the template wrote.
+fn color_runs(e: &mut Elem, color: &str) {
+    for node in e.children.iter_mut() {
+        let Node::Elem(child) = node else { continue };
+        if child.name == "w:r" {
+            set_run_color(child, color);
+        } else if child.name == "w:pPr" {
+            // The paragraph mark's own properties.
+            if let Some(rpr) = child.child_mut("w:rPr") {
+                insert_ordered(rpr, prop("w:color", &[("w:val", color)]), RPR_ORDER);
+            }
+        } else if child.name != "w:drawing" {
+            color_runs(child, color);
+        }
+    }
+}
+
+fn set_run_color(run: &mut Elem, color: &str) {
+    run.make_open();
+    if run.child("w:rPr").is_none() {
+        run.children
+            .insert(0, Node::Elem(Elem::new("w:rPr", &[], false)));
+    }
+    if let Some(rpr) = run.child_mut("w:rPr") {
+        insert_ordered(rpr, prop("w:color", &[("w:val", color)]), RPR_ORDER);
+    }
+}
+
+fn shading(fill: &str) -> Elem {
+    prop(
+        "w:shd",
+        &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", fill)],
+    )
+}
+
+/// Colours a table cell: its shading, and the text it holds.
+fn color_cell(tc: &mut Elem, effect: &Effect) {
+    if let Some(fill) = &effect.background {
+        tc.make_open();
+        if tc.child("w:tcPr").is_none() {
+            tc.children
+                .insert(0, Node::Elem(Elem::new("w:tcPr", &[], false)));
+        }
+        if let Some(tcpr) = tc.child_mut("w:tcPr") {
+            insert_ordered(tcpr, shading(fill), TCPR_ORDER);
+        }
+    }
+    if let Some(color) = &effect.color {
+        color_runs(tc, color);
+    }
+}
+
+/// Colours a paragraph: its shading, and its runs.
+fn color_paragraph(p: &mut Elem, effect: &Effect) {
+    if let Some(fill) = &effect.background {
+        p.make_open();
+        if p.child("w:pPr").is_none() {
+            p.children
+                .insert(0, Node::Elem(Elem::new("w:pPr", &[], false)));
+        }
+        if let Some(ppr) = p.child_mut("w:pPr") {
+            insert_ordered(ppr, shading(fill), PPR_ORDER);
+        }
+    }
+    if let Some(color) = &effect.color {
+        color_runs(p, color);
+    }
 }
 
 fn prop(name: &str, attrs: &[(&str, &str)]) -> Elem {
@@ -161,6 +255,7 @@ impl Docx<'_, '_> {
                 i += 1;
                 continue;
             };
+            let before = self.effects.len();
             // Text boxes nest paragraphs inside paragraphs: inner ones first.
             self.walk(&mut e.children)?;
             if e.name == "w:p" && has_mark(&e.children) {
@@ -168,15 +263,58 @@ impl Docx<'_, '_> {
                 else {
                     continue;
                 };
-                let out = self.paragraph(p)?;
+                let mark = self.effects.len();
+                let mut out = self.paragraph(p)?;
+                let mine: Vec<Effect> = self.take_effects(mark, Scope::Paragraph);
+                for effect in &mine {
+                    for node in out.iter_mut() {
+                        if let Node::Elem(p) = node {
+                            color_paragraph(p, effect);
+                        }
+                    }
+                }
                 let count = out.len();
                 children.splice(i..=i, out);
                 i += count;
                 continue;
             }
+            let scope = match e.name.as_str() {
+                "w:tc" => Some(Scope::Cell),
+                "w:tr" => Some(Scope::Row),
+                _ => None,
+            };
+            if let Some(scope) = scope {
+                for effect in self.take_effects(before, scope) {
+                    if scope == Scope::Cell {
+                        color_cell(e, &effect);
+                    } else {
+                        for cell in e.children.iter_mut() {
+                            if let Node::Elem(tc) = cell {
+                                if tc.name == "w:tc" {
+                                    color_cell(tc, &effect);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             i += 1;
         }
         Ok(())
+    }
+
+    /// The effects of `scope` recorded since `mark`, removed from the list.
+    fn take_effects(&mut self, mark: usize, scope: Scope) -> Vec<Effect> {
+        let mut taken = Vec::new();
+        let mut i = mark;
+        while i < self.effects.len() {
+            if self.effects[i].scope == scope {
+                taken.push(self.effects.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        taken
     }
 
     fn paragraph(&mut self, p: Elem) -> Result<Vec<Node>, TemplateError> {
@@ -361,16 +499,22 @@ impl Docx<'_, '_> {
                 text,
                 color,
                 background,
+                scope,
             } => {
                 let mut props = Vec::new();
                 if let Some(color) = color {
                     props.push(prop("w:color", &[("w:val", color)]));
                 }
-                if let Some(fill) = background {
-                    props.push(prop(
-                        "w:shd",
-                        &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", fill)],
-                    ));
+                if *scope == Scope::Text {
+                    if let Some(fill) = background {
+                        props.push(shading(fill));
+                    }
+                } else {
+                    self.effects.push(Effect {
+                        scope: *scope,
+                        color: color.clone(),
+                        background: background.clone(),
+                    });
                 }
                 format!("<w:r>{}{}</w:r>", rpr_with(rpr, props), text_runs(text))
             }
@@ -393,8 +537,8 @@ impl Docx<'_, '_> {
     }
 
     fn picture(&mut self, picture: &Picture) -> Result<String, TemplateError> {
-        let part = self.pkg.media_part(&picture.media, "word/media")?;
-        let rid = self.pkg.rel_to(self.part, REL_IMAGE, &part)?;
+        let blip = placeholder::blip(self.pkg, self.part, "word/media", &picture.media)?;
+        let crop = framed_crop(picture);
         let (cx, cy) = (emu(picture.width_pt), emu(picture.height_pt));
         let id = self.doc_pr();
         Ok(format!(
@@ -404,7 +548,7 @@ impl Docx<'_, '_> {
              <a:graphicFrameLocks noChangeAspect=\"1\"/></wp:cNvGraphicFramePr><a:graphic>\
              <a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
              <pic:pic><pic:nvPicPr><pic:cNvPr id=\"{id}\" name=\"Picture {id}\"/><pic:cNvPicPr/>\
-             </pic:nvPicPr><pic:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/>\
+             </pic:nvPicPr><pic:blipFill>{blip}{crop}<a:stretch><a:fillRect/>\
              </a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/>\
              <a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/>\
              </a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline>"
@@ -622,4 +766,19 @@ impl Docx<'_, '_> {
 enum Piece {
     Run(Node),
     Mark(usize),
+}
+
+/// The `a:srcRect` for a new picture given both sides and a fit.
+pub fn framed_crop(picture: &Picture) -> String {
+    match picture.fit {
+        Some(fit @ (Fit::Contain | Fit::Cover)) if picture.sized => placeholder::src_rect(
+            media::place(
+                (picture.width_pt, picture.height_pt),
+                picture.media.aspect(),
+                fit,
+            )
+            .crop,
+        ),
+        _ => String::new(),
+    }
 }

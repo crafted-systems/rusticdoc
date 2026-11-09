@@ -17,6 +17,8 @@ for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
   soffice --convert-to "${pair%:*}" --outdir /w "/w/rich.${pair#*:}"
   # Basic macros, links and a linked workbook, for the sanitiser.
   soffice --convert-to "${pair%:*}" --outdir /w "/w/sanitize.${pair#*:}"
+  # Pictures whose alt text holds an image or barcode tag.
+  soffice --convert-to "${pair%:*}" --outdir /w "/w/placeholder.${pair#*:}"
 done
 soffice --convert-to xlsx --outdir /w /w/sheets.fods
 soffice --convert-to ods --outdir /w /w/sheets.fods
@@ -27,4 +29,4 @@ done
 python3 drop_fix.py drop.pptx drop.xlsx
 cp drop.docx drop.xlsx drop.pptx ../../../../site/samples/fixtures/
 rm -rf profile
-ls -la invoice.docx invoice.xlsx rich.* sanitize.* sheets.xlsx sheets.ods drop.*
+ls -la invoice.docx invoice.xlsx rich.* sanitize.* sheets.xlsx sheets.ods drop.* placeholder.*

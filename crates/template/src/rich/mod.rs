@@ -7,15 +7,19 @@
 //! finds the markers in each part and rewrites the enclosing run, paragraph or
 //! cell, adding media, chart parts, relationships and content types.
 
+mod barcode;
 mod chart;
 mod docx;
 pub(crate) mod drop;
+mod font;
 mod html;
 mod media;
 mod odf;
 mod pkg;
+mod placeholder;
 mod pptx;
 pub(crate) mod shift;
+mod svg;
 mod xlsx;
 
 use std::collections::HashMap;
@@ -23,7 +27,8 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use minijinja::value::{Kwargs, Object, ObjectRepr, Rest, Value};
+use minijinja::value::{Kwargs, Object, ObjectRepr, Rest, Value, ValueKind};
+
 use minijinja::{Environment, Error, ErrorKind, State, UndefinedBehavior};
 
 use crate::filters::xml_illegal;
@@ -32,7 +37,8 @@ use crate::xml::{self, Elem, Node, Text};
 use crate::{Format, Location, TemplateError};
 
 pub use chart::Chart;
-pub use media::Media;
+pub use media::{Fit, Media};
+pub(crate) use placeholder::is_placeholder_tag;
 
 /// Opens a marker; the digits of the table index follow, then [`MARK_CLOSE`].
 const MARK_OPEN: char = '\u{1}';
@@ -73,6 +79,44 @@ pub struct Picture {
     pub media: Arc<Media>,
     pub width_pt: f64,
     pub height_pt: f64,
+    /// How the image sits in a frame: asked for, or the place's default.
+    pub fit: Option<Fit>,
+    /// Whether the filter was given a size, which a placeholder refuses.
+    pub sized: bool,
+}
+
+/// What a colour applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The printed text; in a sheet, its cell.
+    Text,
+    Paragraph,
+    Cell,
+    Row,
+    Shape,
+}
+
+impl Scope {
+    fn parse(name: &str) -> Option<Scope> {
+        Some(match name {
+            "text" => Scope::Text,
+            "paragraph" => Scope::Paragraph,
+            "cell" => Scope::Cell,
+            "row" => Scope::Row,
+            "shape" => Scope::Shape,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Scope::Text => "text",
+            Scope::Paragraph => "paragraph",
+            Scope::Cell => "cell",
+            Scope::Row => "row",
+            Scope::Shape => "shape",
+        }
+    }
 }
 
 /// A checked value waiting for its place in the document.
@@ -88,6 +132,7 @@ pub enum Rich {
         /// `RRGGBB`.
         color: Option<String>,
         background: Option<String>,
+        scope: Scope,
     },
     Html(Vec<html::Block>),
     Chart(Chart),
@@ -160,7 +205,7 @@ impl Table {
         if let Some(found) = inner.media.get(&media.hash) {
             return Ok(found.clone());
         }
-        inner.media_bytes += media.bytes.len() as u64;
+        inner.media_bytes += media.stored_bytes();
         if inner.media_bytes > MAX_TOTAL_BYTES {
             return Err(format!(
                 "the images exceed the package limit of {MAX_TOTAL_BYTES} bytes"
@@ -507,6 +552,12 @@ pub fn apply(
         }
         // First, so that the other values are placed in what is left.
         drop::apply_part(format, &mut pkg, &items, &name, &mut nodes, &mut leftovers)?;
+        // Ids the placeholders gave out must be seen by what follows.
+        let src = if placeholder::rewrite(&mut pkg, format, &items, &name, &src, &mut nodes)? {
+            xml::to_xml(&nodes)
+        } else {
+            src
+        };
         match format {
             Format::Docx => docx::rewrite(&mut pkg, &items, &name, &src, &mut nodes)?,
             Format::Pptx => pptx::rewrite(&mut pkg, &items, &name, &src, &mut nodes)?,
@@ -567,6 +618,8 @@ fn register_picture(
     filter: &str,
     media: Media,
     size: (f64, f64),
+    fit: Option<Fit>,
+    sized: bool,
 ) -> Result<Value, Error> {
     let media = shared_table(state)
         .intern(media)
@@ -578,8 +631,37 @@ fn register_picture(
             media,
             width_pt: size.0,
             height_pt: size.1,
+            fit,
+            sized,
         }),
     )
+}
+
+fn fit_kw(filter: &str, kwargs: &Kwargs) -> Result<Option<Fit>, Error> {
+    let value: Option<Value> = kwargs.get("fit").map_err(|e| fail(filter, e))?;
+    match value {
+        Some(v) if !v.is_none() => v
+            .as_str()
+            .and_then(Fit::parse)
+            .map(Some)
+            .ok_or_else(|| fail(filter, "fit is contain, cover, fill, width or stretch")),
+        _ => Ok(None),
+    }
+}
+
+fn hex_kw(filter: &str, kwargs: &Kwargs, name: &str) -> Result<Option<String>, Error> {
+    let value: Option<Value> = kwargs.get(name).map_err(|e| fail(filter, e))?;
+    match value {
+        Some(v) if !v.is_none() => {
+            if v.is_undefined() {
+                return Err(fail(filter, format!("{name} is undefined")));
+            }
+            html::check_hex(&display(&v))
+                .map(Some)
+                .ok_or_else(|| fail(filter, format!("{name} must be written #rgb or #rrggbb")))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// A length argument in points: positive, finite and of a sane size.
@@ -624,7 +706,9 @@ fn display(value: &Value) -> String {
 fn image(state: &mut State, value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     let width = points_kw("image", &kwargs, "width")?;
     let height = points_kw("image", &kwargs, "height")?;
+    let fit = fit_kw("image", &kwargs)?;
     no_more_kwargs("image", &kwargs)?;
+    let sized = width.is_some() || height.is_some();
     if value.is_undefined() {
         return undefined(state, "image");
     }
@@ -632,30 +716,88 @@ fn image(state: &mut State, value: Value, kwargs: Kwargs) -> Result<Value, Error
     let found = media::inspect(input.bytes, input.mime.as_deref()).map_err(|e| fail("image", e))?;
     let width = width.or(input.width);
     let height = height.or(input.height);
-    let size = media::fit(found.px, width, height).map_err(|e| fail("image", e))?;
-    register_picture(state, "image", found, size)
+    let mut size = media::fit(found.px, width, height).map_err(|e| fail("image", e))?;
+    if fit == Some(Fit::Width) {
+        size.1 = size.0 / found.aspect();
+    }
+    register_picture(state, "image", found, size, fit, sized)
 }
 
-fn barcode(
+fn barcode_options(kwargs: &Kwargs) -> Result<(barcode::Options, Option<Fit>), Error> {
+    const F: &str = "barcode";
+    let mut opts = barcode::Options {
+        size: points_kw(F, kwargs, "size")?,
+        width: points_kw(F, kwargs, "width")?,
+        height: points_kw(F, kwargs, "height")?,
+        font_size: points_kw(F, kwargs, "font_size")?,
+        color: hex_kw(F, kwargs, "color")?,
+        ..barcode::Options::default()
+    };
+    let text: Option<Value> = kwargs.get("text").map_err(|e| fail(F, e))?;
+    if let Some(text) = text {
+        opts.text = match text.kind() {
+            ValueKind::Bool | ValueKind::None => text.is_true(),
+            _ => return Err(fail(F, "text is true or false")),
+        };
+    }
+    let background: Option<Value> = kwargs.get("background").map_err(|e| fail(F, e))?;
+    match background {
+        Some(v) if v.as_str() == Some("transparent") => opts.transparent = true,
+        Some(v) if !v.is_none() => {
+            opts.background = Some(html::check_hex(&display(&v)).ok_or_else(|| {
+                fail(
+                    F,
+                    "background must be written #rgb or #rrggbb, or be transparent",
+                )
+            })?);
+        }
+        _ => {}
+    }
+    let whole = |name: &str, max: i64| -> Result<Option<u32>, Error> {
+        let v: Option<Value> = kwargs.get(name).map_err(|e| fail(F, e))?;
+        match v {
+            Some(v) if !v.is_none() => v
+                .is_integer()
+                .then(|| i64::try_from(v.clone()).ok())
+                .flatten()
+                .filter(|n| (0..=max).contains(n))
+                .map(|n| Some(n as u32))
+                .ok_or_else(|| fail(F, format!("{name} must be a whole number from 0 to {max}"))),
+            _ => Ok(None),
+        }
+    };
+    opts.quiet_zone = whole("quiet_zone", i64::from(barcode::MAX_QUIET))?;
+    opts.rotate = whole("rotate", 270)?.unwrap_or(0);
+    if !opts.rotate.is_multiple_of(90) {
+        return Err(fail(F, "rotate is 0, 90, 180 or 270"));
+    }
+    let ec: Option<Value> = kwargs.get("ec").map_err(|e| fail(F, e))?;
+    opts.ec = ec.filter(|v| !v.is_none()).map(|v| display(&v));
+    let fit = fit_kw(F, kwargs)?;
+    Ok((opts, fit))
+}
+
+fn barcode_filter(
     state: &mut State,
     value: Value,
     kind: Option<Value>,
     kwargs: Kwargs,
 ) -> Result<Value, Error> {
-    let size = points_kw("barcode", &kwargs, "size")?;
+    let (opts, fit) = barcode_options(&kwargs)?;
     no_more_kwargs("barcode", &kwargs)?;
     let kind = kind.as_ref().and_then(|k| k.as_str()).ok_or_else(|| {
         fail(
             "barcode",
-            "name the symbology: qr, code128, code39, ean13 or ean8",
+            format!("name the symbology: {}", barcode::SYMBOLOGIES),
         )
     })?;
     if value.is_undefined() {
         return undefined(state, "barcode");
     }
+    let sized = opts.size.is_some() || opts.width.is_some() || opts.height.is_some();
     let (found, size) =
-        media::barcode(kind, &display(&value), size).map_err(|e| fail("barcode", e))?;
-    register_picture(state, "barcode", found, size)
+        barcode::barcode(kind, &display(&value), &opts).map_err(|e| fail("barcode", e))?;
+    register_picture(state, "barcode", found, size, fit, sized)
 }
 
 fn link(state: &mut State, value: Value, text: Option<Value>) -> Result<Value, Error> {
@@ -671,13 +813,22 @@ fn link(state: &mut State, value: Value, text: Option<Value>) -> Result<Value, E
 }
 
 fn color(
+    format: Format,
     state: &mut State,
     value: Value,
     color: Option<Value>,
     kwargs: Kwargs,
 ) -> Result<Value, Error> {
     let background: Option<Value> = kwargs.get("background").map_err(|e| fail("color", e))?;
+    let scope: Option<Value> = kwargs.get("scope").map_err(|e| fail("color", e))?;
     no_more_kwargs("color", &kwargs)?;
+    let scope = match scope {
+        Some(v) if !v.is_none() => v
+            .as_str()
+            .and_then(Scope::parse)
+            .ok_or_else(|| fail("color", "scope is text, paragraph, cell, row or shape"))?,
+        _ => Scope::Text,
+    };
     let hex = |v: Option<Value>| -> Result<Option<String>, Error> {
         match v {
             Some(v) if !v.is_none() => {
@@ -696,6 +847,7 @@ fn color(
     if color.is_none() && background.is_none() {
         return Err(fail("color", "give a colour or background="));
     }
+    check_scope(format, scope, background.is_some()).map_err(|e| fail("color", e))?;
     if value.is_undefined() {
         return undefined(state, "color");
     }
@@ -703,8 +855,32 @@ fn color(
         text: display(&value),
         color,
         background,
+        scope,
     };
     register(state, "color", rich)
+}
+
+/// Refuses a scope the format has no way to express.
+fn check_scope(format: Format, scope: Scope, background: bool) -> Result<(), String> {
+    let upper = format.extension().to_ascii_uppercase();
+    let ok = match format {
+        Format::Docx | Format::Odt => scope != Scope::Shape,
+        Format::Xlsx | Format::Ods => matches!(scope, Scope::Text | Scope::Cell | Scope::Row),
+        Format::Pptx | Format::Odp => !(scope == Scope::Paragraph && background),
+    };
+    if ok {
+        return Ok(());
+    }
+    Err(match (format, scope) {
+        (Format::Pptx | Format::Odp, Scope::Paragraph) => {
+            format!("{upper} paragraphs have no background; use scope=\"shape\" or scope=\"text\"")
+        }
+        (_, Scope::Shape) => format!("scope=\"shape\" exists only in PPTX and ODP, not {upper}"),
+        _ => format!(
+            "{upper} has no {}s to colour; use scope=\"cell\" or scope=\"row\"",
+            scope.name()
+        ),
+    })
 }
 
 fn html_filter(state: &mut State, value: Value) -> Result<Value, Error> {
@@ -775,9 +951,14 @@ pub fn add_filters(env: &mut Environment<'static>, mode: Mode) {
         Mode::Check(format) | Mode::Render(format) => format,
     };
     env.add_filter("image", image);
-    env.add_filter("barcode", barcode);
+    env.add_filter("barcode", barcode_filter);
     env.add_filter("link", link);
-    env.add_filter("color", color);
+    env.add_filter(
+        "color",
+        move |state: &mut State, value: Value, c: Option<Value>, kwargs: Kwargs| {
+            color(format, state, value, c, kwargs)
+        },
+    );
     env.add_filter("html", html_filter);
     env.add_filter("chart", chart_filter);
     env.add_filter("shift", move |value: Value, kwargs: Kwargs| {
