@@ -7,7 +7,9 @@ PPTX or ODP whose text holds Jinja-style tags; `compile` parses it once,
 ## Tags
 
 Tags are evaluated by [minijinja](https://docs.rs/minijinja). Undefined
-names are errors, reported with the part, place and tag text.
+names are errors, reported with the part, place and tag text, unless a
+caller renders with `render_with` and `RenderOptions { undefined_as_empty:
+true }`, which prints them as nothing for that render.
 
 | Tag | Example |
 | --- | --- |
@@ -16,7 +18,12 @@ names are errors, reported with the part, place and tag text.
 | Loop | `{% for item in items %}…{% endfor %}` (`loop.index`, `loop.last`) |
 | Assign | `{% set total = items \| sum(attribute="price") %}` |
 | Settings | `{% settings lang="fr" currency="EUR" timezone="+02:00" t.hello="Bonjour" %}` |
+| Sheet loop | `{% sheet for s in sites %}` in a cell, `{{ s.name }}` as the sheet's name |
 | Comment | `{# removed from the output #}` |
+
+Settings may also be custom document properties of the same names
+(`docProps/custom.xml`, or `meta:user-defined` in ODF `meta.xml`); the tag
+wins where both set the same thing.
 
 A tag may be typed in Word with spell-check marks, different formatting or
 curly quotes: the engine joins the runs of a paragraph before reading tags,
@@ -145,7 +152,8 @@ byte-identical. Bad values are template errors, placed at their tag.
 
 ## What a loop or condition repeats
 
-There are no special tags; where the opening and closing tags sit decides:
+Apart from the sheet loop, there are no special tags; where the opening and
+closing tags sit decides:
 
 | Opening and closing tag … | Repeats |
 | --- | --- |
@@ -158,14 +166,27 @@ There are no special tags; where the opening and closing tags sit decides:
 
 `else` and `elif` follow the same rule and need a row or paragraph of their
 own; the closing tag's row or paragraph belongs to the last branch. Loops
-nest (a row loop inside a paragraph loop, an inline loop inside a row).
+nest (a row loop inside a paragraph loop, a row loop inside another row
+block, an inline loop inside a row).
 
 Sheets: a cell holding only `{{ expr }}` becomes a number or boolean cell
 when the value is one. Copied rows are renumbered; references in formulas
-move with them, a range such as `SUM(D4:D4)` grows over every copy, and
-`fullCalcOnLoad` is set so values recompute on open. Shared formulas are
-expanded. Slides: copies get their own parts, rels, ids and content types;
-the notes of the original are not shared with the copies.
+(XLSX and ODS), print areas and other defined names move with them: a
+reference into the loop a formula sits in stays in its own copy, and from
+outside a range such as `SUM(D4:D4)` grows from the first copy to the last.
+In XLSX `fullCalcOnLoad` is set and in ODS cached results are dropped, so
+values recompute on open. Shared formulas are expanded.
+
+`{% sheet for s in sites %}` in any cell repeats its whole sheet, once per
+item; the sheet's name may hold `{{ }}` expressions, and each copy's name is
+made valid (forbidden characters become `_`, at most 31 UTF-16 units) and
+unique (` (2)`, ` (3)`, without regard to case). XLSX copies get their own
+parts, rels, content types, drawings, charts, tables (renamed, new ids),
+comments and sheet-scoped defined names; calcChain is dropped and
+`docProps/app.xml` lists the new names. An empty list removes the sheet.
+
+Slides: copies get their own parts, rels, ids and content types; the notes
+of the original are not shared with the copies.
 
 ## Validation
 
@@ -178,10 +199,11 @@ sample data holds, and bad values in the sample data like any other error.
 
 ## Not supported yet
 
-- A `for` in a sheet name (sheet repetition) and a row loop nested in another
-  row block of the same sheet.
-- Re-basing ODS formulas, sheet hyperlinks, data validations and
-  conditional formatting; charts pointing at looped rows.
+- Re-basing sheet hyperlinks, data validations and conditional formatting;
+  charts pointing at looped rows; formulas on one sheet pointing at looped
+  rows on another.
+- Copying embedded objects (charts) of an ODS sheet that a sheet loop
+  repeats.
 - Named time zones (`Europe/Paris`); only fixed offsets.
 - Tags in attributes, field codes or document properties; `{% raw %}`.
 - Tags inside DOCX text boxes nested in drawings are read, but a block

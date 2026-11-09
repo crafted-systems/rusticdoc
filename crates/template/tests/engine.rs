@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use rusticdoc_template::{compile, validate, Format, Severity};
+use rusticdoc_template::{compile, validate, Format, RenderOptions, Severity};
 use serde_json::{json, Value};
 
 fn render(format: Format, bytes: &[u8], data: Value) -> Vec<u8> {
@@ -536,7 +536,7 @@ fn xlsx_substitution_and_row_loop_with_formulas() {
     };
     assert_eq!(get("A4"), "<none>");
     assert_eq!(get("A5"), "Total");
-    assert_eq!(get("D5"), "=SUM(D4:D3)");
+    assert_eq!(get("D5"), "=SUM(D3:D3)");
     assert!(
         sheet.contains("<c r=\"A6\"/>"),
         "null gives an empty cell: {sheet}"
@@ -810,4 +810,101 @@ fn validation_keeps_going_past_filters_on_missing_values() {
         .filter(|d| d.severity == Severity::Error)
         .collect();
     assert_eq!(errors.len(), 4, "{found:?}");
+}
+
+// --- Settings from document properties and per-render options -----------------
+
+/// `bytes` with one more part.
+fn with_part(bytes: &[u8], name: &str, data: &str) -> Vec<u8> {
+    let mut all = entries(bytes);
+    all.push((name.to_string(), data.as_bytes().to_vec()));
+    let refs: Vec<(&str, &[u8])> = all
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    zip(&refs)
+}
+
+const CUSTOM: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="lang"><vt:lpwstr>fr</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="currency"><vt:lpwstr>EUR</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="4" name="t.total.fr"><vt:lpwstr>Montant</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="5" name="t.total.de"><vt:lpwstr>Summe</vt:lpwstr></property></Properties>"#;
+
+#[test]
+fn settings_come_from_document_properties_and_the_tag_wins() {
+    let line = "{{ \"total\" | t }} {{ 2 | currency }}";
+    let doc = with_part(&docx(&p(line)), "docProps/custom.xml", CUSTOM);
+    let compiled = compile(Format::Docx, &doc).unwrap();
+    assert_eq!(compiled.settings().lang.as_deref(), Some("fr"));
+    let out = compiled.render(&json!({})).unwrap();
+    assert_eq!(docx_text(&out), ["Montant EUR 2.00"]);
+
+    let doc = with_part(
+        &docx(&p(&format!("{{% settings lang=\"de\" %}}{line}"))),
+        "docProps/custom.xml",
+        CUSTOM,
+    );
+    let compiled = compile(Format::Docx, &doc).unwrap();
+    assert_eq!(compiled.settings().lang.as_deref(), Some("de"));
+    assert_eq!(compiled.settings().currency.as_deref(), Some("EUR"));
+    let out = compiled.render(&json!({})).unwrap();
+    assert_eq!(docx_text(&out), ["Summe EUR 2.00"]);
+
+    let meta = r#"<?xml version="1.0" encoding="UTF-8"?><office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.3"><office:meta><meta:user-defined meta:name="timezone">+02:00</meta:user-defined><meta:user-defined meta:name="t.hello">Bonjour</meta:user-defined></office:meta></office:document-meta>"#;
+    let doc = with_part(
+        &odt(
+            "<text:p>{{ \"hello\" | t }} {{ \"2024-01-01T23:00:00Z\" | date(\"%H:%M\") }}</text:p>",
+        ),
+        "meta.xml",
+        meta,
+    );
+    let out = render(Format::Odt, &doc, json!({}));
+    assert_eq!(
+        odf_paragraphs(&part(&out, "content.xml")),
+        ["Bonjour 01:00"]
+    );
+}
+
+#[test]
+fn undefined_values_can_print_as_empty_per_render() {
+    let doc = docx(
+        &(p("Hello {{ customer.name }}!")
+            + &p("{{ missing.deep.value }}|{{ total | currency }}|{{ when | date(\"%Y\") }}|{{ n | round(2) }}|{{ n | abs }}")
+            + &p("{% for x in nothing %}x{% endfor %}{% if flag %}yes{% endif %}end")),
+    );
+    let compiled = compile(Format::Docx, &doc).unwrap();
+    let data = json!({"customer": {}});
+    let err = compiled.render(&data).unwrap_err();
+    assert!(err.message.starts_with("undefined value"), "{err}");
+    assert!(compiled
+        .render_with(&data, &RenderOptions::default())
+        .is_err());
+
+    let lenient = RenderOptions {
+        undefined_as_empty: true,
+    };
+    let out = compiled.render_with(&data, &lenient).unwrap();
+    assert_eq!(docx_text(&out), ["Hello !", "||||", "end"]);
+    // Defined values still print, through the same filters.
+    let out = compiled
+        .render_with(
+            &json!({"customer": {"name": "Ada"}, "total": 5, "when": "2024-03-05", "n": -1.234, "flag": true}),
+            &lenient,
+        )
+        .unwrap();
+    assert_eq!(
+        docx_text(&out),
+        ["Hello Ada!", "|5.00|2024|-1.23|1.234", "yesend"]
+    );
+
+    // A sheet cell holding only an undefined value is left empty, not given
+    // an empty string.
+    let sheet = xlsx(&[row(1, &[cell("A1", "inlineStr", "{{ qty }}")])], &[]);
+    let out = compile(Format::Xlsx, &sheet)
+        .unwrap()
+        .render_with(&json!({}), &lenient)
+        .unwrap();
+    assert!(
+        part(&out, "xl/worksheets/sheet1.xml").contains("<c r=\"A1\"/>"),
+        "{}",
+        part(&out, "xl/worksheets/sheet1.xml")
+    );
 }

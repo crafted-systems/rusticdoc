@@ -1,11 +1,12 @@
 //! Spreadsheet specifics: shared strings, and renumbering the rows a loop
 //! copied so that cell references and formulas keep pointing at the right
-//! cells.
+//! cells, in XLSX and in ODS.
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use crate::program::RowBlock;
-use crate::xml::{self, Elem, Node, Text};
+use crate::xml::{self, elem_at, elem_at_mut, Elem, Node, Path, Text};
 
 /// The text of each `si` in `sharedStrings.xml`, rich runs joined.
 pub fn shared_strings(src: &str) -> Vec<String> {
@@ -97,6 +98,12 @@ pub enum RefPos {
 /// number, the row, whether each is absolute and the reference's position,
 /// and returns the new pair. Sheet-qualified references and string
 /// literals are left alone.
+///
+/// A range the callback turns around, which happens when every row it
+/// covered was removed, becomes the one row its end landed on: the row
+/// before the removed ones. Left reversed it would reach down to the row
+/// after them, often the formula's own, and Excel would report a circular
+/// reference.
 pub fn rewrite_refs(
     formula: &str,
     mut f: impl FnMut(u32, bool, u32, bool, RefPos) -> (u32, u32),
@@ -105,6 +112,8 @@ pub fn rewrite_refs(
     let mut out = String::with_capacity(formula.len());
     let mut i = 0;
     let mut in_string = false;
+    // Where the last range start's row sits in `out`, and the row.
+    let mut start: Option<(std::ops::Range<usize>, u32)> = None;
     while i < b.len() {
         let c = b[i];
         if c == b'"' {
@@ -150,113 +159,313 @@ pub fn rewrite_refs(
                     if abs_row {
                         out.push('$');
                     }
+                    let at = out.len();
                     out.push_str(&nr.to_string());
+                    match pos {
+                        RefPos::RangeStart => start = Some((at..out.len(), nr)),
+                        RefPos::RangeEnd => {
+                            if let Some((span, first)) = start.take() {
+                                if nr < first {
+                                    out.replace_range(span, &nr.to_string());
+                                }
+                            }
+                        }
+                        RefPos::Single => {}
+                    }
                     i = j;
                     continue;
                 }
             }
         }
-        out.push(c as char);
-        i += 1;
+        // Copy whole characters: a sheet name or a string may hold any.
+        let ch = formula[i..].chars().next().unwrap_or('\u{fffd}');
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }
 
-#[derive(Clone, Copy, Default)]
-struct BlockState {
-    iters: i64,
-    last_r: u32,
-    base: i64,
+/// One pass through rows: the whole sheet, or one iteration of a block.
+#[derive(Debug)]
+struct Iteration {
+    parent: Option<usize>,
+    /// Added to a template row number at the start of this pass.
+    offset: i64,
+    /// The blocks directly inside, in row order, each with its iterations.
+    children: Vec<Instance>,
+}
+
+/// One block as it came out inside one pass of its parent.
+#[derive(Debug)]
+struct Instance {
+    block: usize,
+    iterations: Vec<usize>,
+    /// Rows the block added, or removed when negative, against the template.
     expansion: i64,
 }
 
-struct Layout<'a> {
-    blocks: &'a [RowBlock],
-    states: Vec<BlockState>,
+/// Where the rendered rows of a sheet go and how references move with them.
+///
+/// Blocks form a tree: a row block inside another repeats once per
+/// iteration of the outer one. The rendered rows still carry their template
+/// row numbers, so each block's run of rows is cut into iterations where a
+/// row number goes back up, and the tree of passes that results says where
+/// every row lands and where every template row went.
+pub struct Layout {
+    blocks: Vec<RowBlock>,
+    /// The blocks directly inside each block; the last entry is the sheet's.
+    kids: Vec<Vec<usize>>,
+    iterations: Vec<Iteration>,
+    /// Per rendered row: its new number and the innermost pass it is in.
+    rows: Vec<(i64, usize)>,
 }
 
-impl Layout<'_> {
-    fn len(&self, k: usize) -> i64 {
-        (self.blocks[k].end - self.blocks[k].start + 1) as i64
-    }
-
-    /// Shift for a reference from outside a block: the blocks that end at
-    /// or above the row move it. A reference to a block's last row lands on
-    /// its last copy; the start of a range stays on the first copy, so
-    /// `SUM(B4:B5)` and `SUM(B4:B4)` grow over every copy.
-    fn outside(&self, row: u32, pos: RefPos) -> i64 {
-        self.blocks
-            .iter()
-            .zip(&self.states)
-            .filter(|(b, _)| {
-                if pos == RefPos::RangeStart {
-                    b.end < row
-                } else {
-                    b.end <= row
-                }
-            })
-            .map(|(_, s)| s.expansion)
-            .sum()
-    }
-
-    fn shift(&self, row: u32, from: Option<(usize, i64)>, pos: RefPos) -> u32 {
-        let d = match from {
-            Some((k, delta)) if row >= self.blocks[k].start && row <= self.blocks[k].end => delta,
-            _ => self.outside(row, pos),
+impl Layout {
+    /// `blocks` belong to one sheet, sorted by start and then by reverse end,
+    /// as `place_blocks` leaves them. `rows` holds the template row number of
+    /// every rendered row, in order.
+    pub fn new(blocks: &[RowBlock], rows: &[u32]) -> Self {
+        let mut kids = vec![Vec::new(); blocks.len() + 1];
+        let mut open: Vec<usize> = Vec::new();
+        for (i, b) in blocks.iter().enumerate() {
+            while open
+                .last()
+                .is_some_and(|&o| !(blocks[o].start <= b.start && b.end <= blocks[o].end))
+            {
+                open.pop();
+            }
+            kids[open.last().copied().unwrap_or(blocks.len())].push(i);
+            open.push(i);
+        }
+        let mut layout = Layout {
+            blocks: blocks.to_vec(),
+            kids,
+            iterations: Vec::new(),
+            rows: vec![(0, 0); rows.len()],
         };
-        (row as i64 + d).max(1) as u32
+        layout.pass(rows, None, 0..rows.len(), 0, None);
+        layout
+    }
+
+    fn len(&self, block: usize) -> i64 {
+        (self.blocks[block].end - self.blocks[block].start + 1) as i64
+    }
+
+    fn holds(&self, block: usize, row: u32) -> bool {
+        self.blocks[block].start <= row && row <= self.blocks[block].end
+    }
+
+    /// Lays out the rows of one pass and returns its id and the offset in
+    /// force after it.
+    fn pass(
+        &mut self,
+        t: &[u32],
+        block: Option<usize>,
+        range: Range<usize>,
+        mut offset: i64,
+        parent: Option<usize>,
+    ) -> (usize, i64) {
+        let id = self.iterations.len();
+        self.iterations.push(Iteration {
+            parent,
+            offset,
+            children: Vec::new(),
+        });
+        let kids = self.kids[block.unwrap_or(self.blocks.len())].clone();
+        // A block none of whose rows came out was repeated zero times.
+        let skip = |layout: &mut Self, block: usize, offset: &mut i64| {
+            let len = layout.len(block);
+            layout.iterations[id].children.push(Instance {
+                block,
+                iterations: Vec::new(),
+                expansion: -len,
+            });
+            *offset -= len;
+        };
+        let mut k = 0;
+        let mut i = range.start;
+        while i < range.end {
+            let r = t[i];
+            while k < kids.len() && self.blocks[kids[k]].end < r {
+                skip(self, kids[k], &mut offset);
+                k += 1;
+            }
+            if k < kids.len() && self.blocks[kids[k]].start <= r {
+                let c = kids[k];
+                let mut j = i;
+                while j < range.end && self.holds(c, t[j]) {
+                    j += 1;
+                }
+                let len = self.len(c);
+                let mut at = offset;
+                let mut iterations = Vec::new();
+                for run in self.split(t, c, i..j) {
+                    let (it, end) = self.pass(t, Some(c), run, at, Some(id));
+                    iterations.push(it);
+                    at = end + len;
+                }
+                let after = at - len;
+                self.iterations[id].children.push(Instance {
+                    block: c,
+                    iterations,
+                    expansion: after - offset,
+                });
+                offset = after;
+                k += 1;
+                i = j;
+            } else {
+                self.rows[i] = (r as i64 + offset, id);
+                i += 1;
+            }
+        }
+        while k < kids.len() {
+            skip(self, kids[k], &mut offset);
+            k += 1;
+        }
+        (id, offset)
+    }
+
+    /// Cuts a block's run of rows into iterations: a new one starts where a
+    /// row number does not go forward. Rows of a block nested inside count
+    /// as that block's first row, so its repeats do not start iterations.
+    fn split(&self, t: &[u32], block: usize, range: Range<usize>) -> Vec<Range<usize>> {
+        let key = |r: u32| {
+            self.kids[block]
+                .iter()
+                .find(|&&g| self.holds(g, r))
+                .map_or((r, false), |&g| (self.blocks[g].start, true))
+        };
+        let mut out = Vec::new();
+        let mut start = range.start;
+        let mut last: Option<(u32, bool)> = None;
+        for i in range.clone() {
+            let k = key(t[i]);
+            if let Some(l) = last {
+                if k.0 < l.0 || (k.0 == l.0 && !k.1) {
+                    out.push(start..i);
+                    start = i;
+                }
+            }
+            last = Some(k);
+        }
+        if !range.is_empty() {
+            out.push(start..range.end);
+        }
+        out
+    }
+
+    /// Whether no row moved, so nothing needs rewriting.
+    pub fn is_identity(&self) -> bool {
+        self.blocks.is_empty()
+    }
+
+    /// The new number of rendered row `i`.
+    pub fn row(&self, i: usize) -> u32 {
+        self.rows[i].0.max(1) as u32
+    }
+
+    /// The offset at template row `row` within a pass: what the blocks
+    /// before it added. A range that starts on a block's last row stays
+    /// before the block's growth; anything else that reaches the last row
+    /// moves past it.
+    fn offset_at(&self, it: usize, row: u32, pos: RefPos) -> i64 {
+        let pass = &self.iterations[it];
+        pass.offset
+            + pass
+                .children
+                .iter()
+                .filter(|c| {
+                    let end = self.blocks[c.block].end;
+                    end < row || (pos != RefPos::RangeStart && end <= row)
+                })
+                .map(|c| c.expansion)
+                .sum::<i64>()
+    }
+
+    /// Where a reference to template row `row` lands, seen from rendered row
+    /// `from`, or from the sheet as a whole. A reference into a block the
+    /// formula sits in stays in the formula's own iteration. From outside a
+    /// block, the start of a range goes to the first iteration and its end to
+    /// the last, so `SUM(B4:B4)` grows over every copy; a single reference
+    /// goes to the last iteration when it names the block's last row, and to
+    /// the first otherwise.
+    pub fn shift(&self, from: Option<usize>, row: u32, pos: RefPos) -> u32 {
+        let mut chain = Vec::new();
+        let mut at = from.map(|i| self.rows[i].1);
+        while let Some(it) = at {
+            chain.push(it);
+            at = self.iterations[it].parent;
+        }
+        self.resolve(0, &chain, row, pos)
+    }
+
+    fn resolve(&self, mut it: usize, chain: &[usize], row: u32, pos: RefPos) -> u32 {
+        loop {
+            let found = self.iterations[it]
+                .children
+                .iter()
+                .find(|c| self.holds(c.block, row) && !c.iterations.is_empty());
+            let Some(c) = found else {
+                return (row as i64 + self.offset_at(it, row, pos)).max(1) as u32;
+            };
+            it = match c.iterations.iter().find(|j| chain.contains(j)) {
+                Some(&j) => j,
+                None if pos == RefPos::RangeEnd
+                    || (pos == RefPos::Single && row == self.blocks[c.block].end) =>
+                {
+                    c.iterations[c.iterations.len() - 1]
+                }
+                None => c.iterations[0],
+            };
+        }
+    }
+
+    /// Where a range of rows that moves as one, such as a merged cell, lands:
+    /// once per iteration of the innermost block holding all of it, and not
+    /// at all when that block came out empty.
+    pub fn copies(&self, first: u32, last: u32) -> Vec<(u32, u32)> {
+        let mut out = Vec::new();
+        self.copies_in(0, first, last, &mut out);
+        out
+    }
+
+    fn copies_in(&self, it: usize, first: u32, last: u32, out: &mut Vec<(u32, u32)>) {
+        let inside = self.iterations[it]
+            .children
+            .iter()
+            .find(|c| self.holds(c.block, first) && self.holds(c.block, last));
+        match inside {
+            Some(c) => {
+                for &j in &c.iterations {
+                    self.copies_in(j, first, last, out);
+                }
+            }
+            None => out.push((
+                self.resolve(it, &[], first, RefPos::RangeStart),
+                self.resolve(it, &[], last, RefPos::RangeEnd),
+            )),
+        }
     }
 }
 
 /// Renumbers the rows of a rendered sheet, re-bases formulas and merged
-/// ranges, and drops cached formula values so they are recomputed.
-pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<String, String> {
+/// ranges, and drops cached formula values so they are recomputed. Returns
+/// the layout too, for references from outside the sheet such as its print
+/// area.
+pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<(String, Layout), String> {
     let mut nodes = xml::parse(src)?;
     let root = xml::root_mut(&mut nodes).ok_or("sheet has no root element")?;
     let Some(data) = root.find_mut("sheetData") else {
-        return Ok(src.to_string());
+        return Ok((src.to_string(), Layout::new(&[], &[])));
     };
 
-    // Pass 1: the shift of every row and the iterations of every block.
-    let mut layout = Layout {
-        blocks,
-        states: vec![BlockState::default(); blocks.len()],
-    };
-    let mut rows: Vec<(i64, Option<(usize, i64)>)> = Vec::new();
-    let mut k = 0;
-    let mut base = 0i64;
-    let finish = |layout: &mut Layout, k: usize, base: &mut i64| {
-        let len = layout.len(k);
-        let st = &mut layout.states[k];
-        st.base = *base;
-        st.expansion = if st.iters > 0 {
-            (st.iters - 1) * len
-        } else {
-            -len
-        };
-        *base += st.expansion;
-    };
+    // Pass 1: the template row of every rendered row, and the masters of
+    // shared formulas.
+    let mut template_rows = Vec::new();
     let mut shared: HashMap<String, (u32, u32, String)> = HashMap::new();
     for row in data.children.iter() {
         let Node::Elem(row) = row else { continue };
-        let r: u32 = row.attr("r").and_then(|r| r.parse().ok()).unwrap_or(0);
-        while k < blocks.len() && r > blocks[k].end {
-            finish(&mut layout, k, &mut base);
-            k += 1;
-        }
-        let info = if k < blocks.len() && r >= blocks[k].start {
-            let len = layout.len(k);
-            let st = &mut layout.states[k];
-            if st.iters == 0 || r <= st.last_r {
-                st.iters += 1;
-            }
-            st.last_r = r;
-            let delta = base + (st.iters - 1) * len;
-            (delta, Some((k, delta)))
-        } else {
-            (base, None)
-        };
-        rows.push(info);
+        template_rows.push(row.attr("r").and_then(|r| r.parse().ok()).unwrap_or(0));
         for c in row.children_named("c") {
             let Some(f) = c.child("f") else { continue };
             if f.attr("t").as_deref() != Some("shared") {
@@ -271,20 +480,17 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<String, String> {
             }
         }
     }
-    while k < blocks.len() {
-        finish(&mut layout, k, &mut base);
-        k += 1;
-    }
+    let layout = Layout::new(blocks, &template_rows);
 
     // Pass 2: rewrite rows, cells and formulas.
     let mut max_row = 0u32;
     let mut ri = 0;
     for row in data.children.iter_mut() {
         let Node::Elem(row) = row else { continue };
-        let (delta, from) = rows[ri];
+        let here = ri;
         ri += 1;
-        let r: u32 = row.attr("r").and_then(|r| r.parse().ok()).unwrap_or(0);
-        let new_r = (r as i64 + delta).max(1) as u32;
+        let r = template_rows[here];
+        let new_r = layout.row(here);
         max_row = max_row.max(new_r);
         row.set_attr("r", &new_r.to_string());
         for cell in row.children.iter_mut() {
@@ -322,7 +528,9 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<String, String> {
                 f.remove_attr("ref");
                 f.remove_attr("si");
             }
-            let text = rewrite_refs(&text, |c, _, r, _, pos| (c, layout.shift(r, from, pos)));
+            let text = rewrite_refs(&text, |c, _, r, _, pos| {
+                (c, layout.shift(Some(here), r, pos))
+            });
             f.make_open();
             f.children = vec![Node::Text(Text {
                 raw: xml::escape_text(&text),
@@ -351,20 +559,8 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<String, String> {
             let (Some((ca, ra)), Some((cb, rb))) = (split_ref(a), split_ref(b)) else {
                 continue;
             };
-            let inside = blocks.iter().position(|bl| ra >= bl.start && rb <= bl.end);
-            match inside {
-                Some(k) => {
-                    let st = layout.states[k];
-                    for i in 0..st.iters {
-                        let d = st.base + i * layout.len(k);
-                        out.push(format!("{ca}{}:{cb}{}", ra as i64 + d, rb as i64 + d));
-                    }
-                }
-                None => out.push(format!(
-                    "{ca}{}:{cb}{}",
-                    layout.shift(ra, None, RefPos::RangeStart),
-                    layout.shift(rb, None, RefPos::RangeEnd)
-                )),
+            for (na, nb) in layout.copies(ra, rb) {
+                out.push(format!("{ca}{na}:{cb}{nb}"));
             }
         }
         merges.children = out
@@ -373,7 +569,33 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<String, String> {
             .collect();
         merges.set_attr("count", &out.len().to_string());
     }
-    Ok(xml::to_xml(&nodes))
+    Ok((xml::to_xml(&nodes), layout))
+}
+
+/// Re-bases the sheet references in a defined name such as a print area
+/// (`'Sales'!$A$1:$E$6`), as seen from outside the sheet's rows. `layout`
+/// gives the layout of the sheet a reference names, if it has one.
+pub fn rebase_named<'a>(text: &str, layout: impl Fn(&str) -> Option<&'a Layout>) -> String {
+    static QUALIFIED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"('(?:[^']|'')+'|[A-Za-z0-9_.]+)!(\$?[A-Z]{1,3}\$?[0-9]+(?::\$?[A-Z]{1,3}\$?[0-9]+)?)",
+        )
+        .expect("valid")
+    });
+    QUALIFIED
+        .replace_all(text, |c: &regex::Captures| {
+            let name = c[1]
+                .strip_prefix('\'')
+                .and_then(|n| n.strip_suffix('\''))
+                .map(|n| n.replace("''", "'"))
+                .unwrap_or_else(|| c[1].to_string());
+            let Some(layout) = layout(&name).filter(|l| !l.is_identity()) else {
+                return c[0].to_string();
+            };
+            let moved = rewrite_refs(&c[2], |col, _, r, _, pos| (col, layout.shift(None, r, pos)));
+            format!("{}!{moved}", &c[1])
+        })
+        .into_owned()
 }
 
 /// Asks Excel and LibreOffice to recompute every formula on load.
@@ -399,9 +621,339 @@ pub fn force_recalc(src: &str) -> String {
     xml::to_xml(&nodes)
 }
 
+// ---------------------------------------------------------------------------
+// ODS. A sheet is a `table:table` under `office:spreadsheet`, and its rows
+// carry no numbers: a row's number is its position, with a row that stands
+// for several (`table:number-rows-repeated`) taking several positions.
+
+/// Marks a sheet whose rows were numbered for re-basing, with its child
+/// index. Removed again after rendering.
+const ODS_SHEET_ATTR: &str = "rusticdoc-sheet";
+/// Marks a row with its first position in the template.
+const ODS_ROW_ATTR: &str = "rusticdoc-row";
+
+/// The attributes that hold a formula cell's cached result.
+const ODS_CACHED: [&str; 8] = [
+    "office:value-type",
+    "office:value",
+    "office:date-value",
+    "office:time-value",
+    "office:boolean-value",
+    "office:string-value",
+    "office:currency",
+    "calcext:value-type",
+];
+
+/// Elements that group rows without being rows.
+const ODS_ROW_GROUPS: [&str; 3] = [
+    "table:table-header-rows",
+    "table:table-rows",
+    "table:table-row-group",
+];
+
+/// The sheet holding the node at `path`: its child index under
+/// `office:spreadsheet`, and its path.
+pub fn ods_sheet_of(nodes: &[Node], path: &[usize]) -> Option<(usize, Path)> {
+    for k in 2..=path.len() {
+        let e = elem_at(nodes, &path[..k])?;
+        if e.name == "table:table" {
+            let parent = elem_at(nodes, &path[..k - 1])?;
+            return (parent.name == "office:spreadsheet")
+                .then(|| (path[k - 1], path[..k].to_vec()));
+        }
+    }
+    None
+}
+
+/// Every row of a sheet in order, as a path from the sheet and the number
+/// of positions it takes. Rows of a table nested in a cell are not listed.
+fn ods_rows(table: &Elem) -> Vec<(Path, u32)> {
+    fn walk(e: &Elem, prefix: &mut Path, out: &mut Vec<(Path, u32)>) {
+        for (i, n) in e.children.iter().enumerate() {
+            let Node::Elem(c) = n else { continue };
+            prefix.push(i);
+            if c.name == "table:table-row" {
+                let count = c
+                    .attr("table:number-rows-repeated")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(1)
+                    .max(1);
+                out.push((prefix.clone(), count));
+            } else if ODS_ROW_GROUPS.contains(&c.name.as_str()) {
+                walk(c, prefix, out);
+            }
+            prefix.pop();
+        }
+    }
+    let mut out = Vec::new();
+    walk(table, &mut Vec::new(), &mut out);
+    out
+}
+
+/// The first position (from 1) of the row at `row` in the sheet at `table`,
+/// and how many positions it takes.
+pub fn ods_row_span(nodes: &[Node], table: &[usize], row: &[usize]) -> Option<(u32, u32)> {
+    let rel = row.strip_prefix(table)?;
+    let mut at = 1u32;
+    for (path, count) in ods_rows(elem_at(nodes, table)?) {
+        if path == rel {
+            return Some((at, count));
+        }
+        at = at.saturating_add(count);
+    }
+    None
+}
+
+/// Writes each row's template position on the rows of the sheets that have
+/// row blocks, so that re-basing can tell copies and iterations apart after
+/// rendering. [`rebase_ods`] removes the marks.
+pub fn annotate_ods(nodes: &mut [Node], blocks: &[RowBlock]) {
+    let Some(sheet_list) = xml::root_mut(nodes).and_then(|r| r.find_mut("office:spreadsheet"))
+    else {
+        return;
+    };
+    let mut sheets: Vec<usize> = blocks.iter().map(|b| b.sheet).collect();
+    sheets.dedup();
+    for k in sheets {
+        let Some(Node::Elem(table)) = sheet_list.children.get_mut(k) else {
+            continue;
+        };
+        table.set_attr(ODS_SHEET_ATTR, &k.to_string());
+        let mut at = 1u32;
+        for (path, count) in ods_rows(table) {
+            if let Some(row) = elem_at_mut(&mut table.children, &path) {
+                row.set_attr(ODS_ROW_ATTR, &at.to_string());
+            }
+            at = at.saturating_add(count);
+        }
+    }
+}
+
+/// Whether rendered `content.xml` holds sheets marked by [`annotate_ods`].
+pub fn ods_marked(content: &str) -> bool {
+    content.contains(ODS_SHEET_ATTR)
+}
+
+/// Re-bases the formulas of a rendered sheet marked by [`annotate_ods`] and
+/// removes the marks. `blocks` are every row block of the part; the sheet
+/// takes those of its own template sheet, so each copy a sheet loop made is
+/// re-based on its own.
+pub fn rebase_ods(table: &mut Elem, blocks: &[RowBlock]) {
+    let Some(k) = table
+        .attr(ODS_SHEET_ATTR)
+        .and_then(|v| v.parse::<usize>().ok())
+    else {
+        return;
+    };
+    table.remove_attr(ODS_SHEET_ATTR);
+    let mine: Vec<RowBlock> = blocks.iter().copied().filter(|b| b.sheet == k).collect();
+    let rows = ods_rows(table);
+    let template: Vec<u32> = rows
+        .iter()
+        .map(|(path, _)| {
+            elem_at(&table.children, path)
+                .and_then(|r| r.attr(ODS_ROW_ATTR))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+        })
+        .collect();
+    let layout = Layout::new(&mine, &template);
+    for (i, (path, _)) in rows.iter().enumerate() {
+        let Some(row) = elem_at_mut(&mut table.children, path) else {
+            continue;
+        };
+        row.remove_attr(ODS_ROW_ATTR);
+        for cell in row.children.iter_mut() {
+            let Node::Elem(c) = cell else { continue };
+            let Some(formula) = c.attr("table:formula") else {
+                continue;
+            };
+            let moved = rewrite_odf_refs(&formula, |col, _, r, _, pos| {
+                (col, layout.shift(Some(i), r, pos))
+            });
+            if moved != formula {
+                c.set_attr("table:formula", &moved);
+            }
+            // The cached result is the template's; without one LibreOffice
+            // computes the cell on load, as XLSX cells lose theirs.
+            for attr in ODS_CACHED {
+                c.remove_attr(attr);
+            }
+            c.children
+                .retain(|n| !matches!(n, Node::Elem(e) if e.name == "text:p"));
+        }
+    }
+    // The print ranges name the sheet's own cells, so they grow with its
+    // loops as a range in a formula outside them does.
+    if let Some(ranges) = table.attr("table:print-ranges") {
+        let moved = rewrite_odf_ranges(&ranges, |col, _, r, _, pos| {
+            (col, layout.shift(None, r, pos))
+        });
+        if moved != ranges {
+            table.set_attr("table:print-ranges", &moved);
+        }
+    }
+}
+
+/// Rewrites a space-separated list of ODF cell range addresses such as
+/// `'Sales'.A1:'Sales'.E6`, whatever sheet each names.
+fn rewrite_odf_ranges(
+    list: &str,
+    mut f: impl FnMut(u32, bool, u32, bool, RefPos) -> (u32, u32),
+) -> String {
+    let mut out = Vec::new();
+    for range in split_outside_quotes(list, ' ') {
+        let ends: Vec<(String, &str)> = split_outside_quotes(range, ':')
+            .into_iter()
+            .map(|end| {
+                let dot = split_outside_quotes(end, '.');
+                match dot.as_slice() {
+                    [sheet @ .., cell] if !sheet.is_empty() => {
+                        (format!("{}.", sheet.join(".")), *cell)
+                    }
+                    _ => (String::new(), end),
+                }
+            })
+            .collect();
+        match move_ends(&ends, &mut f) {
+            Some(moved) => out.push(moved.join(":")),
+            None => out.push(range.to_string()),
+        }
+    }
+    out.join(" ")
+}
+
+/// Moves the ends of a cell or a range, each a prefix such as a sheet and a
+/// cell such as `$B$2`, and keeps a range the right way round as
+/// [`rewrite_refs`] does. `None` when an end is not a cell.
+fn move_ends(
+    ends: &[(String, &str)],
+    f: &mut impl FnMut(u32, bool, u32, bool, RefPos) -> (u32, u32),
+) -> Option<Vec<String>> {
+    let positions: &[RefPos] = match ends.len() {
+        1 => &[RefPos::Single],
+        2 => &[RefPos::RangeStart, RefPos::RangeEnd],
+        _ => return None,
+    };
+    let mut moved: Vec<(String, u32)> = Vec::new();
+    for ((prefix, cell), pos) in ends.iter().zip(positions) {
+        let (col, abs_col, row, abs_row) = parse_cell(cell)?;
+        let (nc, nr) = f(col_to_num(col), abs_col, row, abs_row, *pos);
+        moved.push((
+            format!(
+                "{prefix}{}{}{}",
+                if abs_col { "$" } else { "" },
+                num_to_col(nc),
+                if abs_row { "$" } else { "" },
+            ),
+            nr,
+        ));
+    }
+    if let [(_, first), (_, last)] = moved.as_mut_slice() {
+        if *last < *first {
+            *first = *last;
+        }
+    }
+    Some(moved.into_iter().map(|(p, r)| format!("{p}{r}")).collect())
+}
+
+/// Splits on `sep` where it is not inside single quotes.
+fn split_outside_quotes(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut quoted = false;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        if c == '\'' {
+            quoted = !quoted;
+        } else if c == sep && !quoted {
+            out.push(&s[start..i]);
+            start = i + c.len_utf8();
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// Rewrites the references of an OpenFormula expression such as
+/// `of:=SUM([.B2:.B4])`, like [`rewrite_refs`] does for A1 formulas. Only
+/// references to the formula's own sheet (`[.B2]`) move; a reference that
+/// names a sheet (`[$Other.B2]`) and string literals are left alone.
+pub fn rewrite_odf_refs(
+    formula: &str,
+    mut f: impl FnMut(u32, bool, u32, bool, RefPos) -> (u32, u32),
+) -> String {
+    let b = formula.as_bytes();
+    let mut out = String::with_capacity(formula.len());
+    let mut i = 0;
+    let mut last = 0;
+    let mut in_string = false;
+    while i < b.len() {
+        match b[i] {
+            b'"' => in_string = !in_string,
+            b'[' if !in_string => {
+                let mut j = i + 1;
+                let mut quoted = false;
+                while j < b.len() && (quoted || b[j] != b']') {
+                    if b[j] == b'\'' {
+                        quoted = !quoted;
+                    }
+                    j += 1;
+                }
+                if j < b.len() {
+                    if let Some(inner) = rewrite_odf_ref(&formula[i + 1..j], &mut f) {
+                        out.push_str(&formula[last..=i]);
+                        out.push_str(&inner);
+                        last = j;
+                    }
+                    i = j;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push_str(&formula[last..]);
+    out
+}
+
+/// One bracketed reference without its brackets, rewritten when it is a
+/// cell or a range of cells on the formula's own sheet.
+fn rewrite_odf_ref(
+    inner: &str,
+    f: &mut impl FnMut(u32, bool, u32, bool, RefPos) -> (u32, u32),
+) -> Option<String> {
+    let ends = inner
+        .split(':')
+        .map(|end| Some((".".to_string(), end.strip_prefix('.')?)))
+        .collect::<Option<Vec<_>>>()?;
+    Some(move_ends(&ends, f)?.join(":"))
+}
+
+/// Splits `$B$12` into `("B", true, 12, true)`; anything else is refused.
+fn parse_cell(cell: &str) -> Option<(&str, bool, u32, bool)> {
+    let (abs_col, rest) = match cell.strip_prefix('$') {
+        Some(r) => (true, r),
+        None => (false, cell),
+    };
+    let letters = rest.bytes().take_while(u8::is_ascii_uppercase).count();
+    if letters == 0 || letters > 3 {
+        return None;
+    }
+    let (col, rest) = rest.split_at(letters);
+    let (abs_row, digits) = match rest.strip_prefix('$') {
+        Some(r) => (true, r),
+        None => (false, rest),
+    };
+    if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((col, abs_col, digits.parse().ok()?, abs_row))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex::Regex;
 
     #[test]
     fn rewrites_references_only() {
@@ -412,6 +964,24 @@ mod tests {
         assert_eq!(out, "SUM(A14:$B$15)+LOG10(C12)+Sheet2!D3+\"A1\"");
         assert_eq!(num_to_col(28), "AB");
         assert_eq!(col_to_num("AB"), 28);
+        // Characters outside ASCII are copied whole.
+        let out = rewrite_refs("'Zürich'!A1&\"€\"&B2", |c, _, r, _, _| (c, r + 1));
+        assert_eq!(out, "'Zürich'!A1&\"€\"&B3");
+    }
+
+    #[test]
+    fn a_range_turned_around_becomes_its_end_row() {
+        // Rows 4 and 5 were removed: the start moves down past them, the end
+        // up before them.
+        let removed = |_c: u32, _: bool, r: u32, _: bool, pos: RefPos| match pos {
+            RefPos::RangeStart => (1, r),
+            _ => (1, r - 2),
+        };
+        assert_eq!(rewrite_refs("SUM(B4:B5)", removed), "SUM(A3:A3)");
+        assert_eq!(
+            rewrite_odf_refs("of:=SUM([.B4:.B5])", removed),
+            "of:=SUM([.A3:.A3])"
+        );
     }
 
     fn sheet(rows: &str) -> String {
@@ -434,8 +1004,9 @@ mod tests {
             start: 4,
             end: 4,
             is_loop: true,
+            sheet: 0,
         }];
-        let out = rebase(&sheet(rows), &blocks).unwrap();
+        let (out, _) = rebase(&sheet(rows), &blocks).unwrap();
         for expected in [
             "<row r=\"5\"><c r=\"A5\"><v>11</v></c><c r=\"B5\"><f>A5*2</f></c></row>",
             "<row r=\"6\"><c r=\"A6\"><v>12</v></c><c r=\"B6\"><f>A6*2</f></c></row>",
@@ -458,10 +1029,11 @@ mod tests {
             start: 4,
             end: 5,
             is_loop: true,
+            sheet: 0,
         }];
-        let out = rebase(&sheet(rows), &blocks).unwrap();
+        let (out, _) = rebase(&sheet(rows), &blocks).unwrap();
         assert!(
-            out.contains("<row r=\"4\"><c r=\"B4\"><f>SUM(B4:B3)</f></c></row>"),
+            out.contains("<row r=\"4\"><c r=\"B4\"><f>SUM(B3:B3)</f></c></row>"),
             "{out}"
         );
         assert!(out.contains("<mergeCells count=\"0\">"), "{out}");
@@ -473,7 +1045,7 @@ mod tests {
             "<row r=\"2\"><c r=\"C2\"><f t=\"shared\" ref=\"C2:C3\" si=\"0\">A2+$B$1</f><v>1</v></c></row>",
             "<row r=\"3\"><c r=\"C3\"><f t=\"shared\" si=\"0\"/><v>2</v></c></row>"
         );
-        let out = rebase(&sheet(rows), &[]).unwrap();
+        let (out, _) = rebase(&sheet(rows), &[]).unwrap();
         assert!(out.contains("<c r=\"C2\"><f>A2+$B$1</f></c>"), "{out}");
         assert!(out.contains("<c r=\"C3\"><f>A3+$B$1</f></c>"), "{out}");
     }
@@ -489,6 +1061,152 @@ mod tests {
         assert_eq!(
             out,
             "<workbook><calcPr calcId=\"1\" fullCalcOnLoad=\"1\"/></workbook>"
+        );
+    }
+
+    fn block(start: u32, end: u32) -> RowBlock {
+        RowBlock {
+            start,
+            end,
+            is_loop: true,
+            sheet: 0,
+        }
+    }
+
+    /// Rows 2 to 4 repeat per group: a header, an item row repeated per item
+    /// (row 3) and a subtotal. Groups get two, zero and one items.
+    #[test]
+    fn renumbers_a_loop_nested_in_a_loop() {
+        let item = "<row r=\"3\"><c r=\"B3\"><f>A3*2</f></c></row>";
+        let head = "<row r=\"2\"><c r=\"A2\"><v>0</v></c></row>";
+        let sub = "<row r=\"4\"><c r=\"B4\"><f>SUM(B2:B3)</f></c></row>";
+        let rows = [
+            "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>",
+            head,
+            item,
+            item,
+            sub,
+            head,
+            sub,
+            head,
+            item,
+            sub,
+            "<row r=\"6\"><c r=\"B6\"><f>SUBTOTAL(9,B2:B4)+B4</f></c></row>",
+        ]
+        .concat();
+        let src = format!(
+            "<worksheet><dimension ref=\"A1:B6\"/><sheetData>{rows}</sheetData><mergeCells count=\"2\"><mergeCell ref=\"A2:B2\"/><mergeCell ref=\"C3:D3\"/></mergeCells></worksheet>"
+        );
+        let (out, _) = rebase(&src, &[block(2, 4), block(3, 3)]).unwrap();
+        let numbers: Vec<&str> = Regex::new("<row r=\"([0-9]+)\"")
+            .unwrap()
+            .captures_iter(&out)
+            .map(|c| c.get(1).unwrap().as_str())
+            .collect();
+        assert_eq!(
+            numbers,
+            ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "12"]
+        );
+        let formulas: Vec<&str> = Regex::new("<f>([^<]*)</f>")
+            .unwrap()
+            .captures_iter(&out)
+            .map(|c| c.get(1).unwrap().as_str())
+            .collect();
+        assert_eq!(
+            formulas,
+            [
+                "A3*2",
+                "A4*2",
+                // Each subtotal sums its own group's rows; an empty group's
+                // range shrinks to its header.
+                "SUM(B2:B4)",
+                "SUM(B6:B6)",
+                "A9*2",
+                "SUM(B8:B9)",
+                // From outside, a range runs from the first group to the last.
+                "SUBTOTAL(9,B2:B10)+B10",
+            ]
+        );
+        assert!(out.contains("<dimension ref=\"A1:B12\"/>"), "{out}");
+        assert!(
+            out.contains("<mergeCells count=\"6\"><mergeCell ref=\"A2:B2\"/><mergeCell ref=\"A6:B6\"/><mergeCell ref=\"A8:B8\"/><mergeCell ref=\"C3:D3\"/><mergeCell ref=\"C4:D4\"/><mergeCell ref=\"C9:D9\"/></mergeCells>"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn rewrites_odf_references_on_the_formulas_own_sheet() {
+        let out = rewrite_odf_refs(
+            "of:=SUM([.B2:.B4])+[$Other.B2]+['It''s'.C1]+[.$C$3]*\"[.B2]\"&[.A:.A]",
+            |c, _, r, _, _| (c, r + 10),
+        );
+        assert_eq!(
+            out,
+            "of:=SUM([.B12:.B14])+[$Other.B2]+['It''s'.C1]+[.$C$13]*\"[.B2]\"&[.A:.A]"
+        );
+        let mut seen = Vec::new();
+        rewrite_odf_refs("of:=[.A1]+SUM([.B2:.C3])", |c, _, r, _, pos| {
+            seen.push(pos);
+            (c, r)
+        });
+        assert_eq!(seen, [RefPos::Single, RefPos::RangeStart, RefPos::RangeEnd]);
+    }
+
+    #[test]
+    fn rewrites_odf_range_lists() {
+        let out = rewrite_odf_ranges("'My sheet'.A1:'My sheet'.$E$6 Other.B2", |c, _, r, _, _| {
+            (c, r * 2)
+        });
+        assert_eq!(out, "'My sheet'.A2:'My sheet'.$E$12 Other.B4");
+    }
+
+    #[test]
+    fn defined_names_follow_their_sheets_rows() {
+        // Row 3 came out three times.
+        let layout = Layout::new(&[block(3, 3)], &[1, 2, 3, 3, 3, 4, 5, 6]);
+        let lookup = |name: &str| (name == "My 'Sales'").then_some(&layout);
+        assert_eq!(
+            rebase_named("'My ''Sales'''!$A$1:$E$6,Other!$A$1:$A$6", lookup),
+            "'My ''Sales'''!$A$1:$E$8,Other!$A$1:$A$6"
+        );
+        assert_eq!(rebase_named("Other!$A$6", lookup), "Other!$A$6");
+    }
+
+    #[test]
+    fn counts_ods_rows_through_groups_and_repeats() {
+        let src = "<office:document-content><office:body><office:spreadsheet><table:table-calculation-settings/><table:table table:name=\"S\"><table:table-header-rows><table:table-row/></table:table-header-rows><table:table-row table:number-rows-repeated=\"3\"/><table:table-row-group><table:table-row><table:table-cell><table:table><table:table-row/></table:table></table:table-cell></table:table-row></table:table-row-group><table:table-row/></table:table></office:spreadsheet></office:body></office:document-content>";
+        let mut nodes = xml::parse(src).unwrap();
+        // document-content > body > spreadsheet > table > row group > row.
+        let row_in_group = vec![0, 0, 0, 1, 2, 0];
+        let (sheet, table) = ods_sheet_of(&nodes, &row_in_group).unwrap();
+        assert_eq!((sheet, table.as_slice()), (1, &[0, 0, 0, 1][..]));
+        assert_eq!(ods_row_span(&nodes, &table, &row_in_group), Some((5, 1)));
+        assert_eq!(ods_row_span(&nodes, &table, &[0, 0, 0, 1, 1]), Some((2, 3)));
+        assert_eq!(ods_row_span(&nodes, &table, &[0, 0, 0, 1, 3]), Some((6, 1)));
+        // The row of a table in a cell is not a sheet row.
+        assert_eq!(
+            ods_row_span(&nodes, &table, &[0, 0, 0, 1, 2, 0, 0, 0, 0]),
+            None
+        );
+        annotate_ods(
+            &mut nodes,
+            &[RowBlock {
+                sheet: 1,
+                ..block(5, 5)
+            }],
+        );
+        let out = xml::to_xml(&nodes);
+        assert!(
+            out.contains("<table:table table:name=\"S\" rusticdoc-sheet=\"1\">"),
+            "{out}"
+        );
+        assert!(
+            out.contains("<table:table-row table:number-rows-repeated=\"3\" rusticdoc-row=\"2\"/>"),
+            "{out}"
+        );
+        assert!(
+            out.contains("<table:table><table:table-row/></table:table>"),
+            "the nested row is not marked: {out}"
         );
     }
 }

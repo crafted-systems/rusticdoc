@@ -189,8 +189,64 @@ pub(crate) fn office_environment(
             .cloned()
             .unwrap_or(key)
     });
+    // What makes a typed sheet cell empty. A render that prints undefined
+    // values as empty widens it to undefined values; see
+    // [`undefined_as_empty`].
+    env.add_test("__blank", |v: Value| v.is_none());
     rich::add_filters(&mut env, mode);
     env
+}
+
+/// Turns an environment made by [`office_environment`] into one that prints
+/// an undefined value, or a missing attribute of one, as nothing. The
+/// filters that need a value (`date`, `currency`, `round`, `abs`) pass an
+/// undefined value through instead of failing, so it prints as nothing too,
+/// and a sheet cell holding one is left empty.
+pub(crate) fn undefined_as_empty(env: &mut Environment<'static>, settings: &Settings) {
+    env.set_undefined_behavior(UndefinedBehavior::Chainable);
+    env.add_test("__blank", |v: Value| v.is_none() || v.is_undefined());
+    let tz = settings.timezone.clone();
+    env.add_filter(
+        "date",
+        move |value: Value, format: Option<String>| -> Result<Value, Error> {
+            if value.is_undefined() {
+                return Ok(value);
+            }
+            date(&value, format.as_deref(), tz.as_deref()).map(Value::from)
+        },
+    );
+    let default_currency = settings.currency.clone();
+    env.add_filter(
+        "currency",
+        move |value: Value, code: Option<String>| -> Result<Value, Error> {
+            if value.is_undefined() {
+                return Ok(value);
+            }
+            Ok(Value::from(currency(
+                f64::try_from(value)?,
+                code.or_else(|| default_currency.clone()),
+            )))
+        },
+    );
+    env.add_filter(
+        "round",
+        |value: Value,
+         precision: Option<i32>,
+         method: Option<&str>,
+         kwargs: minijinja::value::Kwargs|
+         -> Result<Value, Error> {
+            if value.is_undefined() {
+                return Ok(value);
+            }
+            minijinja::filters::round(value, precision, method, kwargs)
+        },
+    );
+    env.add_filter("abs", |value: Value| -> Result<Value, Error> {
+        if value.is_undefined() {
+            return Ok(value);
+        }
+        minijinja::filters::abs(value)
+    });
 }
 
 #[cfg(test)]

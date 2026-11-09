@@ -16,5 +16,8 @@ soffice --convert-to xlsx --outdir /w /w/invoice.fods
 for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
   soffice --convert-to "${pair%:*}" --outdir /w "/w/rich.${pair#*:}"
 done
+soffice --convert-to xlsx --outdir /w /w/sheets.fods
+soffice --convert-to ods --outdir /w /w/sheets.fods
 rm -rf profile
-ls -la invoice.docx invoice.xlsx rich.docx rich.odt rich.xlsx rich.ods rich.pptx rich.odp
+ls -la invoice.docx invoice.xlsx rich.docx rich.odt rich.xlsx rich.ods rich.pptx rich.odp \
+  sheets.xlsx sheets.ods

@@ -20,8 +20,10 @@ mod formats;
 pub mod limit;
 mod package;
 mod program;
+mod properties;
 mod rich;
 mod sheet;
+mod workbook;
 mod xml;
 
 use program::{Mode, PartTree, Source, Tag, TagCtx};
@@ -134,7 +136,9 @@ pub struct Diagnostic {
 }
 
 /// Template-level settings, read from the document's `{% settings ... %}`
-/// tag (`lang`, `timezone`, `currency` and `t.<key>="…"` translations).
+/// tag (`lang`, `timezone`, `currency` and `t.<key>="…"` translations), and
+/// from custom document properties of the same names. The tag wins where
+/// both set the same thing.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     pub lang: Option<String>,
@@ -142,6 +146,16 @@ pub struct Settings {
     pub currency: Option<String>,
     /// Translation table used by the `t` filter.
     pub translations: BTreeMap<String, String>,
+}
+
+/// Choices a caller makes per render.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderOptions {
+    /// Print an undefined value, or a missing attribute of one, as nothing
+    /// instead of failing the render. `date`, `currency`, `round` and `abs`
+    /// print nothing for it too, and a sheet cell holding only it is left
+    /// empty. Off by default: a misspelt name is an error.
+    pub undefined_as_empty: bool,
 }
 
 /// A template parsed once, renderable many times.
@@ -187,7 +201,8 @@ impl Compiled {
         &self.hash
     }
 
-    /// The settings read from the document's `{% settings %}` tag.
+    /// The settings read from the document's `{% settings %}` tag and its
+    /// custom properties.
     pub fn settings(&self) -> &Settings {
         &self.settings
     }
@@ -211,6 +226,22 @@ impl Compiled {
     /// caller puts request context under `ctx` before calling.
     pub fn render(&self, data: &serde_json::Value) -> Result<Vec<u8>> {
         let (rendered, table) = self.render_text(&self.env, &self.source, data)?;
+        self.assemble(&rendered, table.as_deref())
+    }
+
+    /// [`Compiled::render`] with per-render choices.
+    pub fn render_with(
+        &self,
+        data: &serde_json::Value,
+        options: &RenderOptions,
+    ) -> Result<Vec<u8>> {
+        if !options.undefined_as_empty {
+            return self.render(data);
+        }
+        // Cloning shares the parsed template; only the settings differ.
+        let mut env = self.env.clone();
+        filters::undefined_as_empty(&mut env, &self.settings);
+        let (rendered, table) = self.render_text(&env, &self.source, data)?;
         self.assemble(&rendered, table.as_deref())
     }
 
@@ -264,22 +295,33 @@ impl Compiled {
             )));
         }
         let mut entries = self.entries.clone();
+        let blocks_of = |name: &str| {
+            self.parts
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.row_blocks.as_slice())
+                .unwrap_or(&[])
+        };
+        let mut names: Vec<String> = outputs.iter().map(|(n, _)| n.clone()).collect();
         match self.format {
             Format::Pptx => package::apply_slides(&mut entries, &outputs)?,
             Format::Xlsx => {
                 let mut formulas = false;
+                let mut sheets = Vec::with_capacity(outputs.len());
                 for (name, content) in &outputs {
-                    let blocks = self
-                        .parts
-                        .iter()
-                        .find(|p| &p.name == name)
-                        .map(|p| p.row_blocks.as_slice())
-                        .unwrap_or(&[]);
+                    let (title, content) = workbook::split_title(content);
                     formulas |= content.contains("<f>") || content.contains("<f ");
-                    let fixed = sheet::rebase(content, blocks)
+                    let (fixed, layout) = sheet::rebase(content, blocks_of(name))
                         .map_err(|e| TemplateError::new(format!("{name}: {e}")))?;
-                    package::set(&mut entries, name, fixed.into_bytes());
+                    sheets.push(workbook::SheetOut {
+                        part: name.clone(),
+                        title,
+                        content: fixed,
+                        layout,
+                    });
                 }
+                let compiled: Vec<&str> = self.parts.iter().map(|p| p.name.as_str()).collect();
+                names = workbook::finish_xlsx(&mut entries, &sheets, &compiled)?;
                 if formulas {
                     if let Some(wb) = package::text_of(&entries, "xl/workbook.xml") {
                         package::set(
@@ -295,6 +337,13 @@ impl Compiled {
                 // repair. It is only a cache, rebuilt when Excel calculates.
                 package::remove_part(&mut entries, "xl/calcChain.xml", "xl/workbook.xml");
             }
+            Format::Ods => {
+                for (name, content) in &outputs {
+                    let fixed = workbook::finish_ods(content, blocks_of(name))
+                        .map_err(|e| TemplateError::new(format!("{name}: {e}")))?;
+                    package::set(&mut entries, name, fixed.into_bytes());
+                }
+            }
             _ => {
                 for (name, content) in &outputs {
                     package::set(&mut entries, name, content.clone().into_bytes());
@@ -302,7 +351,7 @@ impl Compiled {
             }
         }
         if let Some(table) = table {
-            let names: Vec<&str> = outputs.iter().map(|(n, _)| n.as_str()).collect();
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
             rich::apply(self.format, &mut entries, table, rendered, &names)?;
         }
         package::write(&entries)
@@ -340,8 +389,13 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
     let mut diags = Vec::new();
     let mut tags: Vec<Tag> = Vec::new();
     let mut ctxs: Vec<TagCtx> = Vec::new();
-    let mut settings = Settings::default();
+    // Properties first, so that a `{% settings %}` tag overrides them.
+    let mut settings = properties::settings(format, &entries);
     let mut parts: Vec<PartTree> = Vec::new();
+    let named = match format {
+        Format::Xlsx => workbook::xlsx_named_parts(&entries),
+        _ => Default::default(),
+    };
 
     let shared = match format {
         Format::Xlsx => package::text_of(&entries, "xl/sharedStrings.xml")
@@ -359,7 +413,11 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
             && shared.iter().any(|s| !program::find_tags(s).is_empty());
         // A slide the output does not list is a slide a loop dropped, so
         // slides are compiled even when they hold no tag.
-        if !src.contains('{') && !has_shared_tag && format != Format::Pptx {
+        if !src.contains('{')
+            && !has_shared_tag
+            && format != Format::Pptx
+            && !named.contains(&info.name)
+        {
             continue;
         }
         let nodes = xml::parse(&src).map_err(|e| {
@@ -393,6 +451,16 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
     }
     let blocks = program::match_blocks(&tags, &mut diags);
     program::place_blocks(format, &mut parts, &tags, &ctxs, &blocks, &mut diags);
+    workbook::Compile {
+        format,
+        entries: &entries,
+        parts: &mut parts,
+        tags: &mut tags,
+        ctxs: &mut ctxs,
+        blocks: &blocks,
+        diags: &mut diags,
+    }
+    .run();
     if format == Format::Xlsx {
         for part in &mut parts {
             program::type_cells(part, &tags);
@@ -427,7 +495,11 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
         format,
         hash,
         settings,
-        tags: tags.iter().map(|t| t.text.clone()).collect(),
+        tags: tags
+            .iter()
+            .filter(|t| !t.is_synthetic())
+            .map(|t| t.text.clone())
+            .collect(),
         entries,
         parts,
         table: tags,
@@ -522,14 +594,15 @@ fn validate_within(
 
     // A strict render finds the first runtime problem precisely.
     match compiled.render_text(&compiled.env, &compiled.source, data) {
-        // Rich values are placed after rendering, so placing them is part of
-        // the test.
-        Ok((rendered, Some(table))) => {
-            if let Err(e) = compiled.assemble(&rendered, Some(&table)) {
-                diags.push(to_diag(e));
+        // Rich values and sheet copies are placed after rendering, so placing
+        // them is part of the test.
+        Ok((rendered, table)) => {
+            if table.is_some() || matches!(format, Format::Xlsx | Format::Ods) {
+                if let Err(e) = compiled.assemble(&rendered, table.as_deref()) {
+                    diags.push(to_diag(e));
+                }
             }
         }
-        Ok(_) => {}
         Err(e) => diags.push(to_diag(e)),
     }
 
@@ -693,6 +766,58 @@ mod tests {
     fn the_package_limit_is_the_default() {
         let compiled = compile(Format::Docx, &docx("x {{ a }}")).unwrap();
         assert_eq!(compiled.output_limit as u64, package::MAX_TOTAL_BYTES);
+    }
+
+    /// A one-sheet XLSX whose sheet is named `name` and whose A1 holds `text`.
+    fn xlsx(name: &str, text: &str) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        let main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let parts = [
+            (
+                "xl/workbook.xml",
+                format!(
+                    r#"<workbook xmlns="{main}" xmlns:r="{rel}"><sheets><sheet name="{name}" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+                ),
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                format!(
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{rel}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#
+                ),
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                format!(
+                    r#"<worksheet xmlns="{main}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>{text}</t></is></c></row></sheetData></worksheet>"#
+                ),
+            ),
+        ];
+        for (name, xml) in parts {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn a_sheet_loop_stops_at_the_output_limit() {
+        let doc = xlsx(
+            "{{ s }}",
+            r#"{% sheet for s in range(100000) %}{{ "x" * 1000 }}"#,
+        );
+        let mut compiled = compile(Format::Xlsx, &doc).unwrap();
+        compiled.output_limit = 1 << 20;
+        let err = compiled.render(&serde_json::json!({})).unwrap_err();
+        assert!(err.message.contains("package limit"), "{err}");
+        let lenient = RenderOptions {
+            undefined_as_empty: true,
+        };
+        let err = compiled
+            .render_with(&serde_json::json!({}), &lenient)
+            .unwrap_err();
+        assert!(err.message.contains("package limit"), "{err}");
     }
 
     #[test]
