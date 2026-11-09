@@ -51,7 +51,12 @@ enum Op {
     /// Answers with the limit it runs under, to prove it can start.
     Ping,
     /// A template file. Blobs: the file, the data, the context.
-    Render { name: String, limit: usize },
+    Render {
+        name: String,
+        limit: usize,
+        #[serde(default)]
+        options: rusticdoc_template::RenderOptions,
+    },
     /// Blobs: the file, the data, the context.
     Validate { name: String, limit: usize },
     /// A template being stored. Blobs: the file.
@@ -246,10 +251,19 @@ fn evaluate(blobs: &[Vec<u8>]) -> Result<(ReplyMeta, Vec<u8>)> {
             },
             payload: Vec::new(),
         },
-        Op::Render { name, limit } => {
+        Op::Render {
+            name,
+            limit,
+            options,
+        } => {
             let doc = Document::new(name, blob_bytes(blobs, 1));
-            let rendered =
-                template::render(&doc, &blob_json(blobs, 2)?, &blob_json(blobs, 3)?, limit)?;
+            let rendered = template::render(
+                &doc,
+                &blob_json(blobs, 2)?,
+                &blob_json(blobs, 3)?,
+                limit,
+                &options,
+            )?;
             ReplyMetaAnd {
                 meta: ReplyMeta {
                     name: rendered.name,
@@ -484,10 +498,11 @@ impl Renderer {
         ctx: &serde_json::Value,
         limit: usize,
         timeout: Duration,
+        options: &rusticdoc_template::RenderOptions,
     ) -> Result<Document> {
         self.session(timeout)
             .await?
-            .render(doc, data, ctx, limit)
+            .render(doc, data, ctx, limit, options)
             .await
     }
 
@@ -860,17 +875,20 @@ impl Session {
         data: &serde_json::Value,
         ctx: &serde_json::Value,
         limit: usize,
+        options: &rusticdoc_template::RenderOptions,
     ) -> Result<Document> {
         if self.worker.is_none() {
-            let (doc, data, ctx) = (doc.clone(), data.clone(), ctx.clone());
+            let (doc, data, ctx, options) =
+                (doc.clone(), data.clone(), ctx.clone(), options.clone());
             return blocking(self.remaining()?, move |_| {
-                template::render(&doc, &data, &ctx, limit)
+                template::render(&doc, &data, &ctx, limit, &options)
             })
             .await;
         }
         let op = Op::Render {
             name: doc.name.clone(),
             limit,
+            options: options.clone(),
         };
         let (data, ctx) = encode_pair(data, ctx).await?;
         let (meta, payload) = self.call(&op, &[&doc.bytes, &data, &ctx]).await?;
@@ -927,7 +945,14 @@ mod tests {
     async fn render(renderer: &Renderer, timeout: Duration) -> Result<Document> {
         let empty = serde_json::json!({});
         renderer
-            .render(&doc(), &empty, &empty, 1 << 20, timeout)
+            .render(
+                &doc(),
+                &empty,
+                &empty,
+                1 << 20,
+                timeout,
+                &Default::default(),
+            )
             .await
     }
 

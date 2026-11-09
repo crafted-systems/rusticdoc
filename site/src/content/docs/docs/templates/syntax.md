@@ -146,6 +146,19 @@ test "$(cat out.txt)" = "$(printf 'friend\nno phone\nRegular')"
 
 `default` covers one missing level. `{{ customer.phone.area | default("x") }}` still fails when `customer.phone` is missing.
 
+### Print every missing value as nothing
+
+When your data is sparse by design, `undefinedAsEmpty=true` on `/v1/render` or `/v1/render/batch` prints every missing value, and every missing field of one, as nothing for that request. `date`, `currency`, `round` and `abs` print nothing for a missing value too, and a spreadsheet cell holding only one is left empty.
+
+```bash test
+printf 'Dear {{ customer.name }}{{ customer.title }}.' > sparse.txt
+curl -F template=@sparse.txt -F 'data={"customer":{"name":"Ada"}}' \
+  -F undefinedAsEmpty=true http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = "Dear Ada."
+```
+
+This hides typos as well, so use it only where blanks are expected, and run [validation](/docs/templates/validate/) without it.
+
 ### Null is not missing
 
 A key whose value is `null` is defined, so it does not raise an error and `default("x")` does not replace it. Use `default("x", true)`, which also replaces `""`, `0`, `false` and empty lists.

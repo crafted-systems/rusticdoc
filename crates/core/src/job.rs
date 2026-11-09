@@ -291,6 +291,9 @@ pub struct RenderRequest {
     /// Run the template stage. Off for plain conversions and PDF
     /// operations, whose inputs are documents, not templates.
     pub templating: bool,
+    /// Choices for the template stage, such as printing undefined values as
+    /// nothing.
+    pub render_options: rusticdoc_template::RenderOptions,
 }
 
 impl RenderRequest {
@@ -304,6 +307,7 @@ impl RenderRequest {
             convert_options: ConvertOptions::default(),
             output_name: None,
             templating: true,
+            render_options: Default::default(),
         }
     }
 }

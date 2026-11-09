@@ -1855,3 +1855,27 @@ async fn a_json_body_without_a_store_can_still_use_a_template_hash() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
 }
+
+#[tokio::test]
+async fn undefined_values_can_print_as_nothing() {
+    let template = (
+        "template",
+        Some("letter.txt"),
+        "Dear {{ customer.name }}{{ missing.deeper }}.",
+    );
+    let data = ("data", None, r#"{"customer":{}}"#);
+    let strict = app(AppState::new(config()))
+        .oneshot(post_form("/v1/render", &[template, data]))
+        .await
+        .unwrap();
+    assert_eq!(strict.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let lenient = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/render",
+            &[template, data, ("undefinedAsEmpty", None, "true")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(lenient.status(), StatusCode::OK);
+    assert_eq!(text(lenient).await, "Dear .");
+}

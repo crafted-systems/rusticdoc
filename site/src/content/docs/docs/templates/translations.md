@@ -44,6 +44,31 @@ curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/r
 unzip -p out.docx word/document.xml | grep -o 'Facturé à, EUR 5.00, 07/11 01:30'
 ```
 
+## Settings in document properties
+
+The same settings can be custom document properties instead, so that nothing has to be typed on the page. Name each property after its setting (`lang`, `currency`, `timezone` or `tz`, `t.<key>`) and give it a text value:
+
+- In Word, Excel and PowerPoint: File > Properties > Custom.
+- In LibreOffice: File > Properties > Custom Properties.
+
+A `{% settings %}` tag wins over a property that sets the same thing, so a tag on the page can override what the file's properties say. Translations add up: a `t.<key>` property and a `t.<key>` in the tag both count, and for the same key the tag's wins. Properties with other names are ignored.
+
+They are read from `docProps/custom.xml` in a DOCX, XLSX or PPTX, and from `meta.xml` in an ODT, ODS or ODP. This example writes the property by hand, as Word would save it:
+
+```bash test
+mkdir t && cd t && unzip -q ../invoice.docx
+mkdir -p docProps
+cat > docProps/custom.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="currency"><vt:lpwstr>EUR</vt:lpwstr></property></Properties>
+EOF
+perl -pi -e 's/Billed to/{{ 5 | currency }}/' word/document.xml
+zip -qr ../tagged.docx . && cd ..
+
+curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+unzip -p out.docx word/document.xml | grep -o 'EUR 5.00'
+```
+
 ## lang and translations
 
 `{{ "key" | t }}` looks for a translation in this order:

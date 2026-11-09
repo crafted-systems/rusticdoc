@@ -39,11 +39,15 @@ pub fn is_office_format(ext: &str) -> bool {
 ///
 /// `limit` is the most a text template may write; the render stops there.
 /// Office formats stop at their package limit instead.
+///
+/// `options.undefined_as_empty` prints undefined values as nothing rather
+/// than failing, in every format.
 pub fn render(
     doc: &Document,
     data: &serde_json::Value,
     ctx: &serde_json::Value,
     limit: usize,
+    options: &rusticdoc_template::RenderOptions,
 ) -> Result<Document> {
     let ext = doc.extension();
     let mut root = match data {
@@ -56,7 +60,7 @@ pub fn render(
     if let Some(format) = rusticdoc_template::Format::from_extension(&ext) {
         let compiled = compiled(format, &doc.bytes)?;
         let bytes = compiled
-            .render(&serde_json::Value::Object(root))
+            .render_with(&serde_json::Value::Object(root), options)
             .map_err(|e| Error::Template(e.to_string()))?;
         return Ok(Document::new(doc.name.clone(), bytes));
     }
@@ -68,6 +72,9 @@ pub fn render(
     let source = std::str::from_utf8(&doc.bytes)
         .map_err(|_| Error::Template(format!("{} is not valid UTF-8", doc.name)))?;
     let mut env = environment();
+    if options.undefined_as_empty {
+        env.set_undefined_behavior(UndefinedBehavior::Chainable);
+    }
     let escape = auto_escape(&ext);
     let writes_json = escape == AutoEscape::Json;
     env.set_auto_escape_callback(move |_| escape.clone());
@@ -138,7 +145,7 @@ pub fn validate(
         root.entry("ctx").or_insert_with(|| ctx.clone());
         return rusticdoc_template::validate(format, &doc.bytes, &serde_json::Value::Object(root));
     }
-    match render(doc, data, ctx, limit) {
+    match render(doc, data, ctx, limit, &Default::default()) {
         Ok(_) => Vec::new(),
         Err(e) => vec![Diagnostic {
             severity: Severity::Error,
@@ -401,7 +408,14 @@ mod tests {
             "Dear {{ customer.name }},\n{% for i in items %}- {{ i.name }}: {{ i.price | currency('EUR') }}\n{% endfor %}Total {{ items | sum(attribute='price') | currency('EUR') }}\nFrom {{ ctx.company }}",
         );
         let data = json!({"customer": {"name": "Ada"}, "items": [{"name": "Lamp", "price": 1234.5}, {"name": "Plug", "price": 0.5}]});
-        let out = render(&doc, &data, &json!({"company": "Crafted"}), LIMIT).unwrap();
+        let out = render(
+            &doc,
+            &data,
+            &json!({"company": "Crafted"}),
+            LIMIT,
+            &Default::default(),
+        )
+        .unwrap();
         let text = String::from_utf8(out.bytes.to_vec()).unwrap();
         assert_eq!(
             text,
@@ -411,7 +425,7 @@ mod tests {
 
     fn filled(name: &str, source: &str, data: serde_json::Value) -> Result<String> {
         let doc = Document::new(name, source.as_bytes().to_vec());
-        let out = render(&doc, &data, &json!({}), LIMIT)?;
+        let out = render(&doc, &data, &json!({}), LIMIT, &Default::default())?;
         Ok(String::from_utf8(out.bytes.to_vec()).unwrap())
     }
 
@@ -487,7 +501,7 @@ mod tests {
     #[test]
     fn undefined_names_are_errors_with_a_line() {
         let doc = txt("line one\n{{ nobody.home }}");
-        let err = render(&doc, &json!({}), &json!({}), LIMIT).unwrap_err();
+        let err = render(&doc, &json!({}), &json!({}), LIMIT, &Default::default()).unwrap_err();
         assert!(matches!(err, Error::Template(_)));
         assert!(err.to_string().contains("line 2"), "{err}");
     }
@@ -544,6 +558,7 @@ mod tests {
             &json!({"customer": {"name": "Ada"}}),
             &json!({}),
             LIMIT,
+            &Default::default(),
         )
         .unwrap();
         let xml = docx_text(&out.bytes);
@@ -554,6 +569,7 @@ mod tests {
             &json!({"customer": {"name": "Bob"}}),
             &json!({}),
             LIMIT,
+            &Default::default(),
         )
         .unwrap();
         assert!(strip_tags(&docx_text(&again.bytes)).contains("Hi Bob!"));
@@ -584,7 +600,14 @@ mod tests {
 
     #[test]
     fn text_output_stops_at_the_limit() {
-        let err = render(&txt(WIDE), &json!({}), &json!({}), 1 << 20).unwrap_err();
+        let err = render(
+            &txt(WIDE),
+            &json!({}),
+            &json!({}),
+            1 << 20,
+            &Default::default(),
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
         assert!(err.to_string().contains("byte limit"), "{err}");
         let problems = validate(&txt(WIDE), &json!({}), &json!({}), 1 << 20);

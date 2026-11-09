@@ -181,6 +181,7 @@ impl Pipeline {
                     &req.ctx,
                     self.max_output,
                     self.timeout,
+                    &req.render_options,
                 )
                 .await?
         } else {

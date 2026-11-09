@@ -35,6 +35,10 @@ pub struct RenderForm {
     pub data: Option<serde_json::Value>,
     /// JSON object visible as `ctx`, sent as text or as a file.
     pub ctx: Option<serde_json::Value>,
+    /// `true` prints a value missing from the data as nothing instead of
+    /// failing the render. Default `false`, so a misspelt name is an error.
+    #[schema(rename = "undefinedAsEmpty")]
+    pub undefined_as_empty: Option<bool>,
     /// Comma-separated steps in order: `convert`, `pdfa`, `metadata`,
     /// `encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the
     /// service's key; it must be last and cannot be combined with `encrypt`.
@@ -96,6 +100,9 @@ pub struct RenderJson {
     pub data: Option<serde_json::Value>,
     /// The object visible as `ctx`.
     pub ctx: Option<serde_json::Value>,
+    /// `true` prints a value missing from the data as nothing.
+    #[schema(rename = "undefinedAsEmpty")]
+    pub undefined_as_empty: Option<bool>,
     /// The steps in order, as a list or as comma-separated text.
     #[schema(value_type = Option<Vec<String>>, example = json!(["convert", "pdfa"]))]
     pub steps: Option<serde_json::Value>,
@@ -211,6 +218,7 @@ pub async fn render(
     let mut req = RenderRequest::new(template);
     req.data = data;
     req.ctx = ctx;
+    req.render_options = render_options(&form);
     let mut options = options::convert_options(&form)?;
     // Here PDF/A and PDF/UA happen where the step list says, not on every
     // conversion.
@@ -254,6 +262,13 @@ pub async fn render(
     }
 
     run(state, hook, request_id(&headers), req).await
+}
+
+/// What the form asks of the template stage.
+fn render_options(form: &Form) -> rusticdoc_template::RenderOptions {
+    rusticdoc_template::RenderOptions {
+        undefined_as_empty: form.bool("undefinedAsEmpty"),
+    }
 }
 
 /// The form's `steps` list. Steps that carry files or repeat
@@ -421,6 +436,7 @@ pub async fn batch(
     let count = elements.len();
     let limit = state.config.batch_timeout;
     let max_render = state.config.max_render_bytes;
+    let render_choices = render_options(&form);
     let st = state.clone();
     let job = async move {
         let renderer = st.pipeline.renderer().clone();
@@ -461,7 +477,9 @@ pub async fn batch(
                     }
                     other => other,
                 })?;
-            let rendered = current.render(&template, &one, &ctx, max_render).await?;
+            let rendered = current
+                .render(&template, &one, &ctx, max_render, &render_choices)
+                .await?;
             if !steps.is_empty() {
                 session = None;
             }
