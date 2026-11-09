@@ -127,7 +127,7 @@ The value must be a number, as for `currency`.
 {{ issued | date("%d %B %Y") }}
 ```
 
-The one argument is a format. Without it the format is `%Y-%m-%d`. A second argument is an error (`too many arguments`): the time zone comes from the request's `timezone` field or the template's [`timezone` setting](/docs/templates/translations/#timezone).
+The one argument is a format. Without it the format is `%Y-%m-%d`. A second argument is an error (`too many arguments`): the time zone comes from the request's `timezone` field or the template's [`timezone` setting](/docs/templates/translations/#the-four-settings).
 
 ### What it accepts
 

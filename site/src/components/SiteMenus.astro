@@ -34,7 +34,7 @@ const menus = [
   },
   {
     label: 'Docs',
-    current: path.startsWith('/docs/') || path === '/security/' || path === '/status/',
+    current: path.startsWith('/docs/'),
     columns: [
       {
         title: 'Learn',
@@ -48,8 +48,8 @@ const menus = [
       {
         title: 'Project',
         items: [
-          { href: '/security/', title: 'Security', text: 'How it handles documents from strangers' },
-          { href: '/status/', title: 'Status', text: 'What has been proven, and what has not' },
+          { href: '/docs/project/security-overview/', title: 'Security', text: 'How it handles documents from strangers' },
+          { href: '/docs/project/status/', title: 'Status', text: 'What has been proven, and what has not' },
           { href: '/docs/project/changelog/', title: 'Changelog', text: 'What each release contains' },
           { href: '/docs/project/roadmap/', title: 'Roadmap', text: 'What comes next' },
         ],

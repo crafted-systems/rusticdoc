@@ -6,6 +6,11 @@ export default defineConfig({
   site: 'https://rusticdoc.com',
   trailingSlash: 'always',
   devToolbar: { enabled: false },
+  // Security and Status were pages of their own before they joined the docs.
+  redirects: {
+    '/security/': '/docs/project/security-overview/',
+    '/status/': '/docs/project/status/',
+  },
   // Keep small fonts as files: the site's CSP has no data: in font-src.
   vite: { build: { assetsInlineLimit: 0 } },
   integrations: [
@@ -43,11 +48,7 @@ export default defineConfig({
         },
         {
           label: 'Project',
-          items: [
-            { label: 'Security overview', link: '/security/' },
-            { label: 'Status', link: '/status/' },
-            { autogenerate: { directory: 'docs/project' } },
-          ],
+          items: [{ autogenerate: { directory: 'docs/project' } }],
         },
       ],
     }),
