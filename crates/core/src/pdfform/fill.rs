@@ -7,6 +7,7 @@ use lopdf::{Dictionary, Document, Object, ObjectId, Stream, dictionary};
 use serde_json::Value;
 
 use super::fields::{self, FF_COMBO, FF_EDIT, FF_MULTILINE, Field, Kind};
+use super::shaped::{self, Align, FontChoice, TextBox};
 use super::text::{self, num};
 use super::{
     FillLimits, FillOptions, Rect, acroform, add_helvetica, add_page_resource, deref, get,
@@ -33,6 +34,7 @@ pub(super) fn fill(
         data,
         env: env.clone(),
         helvetica: None,
+        shaped: shaped::Pending::default(),
         fuel: template::TEMPLATE_FUEL,
         bytes_left: limits.max_render_bytes,
         tags: 0,
@@ -49,7 +51,13 @@ pub(super) fn fill(
         }
     }
     filler.annotation_tags(&fields, options.strip_tag_annotations)?;
-    filler.mark_need_appearances()?;
+    // Viewers that redraw fields on request (Poppler, Acrobat) cannot shape
+    // or find a face for text outside Latin, so a form that has some keeps
+    // the appearances drawn here.
+    let shaped = std::mem::take(&mut filler.shaped);
+    let need_appearances = shaped.is_empty();
+    shaped.draw(&mut filler.doc, limits.deadline)?;
+    filler.set_need_appearances(need_appearances)?;
     let mut doc = filler.doc;
     if options.flatten {
         flatten(&mut doc, limits.deadline)?;
@@ -152,6 +160,8 @@ struct Filler<'a> {
     data: &'a Value,
     env: minijinja::Environment<'static>,
     helvetica: Option<ObjectId>,
+    /// Text outside WinAnsi, drawn once every value is in.
+    shaped: shaped::Pending,
     /// Instructions left for every tag together: a budget per tag would let a
     /// form with many tags spend without end.
     fuel: u64,
@@ -325,9 +335,52 @@ impl Filler<'_> {
         }
     }
 
+    /// The `/BaseFont` of a font in the form's `/DR`, read without changing
+    /// anything.
+    fn form_base_font(&self, name: &str) -> Option<String> {
+        let fonts = get_dict(&self.doc, acroform(&self.doc)?, b"DR")
+            .and_then(|dr| get_dict(&self.doc, dr, b"Font"))?;
+        let font = get(&self.doc, fonts, name.as_bytes())?.as_dict().ok()?;
+        get_name(&self.doc, font, b"BaseFont")
+    }
+
+    /// Queues the appearance of every widget of a text-like field whose
+    /// value has characters Helvetica cannot show.
+    fn shaped_appearances(&mut self, field: &Field, shown: &str) -> Result<()> {
+        let (font_name, size, colour) = text::parse_da(field.da.as_deref().unwrap_or(""));
+        let font = FontChoice::from_names(&font_name, self.form_base_font(&font_name).as_deref());
+        let multiline = field.kind == Kind::Text && field.has_flag(FF_MULTILINE);
+        for widget in &field.widgets {
+            let Some(rect) = widget.rect else {
+                continue;
+            };
+            let (width, height) = (rect.width(), rect.height());
+            let background = self.widget_background(widget.id, width, height);
+            self.shaped.widget(
+                widget.id,
+                background,
+                TextBox {
+                    text: shown.to_string(),
+                    width,
+                    height,
+                    size,
+                    align: Align::from_quadding(field.quadding),
+                    multiline,
+                    font,
+                    colour: shaped::da_colour(&colour),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// Writes a `/Tx BMC ... EMC` normal appearance showing `shown` into
-    /// every widget of a text-like field.
+    /// every widget of a text-like field. Text with characters outside
+    /// WinAnsi is queued for [`shaped`] instead.
     fn text_appearances(&mut self, field: &Field, shown: &str) -> Result<()> {
+        if shaped::needs_shaping(shown) {
+            return self.shaped_appearances(field, shown);
+        }
         let (font_name, size, colour) = text::parse_da(field.da.as_deref().unwrap_or(""));
         let font_id = match self.form_font(&font_name) {
             Some(id) => id,
@@ -338,6 +391,7 @@ impl Filler<'_> {
             let Some(rect) = widget.rect else {
                 continue;
             };
+            self.shaped.forget(widget.id);
             let (w, h) = (rect.width(), rect.height());
             let mut content = self.widget_background(widget.id, w, h);
             let (size, lines) = text::layout(shown, w, h, size, field.quadding, multiline);
@@ -408,10 +462,27 @@ impl Filler<'_> {
         out
     }
 
-    /// Draws `shown` on the page inside `rect`, in Helvetica at `size`.
+    /// Draws `shown` on the page inside `rect`, in Helvetica at `size`, or
+    /// queues it for [`shaped`] when Helvetica cannot show it.
     fn draw_text(&mut self, page_id: ObjectId, rect: Rect, shown: &str, size: f32) -> Result<()> {
         if shown.trim().is_empty() {
             return Ok(());
+        }
+        if shaped::needs_shaping(shown) {
+            return self.shaped.page(
+                page_id,
+                rect,
+                TextBox {
+                    text: shown.to_string(),
+                    width: rect.width(),
+                    height: rect.height(),
+                    size: if size > 0.0 { size } else { 10.0 },
+                    align: Align::Start,
+                    multiline: true,
+                    font: FontChoice::SANS,
+                    colour: [0.0; 3],
+                },
+            );
         }
         let font_id = self.helvetica();
         add_page_resource(&mut self.doc, page_id, b"Font", "RdHelv", font_id)?;
@@ -492,23 +563,32 @@ impl Filler<'_> {
         Ok(())
     }
 
-    fn mark_need_appearances(&mut self) -> Result<()> {
+    /// Sets the form's `NeedAppearances`, or removes it.
+    fn set_need_appearances(&mut self, on: bool) -> Result<()> {
+        let apply = |form: &mut Dictionary| {
+            if on {
+                form.set("NeedAppearances", true);
+            } else {
+                form.remove(b"NeedAppearances");
+            }
+        };
         let catalog = self.doc.catalog().map_err(malformed)?;
         match catalog.get(b"AcroForm") {
             Ok(Object::Reference(id)) => {
                 let id = *id;
                 if let Ok(form) = self.doc.get_dictionary_mut(id) {
-                    form.set("NeedAppearances", true);
+                    apply(form);
                 }
             }
             Ok(Object::Dictionary(_)) => {
-                self.doc
-                    .catalog_mut()
-                    .map_err(malformed)?
-                    .get_mut(b"AcroForm")
-                    .and_then(Object::as_dict_mut)
-                    .map_err(malformed)?
-                    .set("NeedAppearances", true);
+                apply(
+                    self.doc
+                        .catalog_mut()
+                        .map_err(malformed)?
+                        .get_mut(b"AcroForm")
+                        .and_then(Object::as_dict_mut)
+                        .map_err(malformed)?,
+                );
             }
             _ => {}
         }

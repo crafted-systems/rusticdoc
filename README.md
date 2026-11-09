@@ -266,7 +266,7 @@ A compromised LibreOffice still runs as the service's user, in the service's con
 - Noto Serif CJK is left out of the image to save 53 MB, so Chinese, Japanese and Korean text in a serif face converts in Noto Sans CJK until Noto Serif CJK is uploaded or mounted at `/fonts`.
 - Barcodes have been read by ZXing and ZBar (`test/barcodes`), not by a hardware or phone scanner.
 - Filled PDF forms show their values in Chrome and Preview, and have not been opened in Acrobat.
-- Text the service draws into a PDF, meaning field appearances and annotation values, is Latin only, in Helvetica. Other characters draw as `?`. Field values are stored in full, so a viewer that redraws the field still shows them.
+- Text the service draws into a PDF form outside Windows Latin, such as Arabic or Chinese, is shaped and embedded as subset fonts. It has been checked with Poppler (`pdftoppm`, `pdftotext`) and macOS Quick Look, not in Chrome or Acrobat. Poppler extracts an Arabic lam-alef ligature with its two letters swapped; the file maps them in order. Comb fields are drawn as one line. Marks drawn by `watermark` and `stamp` are still Latin only, in Helvetica.
 - A template that uses a font the service lacks is not reported. Check `GET /v1/fonts` and the `x-fonts-used` header.
 - Macros and OLE objects in a template are not stripped. LibreOffice will not run or fetch them when converting, but a request with no conversion step returns them in its output.
 - A stored template cannot be changed: store the new one and use its id. There are no versions or aliases yet.

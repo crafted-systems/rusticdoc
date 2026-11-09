@@ -25,6 +25,7 @@ const SPECIAL_FIELDS: &[&str] = &[
     "embeds",
     "watermark",
     "stamp",
+    "underlay",
     "facturx",
     "facturX",
     "facturxXml",
