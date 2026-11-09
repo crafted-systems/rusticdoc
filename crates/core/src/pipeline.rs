@@ -10,7 +10,7 @@ use crate::job;
 use crate::job::{Document, Format, Output, RenderRequest, Step};
 use crate::limits;
 use crate::pdfops::MultiEngine;
-use crate::pdfops::sign::{self, Signer};
+use crate::pdfops::sign::Signing;
 use crate::render::Renderer;
 use crate::template;
 
@@ -24,9 +24,9 @@ pub struct Engines {
     pub pdf: MultiEngine,
     /// `RUSTICDOC_CONVERT_DISABLED`: conversion steps refuse.
     pub office_routes_disabled: bool,
-    /// The key for cryptographic signatures, from `RUSTICDOC_SIGNING_KEY` and
-    /// `RUSTICDOC_SIGNING_CERT`. Without it, `sign` steps answer 503.
-    pub signer: Option<Arc<Signer>>,
+    /// The keys for cryptographic signatures, from `RUSTICDOC_SIGNING_*`, and
+    /// what levels beyond B-B need. Without a key, `sign` steps answer 503.
+    pub signing: Signing,
 }
 
 impl Engines {
@@ -52,13 +52,10 @@ impl Engines {
             // `Config::check` has refused a key that does not load before a
             // service starts; a library or CLI caller that skipped it gets no
             // signer and a 503 that says why.
-            signer: match config.signer() {
-                Ok(signer) => signer.map(Arc::new),
-                Err(problem) => {
-                    tracing::error!("{problem}");
-                    None
-                }
-            },
+            signing: config.signing().unwrap_or_else(|problem| {
+                tracing::error!("{problem}");
+                Signing::default()
+            }),
         }
     }
 
@@ -68,19 +65,7 @@ impl Engines {
             "libreoffice": self.libreoffice.as_ref().map(|l| l.bin().display().to_string()),
             "pdf": self.pdf.names(),
             "templates": { "text": template::TEXT_FORMATS, "office": template::OFFICE_FORMATS },
-            "signing": self.signer.is_some(),
-        })
-    }
-
-    /// The signing key, or why there is none: a 503 whose text the client
-    /// reads, since it names a setting and nothing internal.
-    pub fn signer(&self) -> Result<&Arc<Signer>> {
-        self.signer.as_ref().ok_or_else(|| {
-            Error::Status(
-                503,
-                "cryptographic signing is not configured on this service; its operator sets RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT"
-                    .into(),
-            )
+            "signing": self.signing.is_configured(),
         })
     }
 
@@ -88,8 +73,10 @@ impl Engines {
     /// cannot be combined with `encrypt`, and needs a key.
     pub fn check_steps(&self, steps: &[Step]) -> Result<()> {
         check_steps(steps)?;
-        if steps.iter().any(|s| matches!(s, Step::Sign { .. })) {
-            self.signer()?;
+        for step in steps {
+            if let Step::Sign { options } = step {
+                self.signing.check(options)?;
+            }
         }
         Ok(())
     }
@@ -370,9 +357,7 @@ impl Pipeline {
                 user_password,
                 owner_password,
             } => pdf.encrypt(doc, user_password, owner_password, t).await?,
-            Step::Sign { options } => {
-                sign::sign(doc, self.engines.signer()?.clone(), options, t).await?
-            }
+            Step::Sign { options } => self.engines.signing.sign(doc, options, t).await?,
             Step::Merge | Step::Split { .. } => unreachable!("handled by run"),
         })
     }
@@ -495,7 +480,7 @@ mod tests {
 
     fn sign_step() -> Step {
         Step::Sign {
-            options: sign::SignOptions::default(),
+            options: crate::pdfops::sign::SignOptions::default(),
         }
     }
 
@@ -535,10 +520,13 @@ mod tests {
             .unwrap()
             .self_signed(&key)
             .unwrap();
-        let signer =
-            Signer::from_pem(key.serialize_pem().as_bytes(), cert.pem().as_bytes()).unwrap();
+        let signer = crate::pdfops::sign::Signer::from_pem(
+            key.serialize_pem().as_bytes(),
+            cert.pem().as_bytes(),
+        )
+        .unwrap();
         let engines = Engines {
-            signer: Some(Arc::new(signer)),
+            signing: Signing::with_default(signer),
             ..Engines::default()
         };
         let original = crate::pdfops::fixtures::pages(1);

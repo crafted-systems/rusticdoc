@@ -409,23 +409,9 @@ pub fn parse_steps(list: &str, fields: &BTreeMap<String, String>) -> Result<Vec<
                     owner_password: owner,
                 }
             }
-            "sign" => {
-                let text = |name: &str| {
-                    fields
-                        .get(name)
-                        .map(|v| v.trim().to_string())
-                        .filter(|v| !v.is_empty())
-                };
-                let options = pdfops::sign::SignOptions {
-                    reason: text("reason"),
-                    location: text("location"),
-                    contact_info: text("contactInfo"),
-                    signer_name: text("signerName"),
-                    appearance: None,
-                };
-                options.validate()?;
-                Step::Sign { options }
-            }
+            "sign" => Step::Sign {
+                options: pdfops::sign::SignOptions::from_fields(&|name| fields.get(name).cloned())?,
+            },
             "merge" => Step::Merge,
             "flatten" => Step::Flatten,
             "optimize" => Step::Optimize,

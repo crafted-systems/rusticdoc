@@ -20,6 +20,7 @@ use crate::webhook;
 /// read them from [`Form::by_field`].
 const SPECIAL_FIELDS: &[&str] = &[
     "embeds",
+    "signatureImage",
     "watermark",
     "stamp",
     "facturx",

@@ -1329,7 +1329,7 @@ async fn certificate_signatures_sign_with_the_configured_key() {
                 ("signature", None, b"certificate".to_vec()),
                 ("x", None, b"10".to_vec()),
             ],
-            "invisible",
+            "one 'x' and one 'y'",
         ),
         (
             vec![
@@ -1392,6 +1392,240 @@ async fn sign_steps_come_last_and_never_with_encrypt() {
             assert!(message.contains(says), "{steps}: {message}");
         }
     }
+}
+
+/// The `/Rect` of the widget of the last signature field in `signed`.
+fn last_signature_rect(signed: &[u8]) -> Vec<f32> {
+    let pdf = lopdf::Document::load_mem(signed).unwrap();
+    let acroform = match pdf.catalog().unwrap().get(b"AcroForm").unwrap() {
+        lopdf::Object::Reference(id) => pdf.get_dictionary(*id).unwrap().clone(),
+        lopdf::Object::Dictionary(d) => d.clone(),
+        other => panic!("unexpected AcroForm {other:?}"),
+    };
+    let fields = acroform.get(b"Fields").unwrap().as_array().unwrap();
+    let field = pdf
+        .get_dictionary(fields.last().unwrap().as_reference().unwrap())
+        .unwrap();
+    field
+        .get(b"Rect")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_float().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn visible_signatures_show_an_image_or_text_on_both_routes() {
+    use rusticdoc_core::pdfops::fixtures;
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(AppState::new(signing_config(dir.path())));
+    let original = fixtures::pages(1);
+
+    // /v1/pdf/sign with a place and no image: text, 200 points wide.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), original.clone()),
+                ("signature", None, b"certificate".to_vec()),
+                ("x", None, b"72".to_vec()),
+                ("y", None, b"72".to_vec()),
+                ("reason", None, b"Approved".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let signed = bytes_of(res).await;
+    signed_by_certificate(&original, &signed);
+    let rect = last_signature_rect(&signed);
+    assert_eq!(rect[..3], [72.0, 72.0, 272.0]);
+
+    // The sign step of /v1/render, with an image under signatureImage.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), original.clone()),
+                (
+                    "signatureImage",
+                    Some("sig.png"),
+                    fixtures::PNG_DOT.to_vec(),
+                ),
+                ("steps", None, b"sign".to_vec()),
+                ("page", None, b"1".to_vec()),
+                ("x", None, b"100".to_vec()),
+                ("y", None, b"50".to_vec()),
+                ("width", None, b"80".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let rendered = bytes_of(res).await;
+    signed_by_certificate(&original, &rendered);
+    assert_eq!(last_signature_rect(&rendered), [100.0, 50.0, 180.0, 130.0]);
+    assert!(rendered.windows(7).any(|w| w == b"/Img Do"));
+
+    // And as text, with the signer's name.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), original.clone()),
+                ("steps", None, b"sign".to_vec()),
+                ("x", None, b"10".to_vec()),
+                ("y", None, b"10".to_vec()),
+                ("signerName", None, b"Ada".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let rendered = bytes_of(res).await;
+    assert_eq!(last_signature_rect(&rendered)[..3], [10.0, 10.0, 210.0]);
+
+    // A signature image with no sign step is a mistake.
+    let res = router
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), original.clone()),
+                (
+                    "signatureImage",
+                    Some("sig.png"),
+                    fixtures::PNG_DOT.to_vec(),
+                ),
+                ("steps", None, b"rotate".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn named_signing_keys_are_for_the_callers_on_their_allow_list() {
+    use rusticdoc_core::pdfops::fixtures;
+    use rusticdoc_core::pdfops::sign::NamedKey;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = signing_config(dir.path());
+    config.api_keys = vec!["alpha".into(), "beta".into()];
+    config.signing.named = vec![NamedKey {
+        name: "acme".into(),
+        key: dir.path().join("key.pem").to_string_lossy().into_owned(),
+        cert: dir.path().join("cert.pem"),
+        allow: vec![rusticdoc_server::auth::key_principal("alpha").0],
+    }];
+    config.check().expect("the named key loads");
+    let router = app(AppState::new(config));
+    let request = |caller: &str, key: &str| {
+        let mut req = post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), fixtures::pages(1)),
+                ("signature", None, b"certificate".to_vec()),
+                ("signingKey", None, key.as_bytes().to_vec()),
+            ],
+        );
+        req.headers_mut()
+            .insert("x-api-key", caller.parse().unwrap());
+        req
+    };
+    let res = router
+        .clone()
+        .oneshot(request("alpha", "acme"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let res = router
+        .clone()
+        .oneshot(request("beta", "acme"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(text(res).await.contains("acme"));
+    let res = router
+        .clone()
+        .oneshot(request("beta", "globex"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // The same check on the sign step of a render.
+    let mut req = post_binary(
+        "/v1/render",
+        &[
+            ("template", Some("in.pdf"), fixtures::pages(1)),
+            ("steps", None, b"sign".to_vec()),
+            ("signingKey", None, b"acme".to_vec()),
+        ],
+    );
+    req.headers_mut()
+        .insert("x-api-key", "beta".parse().unwrap());
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn timestamped_levels_need_a_timestamp_authority_reached_under_the_outbound_rules() {
+    use rusticdoc_core::pdfops::fixtures;
+    let dir = tempfile::tempdir().unwrap();
+    let parts = |level: &str| {
+        vec![
+            ("files", Some("in.pdf"), fixtures::pages(1)),
+            ("signature", None, b"certificate".to_vec()),
+            ("level", None, level.as_bytes().to_vec()),
+        ]
+    };
+
+    // No timestamp authority: a 503 that names the setting.
+    let router = app(AppState::new(signing_config(dir.path())));
+    let res = router
+        .clone()
+        .oneshot(post_binary("/v1/pdf/sign", &parts("b-t")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(text(res).await.contains("RUSTICDOC_SIGNING_TSA_URL"));
+    let res = router
+        .oneshot(post_binary("/v1/pdf/sign", &parts("b-q")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // One on loopback, which the outbound rules refuse by default: a 502,
+    // and no file.
+    let mut config = signing_config(dir.path());
+    config.signing.tsa = Some(rusticdoc_core::pdfops::sign::Tsa::new(
+        "http://127.0.0.1:9/tsa",
+        Duration::from_secs(2),
+    ));
+    let router = app(AppState::new(config.clone()));
+    let res = router
+        .oneshot(post_binary("/v1/pdf/sign", &parts("b-lta")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    let message = text(res).await;
+    assert!(message.contains("timestamp authority"), "{message}");
+    assert!(message.contains("private"), "{message}");
+
+    // A deny list refuses it before any connection.
+    config.signing.outbound_allow_private = true;
+    config.signing.outbound_deny_list = vec!["^http://127\\.0\\.0\\.1:9/".into()];
+    let router = app(AppState::new(config));
+    let res = router
+        .oneshot(post_binary("/v1/pdf/sign", &parts("b-t")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert!(text(res).await.contains("not allowed"));
 }
 
 #[tokio::test]

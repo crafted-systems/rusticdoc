@@ -5,8 +5,14 @@
 # nothing else. pyHanko is given them as trust roots, so its verdict covers the
 # certificate as well as the integrity pdfsig checks.
 #
+# Then PAdES B-T, B-LT, B-LTA and a certification signature, against a test CA
+# with a real timestamp authority, OCSP responder and CRL on loopback
+# (test/sign/pki.sh), checked by pdfsig and by pyHanko online and offline.
+#
 # Usage: test/sign/verify.sh [path/to/rusticdoc]
-# Needs openssl and pdfsig. PDFSIG and PYHANKO name other binaries.
+# Needs openssl and pdfsig; the levels need OpenSSL 3+, python3 and curl. PDFSIG
+# and PYHANKO name other binaries, PYHANKO_PYTHON the Python pyHanko is
+# installed in (default: the python next to PYHANKO).
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 ROOT=$(pwd)
@@ -127,6 +133,88 @@ EOF
         fail "pdfsig accepts a tampered file"
     else
         pass "pdfsig refuses a tampered file"
+    fi
+fi
+
+# PAdES B-T, B-LT and B-LTA, and certification, against a real timestamp
+# authority (`openssl ts -reply` behind a small HTTP handler), OCSP responder
+# (`openssl ocsp -port`) and CRL on loopback; see test/sign/pki.sh. pdfsig
+# checks each signature's integrity. pyHanko validates the B-T file with
+# online revocation checks while the servers run, then, with them stopped,
+# confirms each file's level from what the file holds (test/sign/pades_level.py)
+# and runs its AdES validation.
+if ! command -v python3 >/dev/null || ! command -v curl >/dev/null \
+    || ! openssl version | grep -Eq '^OpenSSL ([3-9]|[1-9][0-9])\.'; then
+    echo "note: PAdES levels need OpenSSL 3 or later, python3 and curl; skipped"
+else
+    # shellcheck source=test/sign/pki.sh
+    source "$ROOT/test/sign/pki.sh"
+    if ! pki_setup "$WORK"; then
+        fail "the test PKI or its servers did not start"
+    else
+        trap 'pki_stop; rm -rf "$WORK"' EXIT
+        export RUSTICDOC_SIGNING_TSA_URL=$PKI_TSA_URL
+        export RUSTICDOC_SIGNING_OUTBOUND_ALLOW_PRIVATE=true
+        RSA=(--key "$PKI/signer.key" --cert "$PKI/signer-chain.pem")
+        EC=(--key "$PKI/ec-signer.key" --cert "$PKI/ec-signer-chain.pem")
+        sign bt "$WORK/fx/three-pages.pdf" "${RSA[@]}" --level b-t --reason "B-T" \
+            && check_pdfsig bt 1 total
+        sign blt "$WORK/fx/form.pdf" "${EC[@]}" --level b-lt --x 72 --y 72 --reason "B-LT, shown as text" \
+            && check_pdfsig blt 1 partial
+        sign blta "$WORK/fx/three-pages.pdf" "${RSA[@]}" --level b-lta \
+            && check_pdfsig blta 1 partial
+        sign certified "$WORK/fx/three-pages.pdf" "${RSA[@]}" --level b-lta --certify 1 \
+            && check_pdfsig certified 1 partial
+        # The document timestamp is the last update and covers the whole file.
+        if [ -f "$WORK/blta.pdf" ]; then
+            report=$("$PDFSIG" "${NSS[@]}" "$WORK/blta.pdf" 2>/dev/null)
+            if printf '%s\n' "$report" | awk '/^Signature #2:/{on=1} on' | grep -q "Total document signed"; then
+                pass "pdfsig blta #2: the document timestamp covers the whole file"
+            else
+                fail "blta: no document timestamp over the whole file"; printf '%s\n' "$report"
+            fi
+        fi
+        # A timestamp authority that is down fails the request; nothing is written.
+        if RUSTICDOC_SIGNING_TSA_URL=http://127.0.0.1:9/tsa "$BIN" pdf sign "$WORK/fx/three-pages.pdf" \
+            "${RSA[@]}" --level b-t -o "$WORK/down.pdf" 2>"$WORK/down.log" || [ -f "$WORK/down.pdf" ]; then
+            fail "a signature with an unreachable timestamp authority did not fail"
+        else
+            pass "an unreachable timestamp authority is an error, and no file is written"
+        fi
+        if [ -x "$PYHANKO" ]; then
+            out=$("$PYHANKO" sign validate --executive-summary --trust-replace --trust "$PKI/root.pem" \
+                "$WORK/bt.pdf" 2>/dev/null)
+            if printf '%s\n' "$out" | grep -q ':VALID$'; then
+                pass "pyHanko bt: valid, with online revocation checks"
+            else
+                fail "pyHanko bt: not valid"; printf '%s\n' "$out"
+            fi
+        fi
+        pki_stop
+        # From here nothing answers: what validates comes from the files.
+        PYTHON=${PYHANKO_PYTHON:-$(dirname "$PYHANKO")/python}
+        if [ -x "$PYHANKO" ] && [ -x "$PYTHON" ]; then
+            levels=$("$PYTHON" -I "$ROOT/test/sign/pades_level.py" "$PKI/root.pem" \
+                "$WORK/bt.pdf" "$WORK/blt.pdf" "$WORK/blta.pdf" "$WORK/certified.pdf" 2>/dev/null)
+            for expected in "bt.pdf: B-T " "blt.pdf: B-LT " "blta.pdf: B-LTA " "certified.pdf: B-LTA "; do
+                if printf '%s\n' "$levels" | grep -q "/$expected"; then
+                    pass "pyHanko, offline: ${expected% }"
+                else
+                    fail "pyHanko, offline: expected ${expected% }"; printf '%s\n' "$levels"
+                fi
+            done
+            for name in blt blta certified; do
+                out=$("$PYHANKO" sign adesverify --executive-summary --trust-replace \
+                    --trust "$PKI/root.pem" "$WORK/$name.pdf" 2>/dev/null)
+                if printf '%s\n' "$out" | grep -q ':VALID$'; then
+                    pass "pyHanko AdES validation, offline, $name: valid"
+                else
+                    fail "pyHanko AdES validation, offline, $name: not valid"; printf '%s\n' "$out"
+                fi
+            done
+        elif [ -x "$PYHANKO" ]; then
+            echo "note: no python next to $PYHANKO; set PYHANKO_PYTHON to check the levels offline"
+        fi
     fi
 fi
 

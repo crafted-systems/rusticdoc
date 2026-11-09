@@ -59,6 +59,9 @@ pub struct Config {
     pub signing_key: Option<PathBuf>,
     /// PEM certificate for the signing key, then any chain certificates.
     pub signing_cert: Option<PathBuf>,
+    /// The rest of signing: named keys, PKCS#11, the timestamp authority, the
+    /// default level and the outbound rules for timestamps and revocation data.
+    pub signing: crate::pdfops::sign::Settings,
     /// Allow webhooks to private or loopback addresses. Off by default.
     pub webhook_allow_private: bool,
     /// Attempts per webhook delivery.
@@ -235,6 +238,7 @@ impl Default for Config {
             webhook_secret: None,
             signing_key: None,
             signing_cert: None,
+            signing: Default::default(),
             webhook_allow_private: false,
             webhook_attempts: 3,
             cors_origins: Vec::new(),
@@ -447,6 +451,7 @@ impl Config {
                 .problems
                 .push("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
         }
+        c.signing = crate::pdfops::sign::Settings::from_vars(vars, &mut c.problems);
         if let Some(v) = get("WEBHOOK_ALLOW_PRIVATE") {
             c.webhook_allow_private = matches!(v.as_str(), "1" | "true" | "yes");
         }
@@ -587,12 +592,26 @@ impl Config {
     /// the file, never what the key file holds.
     pub fn signer(&self) -> Result<Option<crate::pdfops::sign::Signer>, String> {
         match (&self.signing_key, &self.signing_cert) {
-            (Some(key), Some(cert)) => crate::pdfops::sign::Signer::from_files(key, cert)
-                .map(Some)
-                .map_err(|e| format!("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT: {e}")),
+            (Some(key), Some(cert)) => {
+                crate::pdfops::sign::load_key(&key.to_string_lossy(), cert, &self.signing.pkcs11)
+                    .map(Some)
+                    .map_err(|e| format!("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT: {e}"))
+            }
             (None, None) => Ok(None),
             _ => Err("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
         }
+    }
+
+    /// Every signing key, read and checked, with the timestamp authority and
+    /// the rest of [`Config::signing`]. Nothing configured is an empty service.
+    pub fn signing(&self) -> Result<crate::pdfops::sign::Signing, String> {
+        let key = self.signing_key.as_ref().map(|k| k.to_string_lossy());
+        let default = match (&key, &self.signing_cert) {
+            (Some(key), Some(cert)) => Some((key.as_ref(), cert.as_path())),
+            (None, None) => None,
+            _ => return Err("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
+        };
+        crate::pdfops::sign::Signing::load(default, &self.signing)
     }
 
     /// Settings the service refuses to start with.
@@ -603,7 +622,7 @@ impl Config {
         if let Some(url) = &self.store {
             crate::store::Store::open(url)?;
         }
-        self.signer()?;
+        self.signing()?;
         for (variable, engines) in &self.engine_orders {
             for engine in engines {
                 if !matches!(

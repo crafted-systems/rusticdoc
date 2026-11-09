@@ -18,6 +18,7 @@ use x509_cert::Certificate;
 use x509_cert::ext::pkix::KeyUsage;
 use x509_cert::spki::AlgorithmIdentifierOwned;
 
+use super::pkcs11::{Pkcs11Settings, TokenKey, TokenKeySpec};
 use crate::error::{Error, Result};
 
 const RSA_ENCRYPTION: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
@@ -25,6 +26,7 @@ const EC_PUBLIC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10
 const SECP256R1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
 const ECDSA_WITH_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
 const KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.15");
+const COMMON_NAME: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
 
 /// Most certificates a chain file may hold. Real chains have two or three.
 const MAX_CHAIN: usize = 10;
@@ -35,6 +37,29 @@ const MAX_PEM_BYTES: u64 = 1024 * 1024;
 enum Key {
     Rsa(RsaKeyPair),
     P256(EcdsaKeyPair),
+    /// A key on a PKCS#11 token, of the kind its certificate says.
+    Token(TokenKey, TokenKind),
+}
+
+#[derive(Clone, Copy)]
+enum TokenKind {
+    /// With the modulus length in bytes.
+    Rsa(usize),
+    P256,
+}
+
+/// RFC 8017 `RSAPublicKey`, to read a modulus length from a certificate.
+#[derive(der::Sequence)]
+struct RsaPublicKey {
+    modulus: der::asn1::Uint,
+    public_exponent: der::asn1::Uint,
+}
+
+/// An ECDSA signature as DER, from the `r || s` a PKCS#11 token returns.
+#[derive(der::Sequence)]
+struct EcdsaSignature<'a> {
+    r: der::asn1::UintRef<'a>,
+    s: der::asn1::UintRef<'a>,
 }
 
 /// A private key with the certificate it belongs to, and any chain
@@ -89,6 +114,70 @@ impl Signer {
     ) -> std::result::Result<Self, String> {
         let key = parse_key(key_pem)?;
         let chain = parse_chain(cert_pem)?;
+        Self::from_parts(key, chain, now)
+    }
+
+    /// Opens the key `spec` names on a PKCS#11 token and reads its
+    /// certificate chain from `cert` (PEM, the signer's certificate first).
+    /// The key must sign a test message that the certificate's public key
+    /// verifies, which proves that they belong together.
+    pub fn from_pkcs11(
+        settings: &Pkcs11Settings,
+        spec: &TokenKeySpec,
+        cert: &Path,
+    ) -> std::result::Result<Self, String> {
+        let chain = parse_chain(&read_limited(cert, "signing certificate")?)?;
+        let first = chain
+            .first()
+            .ok_or("the signing certificate file holds no certificate")?;
+        let spki = &first.tbs_certificate.subject_public_key_info;
+        let kind = if spki.algorithm.oid == RSA_ENCRYPTION {
+            let key = RsaPublicKey::from_der(spki.subject_public_key.raw_bytes())
+                .map_err(|e| format!("the signing certificate's RSA key cannot be read: {e}"))?;
+            TokenKind::Rsa(key.modulus.as_bytes().len())
+        } else if spki.algorithm.oid == EC_PUBLIC_KEY
+            && spki
+                .algorithm
+                .parameters
+                .as_ref()
+                .and_then(|p| p.decode_as::<ObjectIdentifier>().ok())
+                == Some(SECP256R1)
+        {
+            TokenKind::P256
+        } else {
+            return Err("the signing certificate's key is neither RSA nor ECDSA P-256".into());
+        };
+        let token = TokenKey::open(settings, spec)?;
+        let shown = token.shown.clone();
+        let key = Key::Token(token, kind);
+        let probe = b"rusticdoc: does this key belong to this certificate?";
+        let signature = sign_with(&key, probe).map_err(|e| {
+            format!(
+                "the PKCS#11 key {shown} cannot make the kind of signature the first certificate in the file ({}) needs, so it does not belong to it: {e}",
+                first.tbs_certificate.subject
+            )
+        })?;
+        super::verify::signature(
+            first,
+            &super::cms::ID_SHA256,
+            &spki.algorithm.oid,
+            probe,
+            &signature,
+        )
+        .map_err(|_| {
+            format!(
+                "the PKCS#11 key {shown} does not belong to the first certificate in the file ({})",
+                first.tbs_certificate.subject
+            )
+        })?;
+        Self::from_parts(key, chain, SystemTime::now())
+    }
+
+    fn from_parts(
+        key: Key,
+        chain: Vec<Certificate>,
+        now: SystemTime,
+    ) -> std::result::Result<Self, String> {
         if chain.is_empty() {
             return Err("the signing certificate file holds no certificate".into());
         }
@@ -131,7 +220,32 @@ impl Signer {
         match &self.key {
             Key::Rsa(k) => format!("RSA-{}", k.public_modulus_len() * 8),
             Key::P256(_) => "ECDSA P-256".into(),
+            Key::Token(t, TokenKind::Rsa(n)) => format!("RSA-{} on PKCS#11 ({})", n * 8, t.shown),
+            Key::Token(t, TokenKind::P256) => format!("ECDSA P-256 on PKCS#11 ({})", t.shown),
         }
+    }
+
+    /// The common name of the signer's certificate, or its whole subject.
+    pub fn common_name(&self) -> String {
+        self.chain
+            .first()
+            .and_then(|c| {
+                c.tbs_certificate
+                    .subject
+                    .0
+                    .iter()
+                    .flat_map(|rdn| rdn.0.iter())
+                    .find(|atv| atv.oid == COMMON_NAME)
+                    .and_then(|atv| {
+                        atv.value.decode_as::<String>().ok().or_else(|| {
+                            atv.value
+                                .decode_as::<der::asn1::PrintableStringRef<'_>>()
+                                .ok()
+                                .map(|s| s.to_string())
+                        })
+                    })
+            })
+            .unwrap_or_else(|| self.subject.clone())
     }
 
     /// When the signer's certificate stops being valid.
@@ -188,11 +302,11 @@ impl Signer {
         match &self.key {
             // rsaEncryption with the digest named by digestAlgorithm, as
             // OpenSSL and most PDF signers write it.
-            Key::Rsa(_) => AlgorithmIdentifierOwned {
+            Key::Rsa(_) | Key::Token(_, TokenKind::Rsa(_)) => AlgorithmIdentifierOwned {
                 oid: RSA_ENCRYPTION,
                 parameters: Some(Any::null()),
             },
-            Key::P256(_) => AlgorithmIdentifierOwned {
+            Key::P256(_) | Key::Token(_, TokenKind::P256) => AlgorithmIdentifierOwned {
                 oid: ECDSA_WITH_SHA256,
                 parameters: None,
             },
@@ -203,27 +317,53 @@ impl Signer {
     pub(super) fn max_signature_len(&self) -> usize {
         match &self.key {
             Key::Rsa(k) => k.public_modulus_len(),
+            Key::Token(_, TokenKind::Rsa(n)) => *n,
             // A DER SEQUENCE of two INTEGERs of up to 33 bytes each.
-            Key::P256(_) => 72,
+            Key::P256(_) | Key::Token(_, TokenKind::P256) => 72,
         }
     }
 
     /// Signs `message` with SHA-256: PKCS#1 v1.5 for RSA, DER-encoded ECDSA
     /// for P-256.
     pub(super) fn sign(&self, message: &[u8]) -> Result<Vec<u8>> {
-        let rng = SystemRandom::new();
-        let failed = |_| Error::Engine {
+        sign_with(&self.key, message).map_err(|message| Error::Engine {
             engine: "signer",
-            message: "the private key operation failed".into(),
-        };
-        match &self.key {
-            Key::Rsa(k) => {
-                let mut signature = vec![0; k.public_modulus_len()];
-                k.sign(&RSA_PKCS1_SHA256, &rng, message, &mut signature)
-                    .map_err(failed)?;
-                Ok(signature)
+            message,
+        })
+    }
+}
+
+fn sign_with(key: &Key, message: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    let rng = SystemRandom::new();
+    let failed = |_| "the private key operation failed".to_string();
+    match key {
+        Key::Rsa(k) => {
+            let mut signature = vec![0; k.public_modulus_len()];
+            k.sign(&RSA_PKCS1_SHA256, &rng, message, &mut signature)
+                .map_err(failed)?;
+            Ok(signature)
+        }
+        Key::P256(k) => Ok(k.sign(&rng, message).map_err(failed)?.as_ref().to_vec()),
+        Key::Token(t, TokenKind::Rsa(_)) => {
+            t.sign(&cryptoki::mechanism::Mechanism::Sha256RsaPkcs, message)
+        }
+        Key::Token(t, TokenKind::P256) => {
+            // CKM_ECDSA signs a digest and returns r || s.
+            let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, message);
+            let raw = t.sign(&cryptoki::mechanism::Mechanism::Ecdsa, digest.as_ref())?;
+            if raw.len() != 64 {
+                return Err(format!(
+                    "the PKCS#11 token returned a {}-byte ECDSA signature, not 64",
+                    raw.len()
+                ));
             }
-            Key::P256(k) => Ok(k.sign(&rng, message).map_err(failed)?.as_ref().to_vec()),
+            let (r, s) = raw.split_at(32);
+            EcdsaSignature {
+                r: der::asn1::UintRef::new(r).map_err(|e| e.to_string())?,
+                s: der::asn1::UintRef::new(s).map_err(|e| e.to_string())?,
+            }
+            .to_der()
+            .map_err(|e| e.to_string())
         }
     }
 }
@@ -374,6 +514,7 @@ fn check_key_matches(
             spki.algorithm.oid == RSA_ENCRYPTION,
             k.public_key().as_ref(),
         ),
+        Key::Token(..) => return Ok(()),
         Key::P256(k) => (
             spki.algorithm.oid == EC_PUBLIC_KEY
                 && spki

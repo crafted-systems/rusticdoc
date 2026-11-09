@@ -89,9 +89,15 @@ a binary exists on the machine.
 - `qpdf.rs`, `pdfcpu.rs`: the process engines.
 - `pages.rs`: page selections (`1-3,5`). `xmp.rs`: XMP packet editing.
 - `sign/`: cryptographic signatures, outside the engine chain because they
-  need the deployment's key: `keys.rs` (PEM loading and checks, signing in
-  aws-lc-rs), `cms.rs` (the detached CMS `SignedData`), `incremental.rs` (the
-  update appended after the original bytes), `tests.rs` (independent
-  verification of each signature).
+  need the deployment's keys: `keys.rs` (PEM loading and checks, signing in
+  aws-lc-rs or on a PKCS#11 token through `pkcs11.rs`), `cms.rs` (the detached
+  CMS `SignedData`), `incremental.rs` (the incremental updates: signature,
+  certification, document timestamp, and the appender the DSS uses), `tsa.rs`
+  (RFC 3161 requests and token checks), `revocation.rs` (OCSP, CRLs and
+  issuers for B-LT), `dss.rs` (the `/DSS` update), `net.rs` (the `Outbound`
+  the server implements under its outbound rules), `settings.rs` (named keys,
+  PKCS#11 and timestamp settings from the environment), and `tests.rs` and
+  `level_tests.rs` (independent verification of each signature, levels
+  against a real OpenSSL timestamp authority and OCSP responder).
 - `fixtures.rs`: PDFs built in code for the tests and
   `examples/pdfops_fixtures.rs`; `tests.rs`: the engine tests.

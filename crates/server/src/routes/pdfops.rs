@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 
-use axum::Json;
 use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use axum::{Extension, Json};
 use rusticdoc_core::pdfops::{
     Attachment, Bookmark, FacturxProfile, Metadata, Overlay, OverlayKind, Position, Rotation,
     SplitMode, require_pdf, sign,
@@ -15,6 +15,7 @@ use rusticdoc_core::pdfops::{
 use rusticdoc_core::{Document, Output};
 use utoipa::ToSchema;
 
+use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, request_id, zip};
 use crate::routes::forms::finish;
@@ -130,8 +131,9 @@ pub struct SignForm {
     #[schema(value_type = Vec<String>, format = Binary)]
     pub files: Vec<String>,
     /// `image` (default) draws the images and is not a cryptographic
-    /// signature. `certificate` signs with the service's key (PAdES B-B,
-    /// `/ETSI.CAdES.detached`), invisibly unless an image is sent.
+    /// signature. `certificate` signs with the service's key (PAdES,
+    /// `/ETSI.CAdES.detached`), invisibly unless an image or a position is
+    /// sent.
     #[schema(example = "certificate")]
     pub signature: Option<String>,
     /// 1-based page of each image; repeat the field for several.
@@ -140,7 +142,8 @@ pub struct SignForm {
     pub x: Option<f32>,
     /// Points from the page's bottom edge to the image's bottom edge.
     pub y: Option<f32>,
-    /// Width in points. Default the image's natural size.
+    /// Width in points. Default the image's natural size, or 200 for a text
+    /// appearance.
     pub width: Option<f32>,
     /// With `signature=certificate`: why the document was signed.
     pub reason: Option<String>,
@@ -153,6 +156,20 @@ pub struct SignForm {
     /// identify the signer by the certificate, not by this.
     #[schema(rename = "signerName")]
     pub signer_name: Option<String>,
+    /// With `signature=certificate`: the PAdES level, `b-b`, `b-t` (with an
+    /// RFC 3161 timestamp), `b-lt` (and validation data in a DSS) or `b-lta`
+    /// (and a document timestamp). Default the service's
+    /// `RUSTICDOC_SIGNING_LEVEL`, `b-b` unless set.
+    #[schema(example = "b-lt")]
+    pub level: Option<String>,
+    /// With `signature=certificate`: certify rather than approve, with this
+    /// DocMDP permission: `1` no changes, `2` form filling and signing, `3`
+    /// also annotations. Only the document's first signature can certify.
+    pub certify: Option<u8>,
+    /// With `signature=certificate`: a named key from `RUSTICDOC_SIGNING_KEYS`
+    /// instead of the default one. A caller not on its allow list gets 403.
+    #[schema(rename = "signingKey")]
+    pub signing_key: Option<String>,
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
 }
@@ -700,15 +717,26 @@ fn require_image(image: &Document) -> ApiResult<()> {
 }
 
 /// The fields only a cryptographic signature has.
-const CERTIFICATE_FIELDS: [&str; 4] = ["reason", "location", "contactInfo", "signerName"];
+const CERTIFICATE_FIELDS: [&str; 7] = [
+    "reason",
+    "location",
+    "contactInfo",
+    "signerName",
+    "level",
+    "certify",
+    "signingKey",
+];
 
 /// Signs a PDF. With `signature=certificate`, a cryptographic signature with
-/// the key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`: an
-/// incremental update with a PAdES B-B style `/ETSI.CAdES.detached`
-/// signature (no timestamp), invisible, or shown with the one image sent.
-/// Without a configured key that answers 503. By default
-/// (`signature=image`) the images are drawn at exact coordinates, which is
-/// not a cryptographic signature.
+/// the key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or the
+/// named key `signingKey` chooses: an incremental update with a PAdES
+/// `/ETSI.CAdES.detached` signature at the `level` asked for (B-B to B-LTA),
+/// approving or, with `certify`, certifying. It is invisible, shown with the
+/// one image sent, or, with a position and no image, shown as text naming
+/// the signer, the date and the reason. Without a configured key that answers
+/// 503; a timestamp authority or revocation source that fails answers 502. By
+/// default (`signature=image`) the images are drawn at exact coordinates,
+/// which is not a cryptographic signature.
 #[utoipa::path(
     post, path = "/v1/pdf/sign", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = SignForm),
@@ -716,12 +744,15 @@ const CERTIFICATE_FIELDS: [&str; 4] = ["reason", "location", "contactInfo", "sig
         (status = 200, description = "The signed PDF", content_type = "application/pdf", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody),
-        (status = 503, description = "signature=certificate and no signing key is configured, or the certificate has expired", body = ErrorBody),
+        (status = 403, description = "The caller may not use the signing key", body = ErrorBody),
+        (status = 502, description = "The timestamp authority or a revocation source failed", body = ErrorBody),
+        (status = 503, description = "signature=certificate and no signing key is configured, the level needs a timestamp authority that is not configured, or the certificate has expired", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn sign(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
@@ -730,7 +761,7 @@ pub async fn sign(
     let doc = one_pdf(&mut form)?;
     match form.field("signature").map(str::trim).unwrap_or("image") {
         "" | "image" => sign_with_images(state, hook, headers, form, doc).await,
-        "certificate" => sign_with_certificate(state, hook, headers, form, doc).await,
+        "certificate" => sign_with_certificate(state, principal, hook, headers, form, doc).await,
         other => Err(ApiError::bad_request(format!(
             "'signature' must be image or certificate, not '{other}'"
         ))),
@@ -813,10 +844,11 @@ async fn sign_with_images(
     finish(state, hook, request_id(&headers), job).await
 }
 
-/// `signature=certificate`: one cryptographic signature with the service's
-/// key. The key never comes from the request.
+/// `signature=certificate`: one cryptographic signature with one of the
+/// service's keys. The key never comes from the request.
 async fn sign_with_certificate(
     state: AppState,
+    principal: Principal,
     hook: Option<crate::webhook::Webhook>,
     headers: HeaderMap,
     mut form: Form,
@@ -824,74 +856,72 @@ async fn sign_with_certificate(
 ) -> ApiResult<Response> {
     // Before anything else is checked: without a key nothing the client can
     // change makes this work.
-    let signer = state.engines.signer()?.clone();
+    let signing = &state.engines.signing;
+    if !signing.is_configured() {
+        signing.key(None)?;
+    }
+    let mut options = sign::SignOptions::from_fields(&|name| form.field(name).map(String::from))?;
+    crate::signing::authorize(signing, &principal, &options)?;
     let mut images = std::mem::take(&mut form.files);
     if images.len() > 1 {
         return Err(ApiError::bad_request(
             "with signature=certificate, send the PDF and at most one PNG or JPEG to show the signature with",
         ));
     }
+    options.appearance = appearance(&form, images.pop())?;
+    signing.check(&options)?;
+    let name = output_name(&form, &doc, "");
+    let st = state.clone();
+    let job = async move {
+        let signed = st
+            .engines
+            .signing
+            .sign(&doc, &options, st.config.api_timeout)
+            .await?;
+        Ok(pdf_output(name, signed, "sign"))
+    };
+    finish(state, hook, request_id(&headers), job).await
+}
+
+/// Where a cryptographic signature is shown: with `image` at `page`, `x`,
+/// `y` and `width`, as text at that place when there is no image, or nowhere
+/// when the form names no place and sends no image.
+pub fn appearance(form: &Form, image: Option<Document>) -> ApiResult<Option<sign::Appearance>> {
     let (pages, xs, ys, widths) = (
         form.all("page"),
         form.all("x"),
         form.all("y"),
         form.all("width"),
     );
-    let appearance = match images.pop() {
-        Some(image) => {
-            if xs.len() != 1 || ys.len() != 1 || pages.len() > 1 || widths.len() > 1 {
-                return Err(ApiError::bad_request(
-                    "a visible signature needs one 'x' and one 'y', and at most one 'page' and 'width'",
-                ));
-            }
-            require_image(&image)?;
-            Some(sign::Appearance {
-                page: pages
-                    .first()
-                    .map(|p| page_number(p))
-                    .transpose()?
-                    .unwrap_or(1),
-                x: placement_number("x", &xs[0])?,
-                y: placement_number("y", &ys[0])?,
-                width: widths
-                    .first()
-                    .filter(|w| !w.trim().is_empty())
-                    .map(|w| placement_number("width", w))
-                    .transpose()?,
-                image: image.bytes.to_vec(),
-                name: image.name,
-            })
-        }
-        None => {
-            if !(pages.is_empty() && xs.is_empty() && ys.is_empty() && widths.is_empty()) {
-                return Err(ApiError::bad_request(
-                    "'page', 'x', 'y' and 'width' place the signature image; send one, or leave them out for an invisible signature",
-                ));
-            }
-            None
-        }
-    };
-    let text = |name: &str| {
-        form.field(name)
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(String::from)
-    };
-    let options = sign::SignOptions {
-        reason: text("reason"),
-        location: text("location"),
-        contact_info: text("contactInfo"),
-        signer_name: text("signerName"),
-        appearance,
-    };
-    options.validate()?;
-    let name = output_name(&form, &doc, "");
-    let st = state.clone();
-    let job = async move {
-        let signed = sign::sign(&doc, signer, &options, st.config.api_timeout).await?;
-        Ok(pdf_output(name, signed, "sign"))
-    };
-    finish(state, hook, request_id(&headers), job).await
+    if image.is_none() && pages.is_empty() && xs.is_empty() && ys.is_empty() && widths.is_empty() {
+        return Ok(None);
+    }
+    if xs.len() != 1 || ys.len() != 1 || pages.len() > 1 || widths.len() > 1 {
+        return Err(ApiError::bad_request(
+            "a visible signature needs one 'x' and one 'y', and at most one 'page' and 'width'",
+        ));
+    }
+    if let Some(image) = &image {
+        require_image(image)?;
+    }
+    Ok(Some(sign::Appearance {
+        page: pages
+            .first()
+            .map(|p| page_number(p))
+            .transpose()?
+            .unwrap_or(1),
+        x: placement_number("x", &xs[0])?,
+        y: placement_number("y", &ys[0])?,
+        width: widths
+            .first()
+            .filter(|w| !w.trim().is_empty())
+            .map(|w| placement_number("width", w))
+            .transpose()?,
+        name: image
+            .as_ref()
+            .map_or_else(|| "text".to_string(), |i| i.name.clone()),
+        image: image.map(|i| i.bytes.to_vec()),
+    }))
 }
 
 /// Embeds Factur-X invoice XML and marks the PDF for it.

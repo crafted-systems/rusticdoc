@@ -405,11 +405,13 @@ fn init_cli_logs(config: &Config) {
 }
 
 fn pipeline(config: &Config) -> Pipeline {
-    Pipeline::new(
-        std::sync::Arc::new(Engines::from_config(config)),
-        config.api_timeout,
-    )
-    .with_max_output(config.max_render_bytes)
+    let mut engines = Engines::from_config(config);
+    // A `sign` step past B-B reaches its timestamp authority under the rules.
+    if let Ok(outbound) = rusticdoc_server::signing::PolicyOutbound::from_config(config) {
+        engines.signing.set_outbound(std::sync::Arc::new(outbound));
+    }
+    Pipeline::new(std::sync::Arc::new(engines), config.api_timeout)
+        .with_max_output(config.max_render_bytes)
 }
 
 fn read_doc(path: &std::path::Path) -> anyhow::Result<Document> {
