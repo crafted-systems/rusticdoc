@@ -21,10 +21,21 @@ pub mod limit;
 mod package;
 mod program;
 mod rich;
+mod sanitize;
 mod sheet;
 mod xml;
 
 use program::{Mode, PartTree, Source, Tag, TagCtx};
+pub use sanitize::{is_private_url, Keep, Removed};
+
+/// Takes macros, objects, external links and private hyperlinks out of an
+/// Office package, as every render does, keeping what `keep` names. For
+/// documents that did not come from [`Compiled::render`].
+pub fn sanitize(format: Format, bytes: &[u8], keep: Keep) -> Result<(Vec<u8>, Removed)> {
+    let mut entries = package::read(bytes)?;
+    let removed = sanitize::sanitize(format, &mut entries, keep)?;
+    Ok((package::write(&entries)?, removed))
+}
 
 /// Formats the engine understands. Each is a ZIP of XML parts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -209,9 +220,17 @@ impl Compiled {
 
     /// Fills the template. `data` is the root the expressions see; the
     /// caller puts request context under `ctx` before calling.
+    /// Macros, OLE objects and ActiveX controls, external links and private
+    /// hyperlinks are taken out of the result; see [`Compiled::render_with`].
     pub fn render(&self, data: &serde_json::Value) -> Result<Vec<u8>> {
+        self.render_with(data, Keep::default())
+    }
+
+    /// Fills the template, keeping in the result what `keep` names of what
+    /// rendering otherwise takes out.
+    pub fn render_with(&self, data: &serde_json::Value, keep: Keep) -> Result<Vec<u8>> {
         let (rendered, table) = self.render_text(&self.env, &self.source, data)?;
-        self.assemble(&rendered, table.as_deref())
+        self.assemble(&rendered, table.as_deref(), keep)
     }
 
     fn render_text(
@@ -253,7 +272,7 @@ impl Compiled {
     }
 
     /// Puts the rendered parts back into the container.
-    fn assemble(&self, rendered: &str, table: Option<&rich::Table>) -> Result<Vec<u8>> {
+    fn assemble(&self, rendered: &str, table: Option<&rich::Table>, keep: Keep) -> Result<Vec<u8>> {
         let outputs = program::split_output(rendered);
         if let Some((name, _)) = outputs
             .iter()
@@ -265,7 +284,11 @@ impl Compiled {
         }
         let mut entries = self.entries.clone();
         match self.format {
-            Format::Pptx => package::apply_slides(&mut entries, &outputs)?,
+            Format::Pptx => {
+                package::apply_slides(&mut entries, &outputs)?;
+                // Before rich values, which are placed where their shape now sits.
+                rich::shift::apply(&mut entries)?;
+            }
             Format::Xlsx => {
                 let mut formulas = false;
                 for (name, content) in &outputs {
@@ -305,6 +328,8 @@ impl Compiled {
             let names: Vec<&str> = outputs.iter().map(|(n, _)| n.as_str()).collect();
             rich::apply(self.format, &mut entries, table, rendered, &names)?;
         }
+        // Last, so that links data put in are checked too.
+        sanitize::sanitize(self.format, &mut entries, keep)?;
         package::write(&entries)
     }
 }
@@ -525,7 +550,7 @@ fn validate_within(
         // Rich values are placed after rendering, so placing them is part of
         // the test.
         Ok((rendered, Some(table))) => {
-            if let Err(e) = compiled.assemble(&rendered, Some(&table)) {
+            if let Err(e) = compiled.assemble(&rendered, Some(&table), Keep::default()) {
                 diags.push(to_diag(e));
             }
         }

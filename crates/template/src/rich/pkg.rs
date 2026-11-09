@@ -27,6 +27,7 @@ pub const REL_WORKSHEET: &str =
 pub const REL_STYLES: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
 pub const CHART_CT: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
+pub const ODF_CHART_MIME: &str = "application/vnd.oasis.opendocument.chart";
 
 struct RelFile {
     nodes: Vec<Node>,
@@ -135,18 +136,55 @@ impl<'a> Pkg<'a> {
         // cannot pass the package limit unseen.
         self.charge(data.len())?;
         if stem == "chart" {
-            self.charts += 1;
-            if self.charts > super::MAX_CHARTS {
-                return Err(TemplateError::new(format!(
-                    "at most {} charts are allowed in one render",
-                    super::MAX_CHARTS
-                )));
-            }
+            self.count_chart()?;
         }
         let name = self.free_name(dir, stem, "xml");
         package::set(self.entries, &name, data.into_bytes());
         self.override_type(&name, content_type)?;
         Ok(name)
+    }
+
+    fn count_chart(&mut self) -> Result<(), TemplateError> {
+        self.charts += 1;
+        if self.charts > super::MAX_CHARTS {
+            return Err(TemplateError::new(format!(
+                "at most {} charts are allowed in one render",
+                super::MAX_CHARTS
+            )));
+        }
+        Ok(())
+    }
+
+    /// A new embedded ODF chart, `Object N/` with its content and styles,
+    /// listed in the manifest. Returns the directory name the frame links to.
+    /// `N` is the first number no entry of the template uses, so an object the
+    /// template already holds is never overwritten.
+    pub fn odf_chart(&mut self, content: String, styles: &str) -> Result<String, TemplateError> {
+        self.charge(content.len() + styles.len())?;
+        self.count_chart()?;
+        let mut n = self
+            .next_part
+            .get(&(String::new(), "Object ".to_string()))
+            .copied()
+            .unwrap_or(1);
+        let dir = loop {
+            let dir = format!("Object {n}");
+            let prefix = format!("{dir}/");
+            n += 1;
+            if !self.entries.iter().any(|e| e.name.starts_with(&prefix)) {
+                break dir;
+            }
+        };
+        self.next_part
+            .insert((String::new(), "Object ".to_string()), n);
+        let content_name = format!("{dir}/content.xml");
+        let styles_name = format!("{dir}/styles.xml");
+        package::set(self.entries, &content_name, content.into_bytes());
+        package::set(self.entries, &styles_name, styles.as_bytes().to_vec());
+        self.manifest_entry(&format!("{dir}/"), ODF_CHART_MIME)?;
+        self.manifest_entry(&content_name, "text/xml")?;
+        self.manifest_entry(&styles_name, "text/xml")?;
+        Ok(dir)
     }
 
     /// A relationship from `part`; the same type and target share one id.

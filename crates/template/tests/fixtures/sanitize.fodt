@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document office:mimetype="application/vnd.oasis.opendocument.text" office:version="1.3" xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:script="urn:oasis:names:tc:opendocument:xmlns:script:1.0" xmlns:ooo="http://openoffice.org/2004/office" xmlns:dom="http://www.w3.org/2001/xml-events">
+  <office:scripts>
+    <office:script script:language="ooo:Basic">
+      <ooo:libraries>
+        <ooo:library-embedded ooo:name="Standard">
+          <ooo:module ooo:name="Module1">
+            <ooo:source-code>Sub Main
+  MsgBox "Hello from a macro"
+End Sub
+</ooo:source-code>
+          </ooo:module>
+        </ooo:library-embedded>
+      </ooo:libraries>
+    </office:script>
+    <office:event-listeners>
+      <script:event-listener script:language="ooo:script" script:event-name="dom:load" xlink:href="vnd.sun.star.script:Standard.Module1.Main?language=Basic&amp;location=document"/>
+    </office:event-listeners>
+  </office:scripts>
+  <office:body>
+    <office:text>
+      <text:p>Letter for {{ name }}</text:p>
+      <text:p>Public <text:a xlink:type="simple" xlink:href="https://example.com/">website</text:a> stays.</text:p>
+      <text:p>Private <text:a xlink:type="simple" xlink:href="http://192.168.1.10/admin">router page</text:a> loses its link.</text:p>
+      <text:p>Data link {{ intranet | link("intranet wiki") }} loses its link.</text:p>
+      <text:p>Macro <text:a xlink:type="simple" xlink:href="vnd.sun.star.script:Standard.Module1.Main?language=Basic&amp;location=document">button</text:a> loses its link.</text:p>
+      <text:p>Linked picture: <draw:frame draw:name="Linked" text:anchor-type="as-char" svg:width="2cm" svg:height="1cm"><draw:image xlink:href="https://images.example.com/logo.png" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame> end.</text:p>
+      <text:p>{{ rows | chart(type="column", x="month", y="sales", title="Chart stays") }}</text:p>
+    </office:text>
+  </office:body>
+</office:document>

@@ -14,6 +14,7 @@ mod media;
 mod odf;
 mod pkg;
 mod pptx;
+pub(crate) mod shift;
 mod xlsx;
 
 use std::collections::HashMap;
@@ -44,7 +45,7 @@ const MAX_VALUES: usize = 100_000;
 /// The most charts one render may place.
 const MAX_CHARTS: usize = 200;
 
-const NAMES: [&str; 7] = [
+const NAMES: [&str; 8] = [
     "image",
     "barcode",
     "link",
@@ -52,6 +53,7 @@ const NAMES: [&str; 7] = [
     "html",
     "chart",
     "pagebreak",
+    "shift",
 ];
 
 /// How the rich filters behave in an environment.
@@ -710,23 +712,9 @@ fn html_filter(state: &mut State, value: Value) -> Result<Value, Error> {
     register(state, "html", Rich::Html(blocks))
 }
 
-fn chart_filter(
-    format: Format,
-    state: &mut State,
-    value: Value,
-    kwargs: Kwargs,
-) -> Result<Value, Error> {
+fn chart_filter(state: &mut State, value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     let options = chart::Options::read(&kwargs)?;
     no_more_kwargs("chart", &kwargs)?;
-    if !matches!(format, Format::Docx | Format::Pptx | Format::Xlsx) {
-        return Err(fail(
-            "chart",
-            format!(
-                "charts are not supported in {} templates yet",
-                format.extension().to_ascii_uppercase()
-            ),
-        ));
-    }
     if value.is_undefined() {
         return undefined(state, "chart");
     }
@@ -776,12 +764,10 @@ pub fn add_filters(env: &mut Environment<'static>, mode: Mode) {
     env.add_filter("link", link);
     env.add_filter("color", color);
     env.add_filter("html", html_filter);
-    env.add_filter(
-        "chart",
-        move |state: &mut State, value: Value, kwargs: Kwargs| {
-            chart_filter(format, state, value, kwargs)
-        },
-    );
+    env.add_filter("chart", chart_filter);
+    env.add_filter("shift", move |value: Value, kwargs: Kwargs| {
+        shift::filter(format, value, kwargs)
+    });
     env.add_filter("pagebreak", move |state: &mut State, value: Value| {
         pagebreak(format, state, value)
     });

@@ -696,6 +696,71 @@ enum Target {
         part: usize,
         before: bool,
     },
+    /// Like `Node`, with a comment beside the tag that marks where each copy
+    /// of a shifted loop starts or ends (see `rich::shift`).
+    Shape {
+        part: usize,
+        path: Path,
+        before: bool,
+        marker: String,
+    },
+}
+
+/// A PPTX loop with `| shift(…)` repeats the shapes on the slide that hold
+/// its tags, a group counting as one shape, and marks each copy so that it
+/// can be moved after rendering.
+fn plan_shift(
+    parts: &[PartTree],
+    tags: &[Tag],
+    ctxs: &[TagCtx],
+    b: &Block,
+    step: crate::rich::shift::Step,
+) -> Result<Vec<(TagId, Target)>, String> {
+    let (o, c) = (&ctxs[b.open], &ctxs[b.close]);
+    let (open, close) = (&tags[b.open].text, &tags[b.close].text);
+    if o.part != c.part {
+        return Err(format!(
+            "'{open}' and '{close}' sit on different slides; shift moves shapes on one slide"
+        ));
+    }
+    if let Some(&m) = b.middles.first() {
+        return Err(format!(
+            "'{}' cannot sit in a loop that moves shapes with shift",
+            tags[m].text
+        ));
+    }
+    let nodes = &parts[o.part].nodes;
+    let shape = |para: &Path| -> Option<Path> {
+        (1..para.len())
+            .find(|&d| elem_at(nodes, &para[..d]).is_some_and(|e| e.name == "p:spTree"))
+            .map(|d| para[..=d].to_vec())
+    };
+    let (Some(unit_o), Some(unit_c)) = (shape(&o.para), shape(&c.para)) else {
+        return Err(format!(
+            "'{open}' moves shapes with shift, so it and '{close}' must sit in shapes on the slide"
+        ));
+    };
+    let (begin, end) = crate::rich::shift::markers(b.open, step);
+    Ok(vec![
+        (
+            b.open,
+            Target::Shape {
+                part: o.part,
+                path: unit_o,
+                before: true,
+                marker: begin,
+            },
+        ),
+        (
+            b.close,
+            Target::Shape {
+                part: o.part,
+                path: unit_c,
+                before: false,
+                marker: end,
+            },
+        ),
+    ])
 }
 
 fn siblings(a: &[usize], b: &[usize]) -> bool {
@@ -726,6 +791,15 @@ fn plan_block(
         format!("'{}' ({} {})", t.text, t.loc.part, t.loc.place)
     };
     let err = |msg: String| diag(Severity::Error, msg, Some(tags[b.open].loc.clone()));
+
+    if format == Format::Pptx && tags[b.open].is_for() {
+        let step = tags[b.open]
+            .stmt()
+            .and_then(|(_, rest)| crate::rich::shift::of_for(rest));
+        if let Some(step) = step {
+            return plan_shift(parts, tags, ctxs, b, step.map_err(err)?).map_err(err);
+        }
+    }
 
     if o.part != c.part {
         if format != Format::Pptx {
@@ -958,6 +1032,23 @@ pub fn place_blocks(
                     parts[part].before.push(id);
                 } else {
                     parts[part].after.push(id);
+                }
+            }
+            // The marker sits inside the loop, so every copy carries one.
+            Target::Shape {
+                part,
+                path,
+                before,
+                marker,
+            } => {
+                if let Some(e) = elem_at_mut(&mut parts[part].nodes, &path) {
+                    if before {
+                        e.before.push(Piece::Tag(id));
+                        e.before.push(Piece::Lit(marker));
+                    } else {
+                        e.after.push(Piece::Lit(marker));
+                        e.after.push(Piece::Tag(id));
+                    }
                 }
             }
         }

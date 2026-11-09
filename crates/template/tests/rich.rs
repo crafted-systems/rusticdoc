@@ -1414,28 +1414,404 @@ fn charts_refuse_bad_values() {
     assert!(bytes_of(&out, "word/charts/chart1.xml").is_some());
 }
 
-#[test]
-fn charts_are_refused_in_odf_for_now() {
-    let tag = "{{ rows | chart(type=\"bar\", x=\"month\", y=\"sales\") }}";
-    for (format, doc, name) in [
-        (Format::Odt, odt(&format!("<text:p>{tag}</text:p>")), "ODT"),
+fn odf_chart_docs(tag: &str) -> [(Format, Vec<u8>); 3] {
+    let tag = escape(tag);
+    [
+        (Format::Odt, odt(&format!("<text:p>Before {tag} after</text:p>"))),
         (
             Format::Ods,
             ods(&format!("<table:table><table:table-row><table:table-cell><text:p>{tag}</text:p></table:table-cell></table:table-row></table:table>")),
-            "ODS",
         ),
         (
             Format::Odp,
-            odp(&format!("<draw:page><draw:frame><draw:text-box><text:p>{tag}</text:p></draw:text-box></draw:frame></draw:page>")),
-            "ODP",
+            odp(&format!("<draw:page><draw:frame svg:x=\"2cm\" svg:y=\"3cm\"><draw:text-box><text:p>{tag}</text:p></draw:text-box></draw:frame></draw:page>")),
         ),
-    ] {
-        let err = render_err(format, &doc, sales());
+    ]
+}
+
+#[test]
+fn odf_charts_are_embedded_chart_objects() {
+    for (format, doc) in odf_chart_docs(CHART_TAG) {
+        let out = render(format, &doc, sales());
+        let content = part(&out, "content.xml");
         assert!(
-            err.contains(&format!("charts are not supported in {name} templates yet")),
-            "{err}"
+            content.contains(
+                "svg:width=\"450.00pt\" svg:height=\"270.00pt\"><draw:object xlink:href=\"./Object 1\""
+            ),
+            "{format:?}: {content}"
+        );
+        assert!(!content.contains('\u{1}'), "{content}");
+        match format {
+            Format::Odt => assert!(
+                content.contains("text:anchor-type=\"as-char\""),
+                "{content}"
+            ),
+            Format::Ods => assert!(
+                content.contains("<table:table-cell><draw:frame"),
+                "the frame goes on the cell: {content}"
+            ),
+            _ => assert!(
+                content.contains("svg:x=\"2cm\" svg:y=\"3cm\" svg:width=\"450.00pt\""),
+                "the frame sits where the tag's shape is: {content}"
+            ),
+        }
+        let manifest = part(&out, "META-INF/manifest.xml");
+        for (path, mime) in [
+            ("Object 1/", "application/vnd.oasis.opendocument.chart"),
+            ("Object 1/content.xml", "text/xml"),
+            ("Object 1/styles.xml", "text/xml"),
+        ] {
+            assert!(
+                manifest.contains(&format!(
+                    "manifest:full-path=\"{path}\" manifest:media-type=\"{mime}\""
+                )),
+                "{manifest}"
+            );
+        }
+        assert!(part(&out, "Object 1/styles.xml").contains("<office:document-styles"));
+        let chart = part(&out, "Object 1/content.xml");
+        // Horizontal bars, the title and names escaped, two coloured series.
+        assert!(chart.contains("chart:class=\"chart:bar\""), "{chart}");
+        assert!(chart.contains("chart:vertical=\"true\""), "{chart}");
+        assert!(
+            chart.contains("<text:p>Rev &amp; &lt;Co&gt;</text:p></chart:title>"),
+            "{chart}"
+        );
+        assert!(
+            chart.contains("<text:p>Jan &amp; &lt;Feb&gt;</text:p>"),
+            "{chart}"
+        );
+        assert!(
+            chart.contains("table:cell-range-address=\"local-table.$A$1:.$C$3\""),
+            "{chart}"
+        );
+        assert!(chart.contains("chart:values-cell-range-address=\"local-table.$C$2:.$C$3\" chart:label-cell-address=\"local-table.$C$1\""), "{chart}");
+        assert!(
+            chart.contains("office:value-type=\"float\" office:value=\"20.25\""),
+            "{chart}"
+        );
+        // The missing cost is a gap.
+        assert!(
+            chart.contains("<table:table-cell/></table:table-row>"),
+            "{chart}"
+        );
+        assert!(chart.contains("draw:fill-color=\"#4472c4\""), "{chart}");
+        assert!(chart.contains("draw:fill-color=\"#ed7d31\""), "{chart}");
+        assert!(
+            !chart.contains("xlink:href=\"..") && !chart.contains("cell-range-address=\"Sheet"),
+            "the chart reads only its own table: {chart}"
         );
     }
+}
+
+#[test]
+fn odf_chart_kinds() {
+    for (kind, class, vertical) in [
+        ("column", "chart:bar", "false"),
+        ("line", "chart:line", "false"),
+        ("pie", "chart:circle", "false"),
+    ] {
+        let tag = format!("{{{{ rows | chart(type=\"{kind}\", x=\"month\", y=\"sales\") }}}}");
+        let out = render(
+            Format::Odt,
+            &odt(&format!("<text:p>{tag}</text:p>")),
+            sales(),
+        );
+        let chart = part(&out, "Object 1/content.xml");
+        assert!(
+            chart.contains(&format!("<chart:chart svg:width=\"450.00pt\" svg:height=\"270.00pt\" chart:class=\"{class}\"")),
+            "{kind}: {chart}"
+        );
+        assert!(
+            chart.contains(&format!("chart:vertical=\"{vertical}\"")),
+            "{chart}"
+        );
+        assert_eq!(chart.contains("<chart:grid"), kind != "pie", "{chart}");
+        assert!(
+            !chart.contains("<chart:title"),
+            "no title was given: {chart}"
+        );
+        if kind == "pie" {
+            // Each slice has a colour of its own.
+            assert!(
+                chart.contains("<chart:data-point chart:style-name=\"chS0\"/><chart:data-point chart:style-name=\"chS1\"/>"),
+                "{chart}"
+            );
+        }
+        if kind == "line" {
+            assert!(chart.contains("chart:symbol-type=\"automatic\""), "{chart}");
+        }
+    }
+}
+
+#[test]
+fn odf_charts_take_sizes_and_never_overwrite_an_object() {
+    let tag = "{{ rows | chart(type=\"line\", x=\"month\", y=\"sales\", width=200, height=100) }} {{ rows | chart(type=\"pie\", x=\"month\", y=\"sales\") }}";
+    let doc = odt(&format!("<text:p>{tag}</text:p>"));
+    // The template already embeds an object under the first free name.
+    let mut files = entries(&doc);
+    files.push(("Object 1/content.xml".to_string(), b"<x/>".to_vec()));
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    let out = render(Format::Odt, &zip(&refs), sales());
+    assert_eq!(bytes_of(&out, "Object 1/content.xml").unwrap(), b"<x/>");
+    let content = part(&out, "content.xml");
+    assert!(
+        content.contains(
+            "svg:width=\"200.00pt\" svg:height=\"100.00pt\"><draw:object xlink:href=\"./Object 2\""
+        ),
+        "{content}"
+    );
+    assert!(content.contains("xlink:href=\"./Object 3\""), "{content}");
+    assert!(part(&out, "Object 2/content.xml").contains("chart:line"));
+    assert!(part(&out, "Object 3/content.xml").contains("chart:circle"));
+}
+
+#[test]
+fn odf_charts_count_against_the_chart_limit() {
+    let doc = odt("<text:p>{% set c = rows | chart(type=\"bar\", x=\"month\", y=\"sales\") %}{% for i in range(201) %}{{ c }}{% endfor %}</text:p>");
+    let err = compile(Format::Odt, &doc)
+        .unwrap()
+        .render(&sales())
+        .unwrap_err();
+    assert!(err.message.contains("200 charts"), "{err}");
+}
+
+// --- shift ----------------------------------------------------------------
+
+/// A text box at `(x, y)` EMU holding one paragraph per entry.
+fn card(id: u32, x: i64, y: i64, paras: &[&str]) -> String {
+    let mut s = format!(
+        "<p:sp><p:nvSpPr><p:cNvPr id=\"{id}\" name=\"Card {id}\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/>\
+         </p:nvSpPr><p:spPr><a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"2000000\" cy=\"500000\"/>\
+         </a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/>\
+         <a:lstStyle/>"
+    );
+    for para in paras {
+        s.push_str(&format!(
+            "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p>",
+            escape(para)
+        ));
+    }
+    s.push_str("</p:txBody></p:sp>");
+    s
+}
+
+/// `(x, y)` of every shape offset on a slide, in order.
+fn offsets(slide: &str) -> Vec<(i64, i64)> {
+    Regex::new("<a:off x=\"(-?[0-9]+)\" y=\"(-?[0-9]+)\"/>")
+        .unwrap()
+        .captures_iter(slide)
+        .map(|c| (c[1].parse().unwrap(), c[2].parse().unwrap()))
+        .collect()
+}
+
+fn cards_data() -> Value {
+    json!({"cards": [
+        {"name": "Ada", "role": "Engineer"},
+        {"name": "Grace", "role": "Admiral"},
+        {"name": "Linus", "role": "Kernel"},
+    ]})
+}
+
+#[test]
+fn shift_repeats_the_shapes_of_a_loop_and_moves_each_copy() {
+    // A name box and a role box beside it, one card per item, 2 cm apart.
+    let deck = pptx(&[&(card(
+        5,
+        100,
+        200,
+        &["{% for c in cards | shift(y=\"2cm\") %}{{ c.name }}"],
+    ) + &card(6, 3000000, 200, &["{{ c.role }}{% endfor %}"])
+        + &card(7, 0, 6000000, &["Footer"]))]);
+    let out = render(Format::Pptx, &deck, cards_data());
+    assert_eq!(slide_order(&out).len(), 1, "the slide is not repeated");
+    let slide = part(&out, "ppt/slides/slide1.xml");
+    assert!(!slide.contains("rusticdoc"), "{slide}");
+    assert_eq!(
+        slide_text(&out, "ppt/slides/slide1.xml"),
+        ["Ada", "Engineer", "Grace", "Admiral", "Linus", "Kernel", "Footer"]
+    );
+    assert_eq!(
+        offsets(&slide),
+        [
+            (100, 200),
+            (3000000, 200),
+            (100, 720200),
+            (3000000, 720200),
+            (100, 1440200),
+            (3000000, 1440200),
+            (0, 6000000),
+        ]
+    );
+    // Every shape keeps an id of its own.
+    let ids: Vec<String> = Regex::new("<p:cNvPr id=\"([0-9]+)\"")
+        .unwrap()
+        .captures_iter(&slide)
+        .map(|c| c[1].to_string())
+        .collect();
+    let unique: std::collections::HashSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len(), "{ids:?}");
+}
+
+#[test]
+fn shift_in_one_text_box_repeats_the_box_across_the_slide() {
+    let deck = pptx(&[&card(
+        5,
+        0,
+        0,
+        &["{% for c in cards | shift(x=\"3in\") %}{{ c.name }}{% endfor %}"],
+    )]);
+    let out = render(Format::Pptx, &deck, cards_data());
+    let slide = part(&out, "ppt/slides/slide1.xml");
+    assert_eq!(
+        offsets(&slide),
+        [(0, 0), (2743200, 0), (5486400, 0)],
+        "{slide}"
+    );
+    assert_eq!(
+        slide_text(&out, "ppt/slides/slide1.xml"),
+        ["Ada", "Grace", "Linus"]
+    );
+    // An empty list leaves no shape, and an outer slide loop still works.
+    let out = render(Format::Pptx, &deck, json!({"cards": []}));
+    assert!(offsets(&part(&out, "ppt/slides/slide1.xml")).is_empty());
+}
+
+#[test]
+fn shifted_loops_nest_into_a_grid() {
+    let deck = pptx(&[&card(
+        5,
+        0,
+        0,
+        &["{% for row in rows | shift(y=\"1cm\") %}{% for v in row | shift(x=\"2cm\") %}{{ v }}{% endfor %}{% endfor %}"],
+    )]);
+    let out = render(
+        Format::Pptx,
+        &deck,
+        json!({"rows": [["a", "b"], ["c", "d"]]}),
+    );
+    let slide = part(&out, "ppt/slides/slide1.xml");
+    assert_eq!(
+        offsets(&slide),
+        [(0, 0), (720000, 0), (0, 360000), (720000, 360000)]
+    );
+    assert_eq!(
+        slide_text(&out, "ppt/slides/slide1.xml"),
+        ["a", "b", "c", "d"]
+    );
+}
+
+#[test]
+fn a_picture_in_a_shifted_copy_sits_at_the_moved_shape() {
+    let deck = pptx(&[&card(
+        5,
+        1000,
+        2000,
+        &["{% for c in cards | shift(y=\"1in\") %}{{ logo | image(width=10, height=10) }}{% endfor %}"],
+    )]);
+    let mut data = cards_data();
+    data["logo"] = json!(b64(&logo()));
+    let out = render(Format::Pptx, &deck, data);
+    let slide = part(&out, "ppt/slides/slide1.xml");
+    let pics: Vec<(i64, i64)> = Regex::new("(?s)<p:pic>.*?<a:off x=\"([0-9]+)\" y=\"([0-9]+)\"/>")
+        .unwrap()
+        .captures_iter(&slide)
+        .map(|c| (c[1].parse().unwrap(), c[2].parse().unwrap()))
+        .collect();
+    assert_eq!(pics, [(1000, 2000), (1000, 916400), (1000, 1830800)]);
+}
+
+#[test]
+fn a_placeholder_without_a_position_takes_its_layouts_before_moving() {
+    let title = "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Title 1\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{% for c in cards | shift(y=\"1cm\") %}{{ c.name }}{% endfor %}</a:t></a:r></a:p></p:txBody></p:sp>";
+    let deck = pptx(&[title]);
+    let layout = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<p:sldLayout xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Title 1\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"500\" y=\"600\"/><a:ext cx=\"7000\" cy=\"800\"/></a:xfrm></p:spPr></p:sp></p:spTree></p:cSld></p:sldLayout>";
+    let mut files = entries(&deck);
+    files.push((
+        "ppt/slideLayouts/slideLayout1.xml".to_string(),
+        layout.as_bytes().to_vec(),
+    ));
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    let out = render(Format::Pptx, &zip(&refs), cards_data());
+    let slide = part(&out, "ppt/slides/slide1.xml");
+    // The first copy keeps inheriting; the others get the layout's box, moved.
+    assert_eq!(offsets(&slide), [(500, 360600), (500, 720600)], "{slide}");
+    assert!(slide.contains("<a:ext cx=\"7000\" cy=\"800\"/>"), "{slide}");
+}
+
+#[test]
+fn shift_mistakes_are_located_errors() {
+    let compile_err = |deck: Vec<u8>| {
+        let err = compile(Format::Pptx, &deck).expect_err("must not compile");
+        assert!(err.location.is_some(), "{err}");
+        err.to_string()
+    };
+    let one = |text: &str| pptx(&[&card(5, 0, 0, &[text])]);
+    let err = compile_err(one(
+        "{% for c in cards | shift(y=\"2\") %}{{ c }}{% endfor %}",
+    ));
+    assert!(
+        err.contains("no unit") && err.contains("slide1.xml"),
+        "{err}"
+    );
+    let err = compile_err(one(
+        "{% for c in cards | shift(y=gap) %}{{ c }}{% endfor %}",
+    ));
+    assert!(err.contains("cannot come from data"), "{err}");
+    let err = compile_err(one(
+        "{% for c in cards | shift(y=\"1cm\") %}{{ c }}{% else %}none{% endfor %}",
+    ));
+    assert!(
+        err.contains("cannot sit in a loop that moves shapes"),
+        "{err}"
+    );
+    let err = compile_err(pptx(&[
+        &card(5, 0, 0, &["{% for c in cards | shift(y=\"1cm\") %}"]),
+        &card(5, 0, 0, &["{% endfor %}"]),
+    ]));
+    assert!(err.contains("different slides"), "{err}");
+    // Other formats refuse the filter when it runs.
+    let doc = docx(&p(
+        "{% for c in cards | shift(y=\"1cm\") %}{{ c.name }}{% endfor %}",
+    ));
+    let err = render_err(Format::Docx, &doc, cards_data());
+    assert!(err.contains("does not work in DOCX"), "{err}");
+    let doc = odp("<draw:page><draw:frame><draw:text-box><text:p>{% for c in cards | shift(y=\"1cm\") %}{{ c.name }}{% endfor %}</text:p></draw:text-box></draw:frame></draw:page>");
+    let err = render_err(Format::Odp, &doc, cards_data());
+    assert!(err.contains("does not work in ODP"), "{err}");
+    let err = environment()
+        .render_str("{% for c in [] | shift(y=\"1cm\") %}{% endfor %}", ())
+        .unwrap_err();
+    assert!(err.to_string().contains("Office template"), "{err}");
+}
+
+#[test]
+fn validate_checks_shift_like_a_render() {
+    let deck = pptx(&[&card(
+        5,
+        0,
+        0,
+        &["{% for c in cards | shift(y=\"1cm\") %}{{ c.name }}{% endfor %}"],
+    )]);
+    assert!(validate(Format::Pptx, &deck, &cards_data()).is_empty());
+    let deck = pptx(&[&card(
+        5,
+        0,
+        0,
+        &["{% for c in cards | shift(down=\"1cm\") %}{{ c.name }}{% endfor %}"],
+    )]);
+    let diags = validate(Format::Pptx, &deck, &cards_data());
+    assert!(diags[0].message.contains("not down="), "{diags:?}");
+    assert_eq!(
+        diags[0].location.as_ref().unwrap().snippet,
+        "{% for c in cards | shift(down=\"1cm\") %}"
+    );
 }
 
 // --- pagebreak ------------------------------------------------------------
@@ -1606,6 +1982,11 @@ fn the_rich_environment_checks_and_prints_nothing() {
             minijinja::context! { x => "javascript:alert(1)" },
         )
         .is_err());
+    let ods_env = rich_environment(Format::Ods);
+    let err = ods_env
+        .render_str("{{ x | pagebreak }}", minijinja::context! { x => "" })
+        .unwrap_err();
+    assert!(err.to_string().contains("not ODS"), "{err}");
     let odt_env = rich_environment(Format::Odt);
     let err = odt_env
         .render_str(
@@ -1613,7 +1994,7 @@ fn the_rich_environment_checks_and_prints_nothing() {
             minijinja::context! { x => "" },
         )
         .unwrap_err();
-    assert!(err.to_string().contains("not supported in ODT"), "{err}");
+    assert!(err.to_string().contains("list of objects"), "{err}");
 }
 
 // --- concurrency, validation, what stays the same -------------------------
@@ -1716,10 +2097,10 @@ fn validate_accepts_rich_filters_and_reports_bad_arguments() {
         "{diags:?}"
     );
     // A format that cannot hold the content.
-    let doc = odt("<text:p>{{ rows | chart(type=\"bar\", x=\"a\", y=\"b\") }}</text:p>");
-    let diags = validate(Format::Odt, &doc, &json!({"rows": []}));
+    let doc = ods("<table:table><table:table-row><table:table-cell><text:p>{{ x | pagebreak }}</text:p></table:table-cell></table:table-row></table:table>");
+    let diags = validate(Format::Ods, &doc, &json!({"x": 1}));
     assert!(
-        diags[0].message.contains("not supported in ODT"),
+        diags[0].message.contains("only in DOCX and ODT, not ODS"),
         "{diags:?}"
     );
 }
@@ -1874,8 +2255,18 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
             file: "out.odt",
             template: include_bytes!("fixtures/rich.odt"),
             format: Format::Odt,
-            chart: false,
-            text: &["Lamp", "Plug", "Second page", "Cell value"],
+            chart: true,
+            text: &[
+                "Lamp",
+                "Plug",
+                "Second page",
+                "Cell value",
+                "Revenue",
+                "January",
+                "February",
+                "sales",
+                "costs",
+            ],
             images: 5,
             pages: Some(2),
         },
@@ -1894,8 +2285,10 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
             file: "out.ods",
             template: include_bytes!("fixtures/rich.ods"),
             format: Format::Ods,
-            chart: false,
-            text: &["Lamp", "Plug", "Keep", "Below"],
+            chart: true,
+            text: &[
+                "Lamp", "Plug", "Keep", "Below", "Revenue", "January", "February", "sales", "costs",
+            ],
             images: 3,
             pages: None,
         },
@@ -1912,8 +2305,8 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
             file: "out.odp",
             template: include_bytes!("fixtures/rich.odp"),
             format: Format::Odp,
-            chart: false,
-            text: &[],
+            chart: true,
+            text: &["Revenue", "January", "February", "sales", "costs"],
             images: 2,
             pages: Some(1),
         },

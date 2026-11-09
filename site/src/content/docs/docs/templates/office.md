@@ -36,6 +36,7 @@ There are no special loop tags. The positions of a block's opening and closing t
 | In different paragraphs | Those paragraphs, and everything between |
 | On different slides (PPTX) or pages (ODP) | That run of slides |
 | In different shapes of one slide (PPTX) | That slide |
+| On one slide, with `\| shift(…)` (PPTX) | Those shapes, each copy moved by a step |
 | In rows of a sheet (XLSX, ODS) | Those rows |
 
 Tags in different parts of a package cannot form a block, such as a `{% for %}` in the body and its `{% endfor %}` in a header, or tags on two sheets of an XLSX: `a block cannot span parts`. PPTX slides are the exception, as the table says.
@@ -187,11 +188,52 @@ Put the opening tag on one slide and the closing tag on the same or a later slid
 | Both in one shape, in the same paragraph | The text between them |
 | Both in one shape, in different paragraphs | Those paragraphs |
 | In different shapes on one slide, such as the title and the body | That slide, once per item |
+| On one slide, with `\| shift(…)` on the list | Those shapes, once per item, each moved by the step. See [below](#shapes-that-move-down-or-across-a-slide) |
 | In rows of a table | Those rows |
 
 Each copy of a slide gets its own parts, relationships and ids, and the original's speaker notes are not shared with the copies. An empty list removes the slides, and slides with no tags stay where they are.
 
 For a condition across slides, the slide holding `{% else %}` starts the second branch, even if text sits before the tag on that slide. A block that repeats one slide cannot hold an `{% else %}` or `{% elif %}`: `cannot divide a slide`.
+
+### Shapes that move down or across a slide
+
+To lay a list out on one slide, such as a card per person, add `shift` to the loop's list with the distance from one copy to the next:
+
+```text
+{% for person in team | shift(y="3cm") %}{{ person.name }}
+{{ person.role }}{% endfor %}
+```
+
+The loop then repeats the shapes that hold its tags, not the slide, and moves each copy by the step: the first copy stays where the shapes are, the second sits 3 cm lower, the third 6 cm lower. The tags can sit in one text box, which repeats that box, or in several shapes, such as a filled rectangle holding `{% for … %}{{ person.name }}` and a text box beside it holding `{{ person.role }}{% endfor %}`, which repeats both as a pair. A group counts as one shape and moves as a whole.
+
+| Step | Moves each copy |
+|---|---|
+| `shift(y="3cm")` | Down |
+| `shift(x="6cm")` | Across, to the right |
+| `shift(x="6cm", y="1cm")` | Both ways at once |
+| `shift(y="-2cm")` | Up |
+
+A step is a quoted number and a unit: `cm`, `mm`, `in`, `pt` or `emu` (914,400 to the inch). PowerPoint's curly quotes work as well as straight ones. The step is read when the template is compiled, so it must be written in the tag and cannot come from data.
+
+Two shifted loops nest into a grid. Here each row moves down and each cell across, and every row starts again at the left:
+
+```text
+{% for row in rows | shift(y="2cm") %}{% for cell in row | shift(x="4cm") %}{{ cell }}{% endfor %}{% endfor %}
+```
+
+Each copy gets a shape id of its own, and pictures and charts printed in a copy go at that copy's position. A placeholder that PowerPoint has not moved takes the position its layout gives it before it moves. Copies that run off the slide are not stopped: a long list needs a smaller step, or a slide loop.
+
+Refused, with the tag's slide named:
+
+| Mistake | Error |
+|---|---|
+| No unit | `y="4" has no unit` |
+| A step from data, such as `shift(y=gap)` | `the step is read when the template is compiled, so it cannot come from data` |
+| An unknown argument | `shift takes x= and y=, not down=` |
+| A step longer than the largest slide | `is longer than the largest slide (56 in, 142.24 cm)` |
+| `{% else %}` in the loop | `cannot sit in a loop that moves shapes with shift` |
+| The tags on two slides | `shift moves shapes on one slide` |
+| `shift` in another format | `it does not work in DOCX templates` |
 
 ```bash test
 mkdir t && cd t && unzip -q ../deck.pptx
@@ -212,7 +254,7 @@ Page breaks are refused, `html` becomes plain text, and a newline in a value sta
 
 Tags are read in `content.xml`, which holds the pages and their speaker notes. Masters are not read. Tags on different pages repeat that run of pages, and copies keep the page name the original had.
 
-Charts and page breaks are refused, `html` becomes plain text, and a newline in a value stays a newline character.
+Page breaks and `shift` are refused, `html` becomes plain text, and a newline in a value stays a newline character. A chart is an embedded chart object at the position of the shape that held the tag.
 
 ```bash test
 curl -F files=@deck.pptx -F to=odp http://localhost:9027/v1/convert -o deck.odp
@@ -228,7 +270,21 @@ unzip -p out.odp content.xml | grep -o 'Q3 results'
 
 - Tags in attributes, field codes or document properties. They stay as written.
 - `{% raw %}`. To print braces, see [printing literal braces](/docs/templates/syntax/#printing-literal-braces).
-- Macros and OLE objects are not stripped. See [known limits](/docs/project/known-limits/).
+
+## What rendering takes out
+
+A template comes from whoever sends it, and the document is read by someone else, so a render takes out of every output what could run or reach out when the document is opened:
+
+| What | Formats | What is left |
+|---|---|---|
+| Macro projects: `vbaProject.bin` with its data and signatures, and Basic or script libraries (`Basic/`, `Scripts/`, `Dialogs/`) | All | A macro-enabled DOCX, XLSX or PPTX gets the plain content type, so the output is an ordinary file. In ODF, the event bindings and links that call a macro go too, and a macro link keeps its text |
+| OLE objects, ActiveX controls, applets and plugins | All | The object's preview picture, where it has one. Charts and formulas are content and stay |
+| External links: linked pictures, linked data and workbooks, attached templates, linked sections and DDE links | All | A linked picture keeps its frame in DOCX and PPTX and goes in ODF. An XLSX formula that read a linked workbook goes, and since rendering drops cached formula values, its cell is left empty |
+| Hyperlinks to private or local networks: `localhost`, `*.local`, `*.internal`, `10/8`, `172.16/12`, `192.168/16`, `127/8`, `169.254/16`, `::1`, `fc00::/7`, `fe80::/10`, `file:` and UNC paths | All | The link's text. Addresses written another way, such as `http://2130706433/`, count too |
+
+This covers what the template held and what data put in, such as a `link` filter given an intranet address. Every relationship, content type and manifest entry that pointed at something removed goes with it, so the file opens without a repair. Public hyperlinks, embedded pictures and the template's own parts stay as they were.
+
+Not covered yet: Excel 4.0 macro sheets in an XLSX, data connections and query tables (`xl/connections.xml`), and `HYPERLINK` fields in Word written as field codes rather than simple fields.
 
 ## Check a template
 

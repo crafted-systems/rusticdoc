@@ -1,12 +1,13 @@
 //! ODT, ODS and ODP. Text is mixed content, so markers are replaced in place.
 //! ODT block content replaces paragraphs; sheets and presentations have no
 //! paragraph structure to speak of, so html becomes plain text there, and
-//! pictures go on the cell or the page.
+//! pictures and charts go on the cell or the page.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use crate::rich::chart::{self, Chart};
 use crate::rich::html::{self, Block, Inline, Style};
 use crate::rich::pkg::Pkg;
 use crate::rich::{
@@ -218,6 +219,9 @@ struct Odf<'a, 'b> {
     /// Pictures of the page being walked (ODP), and where its shape sits.
     page_frames: Vec<Node>,
     origin: (String, String),
+    /// The height of the frames already placed for this cell or shape, so the
+    /// next one goes below them rather than over them, as in PPTX.
+    stacked_pt: f64,
 }
 
 pub fn rewrite(
@@ -244,6 +248,7 @@ pub fn rewrite(
         cell_color: None,
         page_frames: Vec::new(),
         origin: ("0pt".to_string(), "0pt".to_string()),
+        stacked_pt: 0.0,
     };
     ctx.walk(&mut root.children, "")?;
     let book = std::mem::replace(
@@ -286,6 +291,7 @@ impl Odf<'_, '_> {
                     e.attr("svg:x").unwrap_or_else(|| "0pt".to_string()),
                     e.attr("svg:y").unwrap_or_else(|| "0pt".to_string()),
                 );
+                self.stacked_pt = 0.0;
             }
             // Frames nest paragraphs inside paragraphs: inner ones first.
             self.walk(&mut e.children, &name)?;
@@ -351,6 +357,7 @@ impl Odf<'_, '_> {
             cell.make_open();
             cell.children.splice(0..0, frames);
         }
+        self.stacked_pt = 0.0;
     }
 
     fn paragraph(&mut self, p: Elem, parent: &str) -> Result<Vec<Node>, TemplateError> {
@@ -499,17 +506,7 @@ impl Odf<'_, '_> {
         match &*item {
             Rich::Picture(picture) => {
                 let frame = self.frame(picture)?;
-                match self.format {
-                    Format::Ods => {
-                        self.cell_frames.push(frame);
-                        Ok(Vec::new())
-                    }
-                    Format::Odp => {
-                        self.page_frames.push(frame);
-                        Ok(Vec::new())
-                    }
-                    _ => Ok(vec![frame]),
-                }
+                Ok(self.place_frame(frame))
             }
             Rich::Link { url, text } => {
                 if in_link {
@@ -555,29 +552,77 @@ impl Odf<'_, '_> {
                 self.pkg.charge(markup.len())?;
                 Ok(vec![Node::Raw(markup)])
             }
-            Rich::Chart(_) | Rich::PageBreak => Err(self.fail("this value cannot be placed here")),
+            Rich::Chart(chart) => {
+                let frame = self.chart_frame(chart)?;
+                Ok(self.place_frame(frame))
+            }
+            Rich::PageBreak => Err(self.fail("this value cannot be placed here")),
+        }
+    }
+
+    /// Frames go in the text in ODT, and on the cell or the page elsewhere.
+    fn place_frame(&mut self, frame: Node) -> Vec<Node> {
+        match self.format {
+            Format::Ods => {
+                self.cell_frames.push(frame);
+                Vec::new()
+            }
+            Format::Odp => {
+                self.page_frames.push(frame);
+                Vec::new()
+            }
+            _ => vec![frame],
         }
     }
 
     fn frame(&mut self, picture: &Picture) -> Result<Node, TemplateError> {
         let path = self.pkg.media_part(&picture.media, "Pictures")?;
+        let inner = format!(
+            "<draw:image xlink:href=\"{path}\" xlink:type=\"simple\" xlink:show=\"embed\" \
+             xlink:actuate=\"onLoad\"/>"
+        );
+        Ok(self.frame_around(&inner, picture.width_pt, picture.height_pt))
+    }
+
+    /// A chart is an embedded object of its own, framed like a picture at the
+    /// size the filter gave, as the OOXML formats frame theirs.
+    fn chart_frame(&mut self, chart: &Chart) -> Result<Node, TemplateError> {
+        let dir = self.pkg.odf_chart(chart.odf_content(), chart::ODF_STYLES)?;
+        let inner = format!(
+            "<draw:object xlink:href=\"./{dir}\" xlink:type=\"simple\" xlink:show=\"embed\" \
+             xlink:actuate=\"onLoad\"/>"
+        );
+        Ok(self.frame_around(&inner, chart.width_pt, chart.height_pt))
+    }
+
+    /// Places frame content as a character in text, at the top left of a
+    /// cell, or where the shape holding the tag sits on a page; a second frame
+    /// for the same cell or shape goes below the first.
+    fn frame_around(&mut self, inner: &str, w: f64, h: f64) -> Node {
         let n = self.frames;
         self.frames += 1;
-        let (w, h) = (picture.width_pt, picture.height_pt);
+        let below = self.stacked_pt;
         let place = match self.format {
             Format::Odt => "text:anchor-type=\"as-char\"".to_string(),
-            Format::Ods => "svg:x=\"0pt\" svg:y=\"0pt\"".to_string(),
-            _ => format!(
-                "svg:x=\"{}\" svg:y=\"{}\"",
-                esc_attr(&self.origin.0),
-                esc_attr(&self.origin.1)
-            ),
+            Format::Ods => format!("svg:x=\"0pt\" svg:y=\"{below:.2}pt\""),
+            _ => {
+                // An origin in a unit this cannot read stays as it is.
+                let y = match length_pt(&self.origin.1) {
+                    Some(top) if below > 0.0 => format!("{:.2}pt", top + below),
+                    _ => self.origin.1.clone(),
+                };
+                format!(
+                    "svg:x=\"{}\" svg:y=\"{}\"",
+                    esc_attr(&self.origin.0),
+                    esc_attr(&y)
+                )
+            }
         };
-        Ok(Node::Raw(format!(
+        self.stacked_pt += h;
+        Node::Raw(format!(
             "<draw:frame draw:name=\"Rich{n}\" {place} svg:width=\"{w:.2}pt\" \
-             svg:height=\"{h:.2}pt\"><draw:image xlink:href=\"{path}\" xlink:type=\"simple\" \
-             xlink:show=\"embed\" xlink:actuate=\"onLoad\"/></draw:frame>"
-        )))
+             svg:height=\"{h:.2}pt\">{inner}</draw:frame>"
+        ))
     }
 
     // --- HTML ---------------------------------------------------------------
@@ -772,6 +817,24 @@ fn style_attrs(style: &Style, heading_size: Option<u32>) -> Vec<(&'static str, S
         attrs.push(("fo:color", format!("#{}", color.to_lowercase())));
     }
     attrs
+}
+
+/// An ODF length such as `2.5cm` in points, for the units ODF writes.
+fn length_pt(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let at = s.find(|c: char| c.is_ascii_alphabetic())?;
+    let n: f64 = s[..at].parse().ok()?;
+    let per = match &s[at..] {
+        "pt" => 1.0,
+        "pc" => 12.0,
+        "in" => 72.0,
+        "cm" => 72.0 / 2.54,
+        "mm" => 72.0 / 25.4,
+        "px" => 0.75,
+        _ => return None,
+    };
+    let pt = n * per;
+    pt.is_finite().then_some(pt)
 }
 
 /// A piece of a paragraph cut at its block markers.
