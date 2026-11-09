@@ -4,7 +4,7 @@ The site builds and is ready to host, but the things below can't be done from th
 
 ## Must happen first, or the site's instructions fail
 
-- [ ] **Register `rusticdoc.com`.** A WHOIS lookup on 6 November 2026 found it unregistered.
+- [x] **Register `rusticdoc.com`.**
 - [ ] **Make `github.com/vmosoti/rusticdoc` public.** The repository is private, so every GitHub link on the site returns 404 to visitors, and GitHub Pages needs a paid plan while it stays private.
 - [x] **Publish the image as `ghcr.io/vmosoti/rusticdoc:0.1.0`.** `.github/workflows/release.yml` builds amd64 and arm64 on a `v0.*` tag and pushes both under the version. The package stays private while the repository is.
 - [x] **Commit the storage and API work.**
@@ -40,7 +40,9 @@ README corrections the docs already reflect: webhooks make 3 attempts in total r
 
 ## Host the site
 
-Output is static. Pick one:
+Output is static. It is hosted as a Cloudflare Worker that serves the built files: `site/wrangler.jsonc` names the Worker `rusticdoc`, serves `dist/` with `public/_headers` applied, and attaches `rusticdoc.com`. In Cloudflare's Workers setup for the repository, set the root directory to `site`, the build command to `npm ci && npm run build` and the deploy command to `npx wrangler deploy`. `site/.node-version` pins Node 24 and `package.json` pins Wrangler.
+
+Other hosts that would also work:
 
 - **Cloudflare Pages or Netlify (recommended):** root `site`, build `npm ci && npm run build`, output `dist`. Both apply `public/_headers`, which carries the Content-Security-Policy and other security headers.
 - **GitHub Pages:** set the repository variable `SITE_DEPLOY` to `github-pages` and the Pages source to GitHub Actions. Until `rusticdoc.com` is live the workflow builds the site under `/rusticdoc` for `https://vmosoti.github.io/rusticdoc/` (`scripts/rebase.mjs`) and leaves out `public/CNAME`. Pages needs the repository public, or a plan that allows Pages for private repositories. Pages ignores `public/_headers`, so those headers will be missing.

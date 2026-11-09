@@ -1,0 +1,19 @@
+// The site as a Cloudflare Worker that serves its built files and nothing
+// else. Cloudflare builds it from this folder with `npm ci && npm run build`
+// and deploys it with `npx wrangler deploy`.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "rusticdoc",
+  "compatibility_date": "2026-10-20",
+  "assets": {
+    // Astro's output, with public/_headers carrying the Content-Security-Policy
+    // and the other security headers.
+    "directory": "./dist",
+    // Pages live at paths ending in a slash, as astro.config.mjs builds them.
+    "html_handling": "force-trailing-slash",
+    // A path with no page gets the site's own 404 page, with a 404 status.
+    "not_found_handling": "404-page"
+  },
+  // Serves the site on the domain. The domain's zone is on the same account.
+  "routes": [{ "pattern": "rusticdoc.com", "custom_domain": true }]
+}
