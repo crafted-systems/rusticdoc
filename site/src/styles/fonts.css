@@ -1,2 +1,14 @@
 @import '@fontsource-variable/space-grotesk/wght.css';
 @import '@fontsource-variable/jetbrains-mono/wght.css';
+
+/* Arial and Helvetica scaled to Space Grotesk's width and line metrics. Text set in
+   the fallback while the web font loads takes the same room, so the swap does not
+   move anything. */
+@font-face {
+  font-family: 'Space Grotesk Fallback';
+  src: local('Arial'), local('Helvetica'), local('Liberation Sans');
+  size-adjust: 107.3%;
+  ascent-override: 91.3%;
+  descent-override: 27%;
+  line-gap-override: 0%;
+}

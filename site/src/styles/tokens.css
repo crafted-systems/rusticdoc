@@ -54,13 +54,25 @@
   --r-panel: 4px;
   --r-card: 3px;
   --r-small: 2px;
-  --font-body: 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Space Grotesk Variable', 'Space Grotesk Fallback', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
 
-html { background: var(--field); }
+html { background: var(--field); scrollbar-gutter: stable; }
+
+/* Moving between pages: the browser keeps the old page on screen until the new one
+   can paint, then fades between them. The top bar, the brand and the docs sidebar
+   are matched across pages, so they hold still while the content changes. */
+@view-transition { navigation: auto; }
+header.masthead, header.header { view-transition-name: top-bar; }
+.masthead .brand, .site-title { view-transition-name: brand; }
+.sidebar-pane { view-transition-name: sidebar; }
+::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation-duration: 150ms; }
+@media (prefers-reduced-motion: reduce) {
+  @view-transition { navigation: none; }
+}
 body::before {
   content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:

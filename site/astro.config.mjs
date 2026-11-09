@@ -5,6 +5,7 @@ import sitemap from '@astrojs/sitemap';
 export default defineConfig({
   site: 'https://rusticdoc.com',
   trailingSlash: 'always',
+  devToolbar: { enabled: false },
   // Keep small fonts as files: the site's CSP has no data: in font-src.
   vite: { build: { assetsInlineLimit: 0 } },
   integrations: [

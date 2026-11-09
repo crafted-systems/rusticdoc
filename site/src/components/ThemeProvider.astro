@@ -1,13 +1,23 @@
 ---
-// Runs before the first paint, so a page never flashes the wrong mode. The key is
-// Starlight's, and the marketing pages share it, so a choice holds across the site.
+// Head content shared by the docs and the marketing pages.
+//
+// The script runs before the first paint, so a page never flashes the wrong mode
+// and the theme switch shows its choice at once. The key is Starlight's, and the
+// marketing pages share it, so a choice holds across the site.
+//
+// The body font is preloaded so it is usually ready for the first paint; when it
+// is not, its metric-matched fallback takes the same room.
+import bodyFont from '@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2?url';
 ---
+<link rel="preload" href={bodyFont} as="font" type="font/woff2" crossorigin />
 <script is:inline>
   (() => {
     let stored = '';
     try { stored = localStorage.getItem('starlight-theme') || ''; } catch {}
-    document.documentElement.dataset.theme =
-      stored === 'light' || stored === 'dark' ? stored
+    const root = document.documentElement;
+    const choice = stored === 'light' || stored === 'dark' ? stored : 'auto';
+    root.dataset.themeChoice = choice;
+    root.dataset.theme = choice !== 'auto' ? choice
       : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   })();
 </script>

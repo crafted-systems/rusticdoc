@@ -21,7 +21,11 @@ const options = [
     border: 0; border-radius: var(--r-small); background: transparent; color: var(--ink-soft); cursor: pointer;
   }
   button:hover { color: var(--blue-deep); }
-  button[aria-pressed='true'] { background: var(--blue-wash); color: var(--blue-deep); }
+  /* The pressed look follows the choice the head script puts on the root element,
+     so it is right in the first paint rather than after this script runs. */
+  :global(:root[data-theme-choice='light']) button[data-theme-choice='light'],
+  :global(:root[data-theme-choice='dark']) button[data-theme-choice='dark'],
+  :global(:root[data-theme-choice='auto']) button[data-theme-choice='auto'] { background: var(--blue-wash); color: var(--blue-deep); }
   button:focus-visible { outline: 3px solid var(--blue); outline-offset: 1px; }
 </style>
 
@@ -40,6 +44,7 @@ const options = [
   const device = () => (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   const apply = (choice: Choice) => {
     document.documentElement.dataset.theme = choice === 'auto' ? device() : choice;
+    document.documentElement.dataset.themeChoice = choice;
     for (const button of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
       button.setAttribute('aria-pressed', String(button.dataset.themeChoice === choice));
     }
