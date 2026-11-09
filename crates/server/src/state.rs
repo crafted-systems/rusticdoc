@@ -39,7 +39,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config) -> Self {
-        let engines = Arc::new(Engines::from_config(&config));
+        let mut engines = Engines::from_config(&config);
+        // Timestamps and validation data go out under the outbound rules.
+        engines.signing.set_outbound(Arc::new(
+            crate::signing::PolicyOutbound::from_config(&config)
+                .expect("patterns are checked before the service starts"),
+        ));
+        let engines = Arc::new(engines);
         let libreoffice = engines.libreoffice.clone();
         let renderer = match config.render_mode {
             RenderMode::InProcess => Renderer::in_process(),

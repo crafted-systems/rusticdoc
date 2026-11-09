@@ -51,7 +51,9 @@ replicas:
 	test/store/replicas.sh $(IMAGE)
 
 # Signs PDFs with the CLI and checks them with pdfsig, and with pyHanko when it
-# is installed or named by PYHANKO. Needs openssl and poppler-utils.
+# is installed or named by PYHANKO: B-B, then B-T, B-LT, B-LTA and certification
+# against a local timestamp authority, OCSP responder and CRL. Needs openssl
+# (3+ for the levels), python3, curl and poppler-utils.
 sign-check:
 	test/sign/verify.sh
 

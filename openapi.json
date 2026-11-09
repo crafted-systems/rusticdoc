@@ -1738,7 +1738,7 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Signs a PDF. With `signature=certificate`, a cryptographic signature with\nthe key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`: an\nincremental update with a PAdES B-B style `/ETSI.CAdES.detached`\nsignature (no timestamp), invisible, or shown with the one image sent.\nWithout a configured key that answers 503. By default\n(`signature=image`) the images are drawn at exact coordinates, which is\nnot a cryptographic signature.",
+        "summary": "Signs a PDF. With `signature=certificate`, a cryptographic signature with\nthe key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or the\nnamed key `signingKey` chooses: an incremental update with a PAdES\n`/ETSI.CAdES.detached` signature at the `level` asked for (B-B to B-LTA),\napproving or, with `certify`, certifying. It is invisible, shown with the\none image sent, or, with a position and no image, shown as text naming\nthe signer, the date and the reason. Without a configured key that answers\n503; a timestamp authority or revocation source that fails answers 502. By\ndefault (`signature=image`) the images are drawn at exact coordinates,\nwhich is not a cryptographic signature.",
         "operationId": "sign",
         "requestBody": {
           "content": {
@@ -1774,8 +1774,28 @@
               }
             }
           },
+          "403": {
+            "description": "The caller may not use the signing key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The timestamp authority or a revocation source failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "signature=certificate and no signing key is configured, or the certificate has expired",
+            "description": "signature=certificate and no signing key is configured, the level needs a timestamp authority that is not configured, or the certificate has expired",
             "content": {
               "application/json": {
                 "schema": {
@@ -3715,6 +3735,15 @@
             },
             "description": "Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names\nby file name, as in `<img src=\"logo.png\">`. Every stylesheet applies to\nthe whole page. Nothing is fetched from anywhere else."
           },
+          "certify": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For `sign`: certify with DocMDP permission `1`, `2` or `3` instead of\napproving.",
+            "minimum": 0
+          },
           "contactInfo": {
             "type": [
               "string",
@@ -3744,6 +3773,13 @@
             "description": "What turns HTML into PDF: `fulgur` (default), a layout engine with\nno browser and no network, or `libreoffice`.",
             "example": "fulgur"
           },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `sign`: `b-b`, `b-t`, `b-lt` or `b-lta`, as on `/v1/pdf/sign`."
+          },
           "location": {
             "type": [
               "string",
@@ -3767,6 +3803,15 @@
               "null"
             ]
           },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For a visible `sign`: the 1-based page. Default 1.",
+            "minimum": 0
+          },
           "pdfa": {
             "type": [
               "string",
@@ -3781,12 +3826,24 @@
             ],
             "description": "For `sign`: why the document was signed."
           },
+          "signatureImage": {
+            "type": "string",
+            "format": "binary",
+            "description": "For `sign`: a PNG or JPEG to show the signature with, at `page`, `x`,\n`y` and `width`. With `x` and `y` and no image, the signature is shown\nas text: the signer, the date and the reason."
+          },
           "signerName": {
             "type": [
               "string",
               "null"
             ],
             "description": "For `sign`: the signer's name as shown."
+          },
+          "signingKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `sign`: a named key instead of the default one."
           },
           "steps": {
             "type": [
@@ -3820,6 +3877,30 @@
               "string",
               "null"
             ]
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "For a visible `sign`: width in points. Default the image's natural\nsize, or 200 for text."
+          },
+          "x": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "For a visible `sign`: points from the page's left edge."
+          },
+          "y": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "For a visible `sign`: points from the page's bottom edge."
           }
         }
       },
@@ -3961,6 +4042,15 @@
           "files"
         ],
         "properties": {
+          "certify": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "With `signature=certificate`: certify rather than approve, with this\nDocMDP permission: `1` no changes, `2` form filling and signing, `3`\nalso annotations. Only the document's first signature can certify.",
+            "minimum": 0
+          },
           "contactInfo": {
             "type": [
               "string",
@@ -3975,6 +4065,14 @@
               "format": "binary"
             },
             "description": "The PDF first, then one PNG or JPEG per placement. With\n`signature=certificate`, at most one image: the visible appearance."
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `signature=certificate`: the PAdES level, `b-b`, `b-t` (with an\nRFC 3161 timestamp), `b-lt` (and validation data in a DSS) or `b-lta`\n(and a document timestamp). Default the service's\n`RUSTICDOC_SIGNING_LEVEL`, `b-b` unless set.",
+            "example": "b-lt"
           },
           "location": {
             "type": [
@@ -4010,7 +4108,7 @@
               "string",
               "null"
             ],
-            "description": "`image` (default) draws the images and is not a cryptographic\nsignature. `certificate` signs with the service's key (PAdES B-B,\n`/ETSI.CAdES.detached`), invisibly unless an image is sent.",
+            "description": "`image` (default) draws the images and is not a cryptographic\nsignature. `certificate` signs with the service's key (PAdES,\n`/ETSI.CAdES.detached`), invisibly unless an image or a position is\nsent.",
             "example": "certificate"
           },
           "signerName": {
@@ -4020,13 +4118,20 @@
             ],
             "description": "With `signature=certificate`: the signer's name as shown. Validators\nidentify the signer by the certificate, not by this."
           },
+          "signingKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `signature=certificate`: a named key from `RUSTICDOC_SIGNING_KEYS`\ninstead of the default one. A caller not on its allow list gets 403."
+          },
           "width": {
             "type": [
               "number",
               "null"
             ],
             "format": "float",
-            "description": "Width in points. Default the image's natural size."
+            "description": "Width in points. Default the image's natural size, or 200 for a text\nappearance."
           },
           "x": {
             "type": [

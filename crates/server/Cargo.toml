@@ -41,6 +41,7 @@ utoipa = { version = "6.0.0", features = ["axum_extras", "uuid"] }
 utoipa-scalar = { version = "0.4.0", features = ["axum"] }
 uuid = { version = "1.29.0", features = ["v4", "v7"] }
 zip = { version = "9.4.0", default-features = false, features = ["deflate"] }
+async-trait = "0.1.92"
 
 [dev-dependencies]
 lopdf = "0.47.0"

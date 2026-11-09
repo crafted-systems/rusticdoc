@@ -85,7 +85,11 @@ impl UrlPolicy {
         }
     }
 
-    fn compile(allow_private: bool, allow: &[String], deny: &[&String]) -> Result<Self, String> {
+    pub(crate) fn compile(
+        allow_private: bool,
+        allow: &[String],
+        deny: &[&String],
+    ) -> Result<Self, String> {
         let compile = |pattern: &String| Regex::new(pattern).map_err(|e| e.to_string());
         Ok(Self {
             allow_private,

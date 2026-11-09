@@ -118,12 +118,20 @@ pub enum PdfOp {
         #[arg(short, long)]
         output: PathBuf,
     },
-    /// Sign cryptographically with --key and --cert (PAdES B-B, invisible
-    /// unless --image is given), or, without them, place a signature image at
-    /// exact coordinates, which is not a cryptographic signature.
+    /// Sign cryptographically with --key and --cert (PAdES B-B to B-LTA,
+    /// invisible unless --image or --x and --y are given), or, without them,
+    /// place a signature image at exact coordinates, which is not a
+    /// cryptographic signature.
+    ///
+    /// --level b-t and above take the timestamp authority from --tsa-url or
+    /// RUSTICDOC_SIGNING_TSA_*, and every request (timestamps, OCSP, CRLs)
+    /// follows RUSTICDOC_SIGNING_OUTBOUND_*: private addresses are refused
+    /// unless RUSTICDOC_SIGNING_OUTBOUND_ALLOW_PRIVATE=true.
     Sign {
         file: PathBuf,
-        /// PEM private key (PKCS#8, PKCS#1 or SEC1; RSA or ECDSA P-256).
+        /// PEM private key (PKCS#8, PKCS#1 or SEC1; RSA or ECDSA P-256), or
+        /// `pkcs11:<label>` for a key on the token RUSTICDOC_PKCS11_MODULE,
+        /// _TOKEN or _SLOT, and _PIN_FILE or _PIN describe.
         #[arg(long, requires = "cert")]
         key: Option<PathBuf>,
         /// PEM certificate for --key, then any chain certificates.
@@ -134,15 +142,29 @@ pub enum PdfOp {
         image: Option<PathBuf>,
         #[arg(long, default_value_t = 1)]
         page: u32,
-        /// Points from the page's left edge.
-        #[arg(long, requires = "image")]
+        /// Points from the page's left edge. With --key and no --image, the
+        /// signature is shown there as text: signer, date and reason.
+        #[arg(long, requires = "y")]
         x: Option<f32>,
         /// Points from the page's bottom edge.
-        #[arg(long, requires = "image")]
+        #[arg(long, requires = "x")]
         y: Option<f32>,
-        /// Width in points; default the image's natural size.
-        #[arg(long, requires = "image")]
+        /// Width in points; default the image's natural size, or 200 for text.
+        #[arg(long, requires = "x")]
         width: Option<f32>,
+        /// PAdES level (with --key): b-b, b-t (RFC 3161 timestamp), b-lt
+        /// (and OCSP or CRL validation data in a DSS) or b-lta (and a document
+        /// timestamp). Default RUSTICDOC_SIGNING_LEVEL, or b-b.
+        #[arg(long, requires = "key")]
+        level: Option<String>,
+        /// Certify rather than approve (with --key), with DocMDP permission 1
+        /// (no changes), 2 (form filling and signing) or 3 (also annotations).
+        #[arg(long, requires = "key")]
+        certify: Option<String>,
+        /// The RFC 3161 timestamp authority (with --key), instead of
+        /// RUSTICDOC_SIGNING_TSA_URL.
+        #[arg(long, requires = "key")]
+        tsa_url: Option<String>,
         /// Why the document was signed (with --key).
         #[arg(long, requires = "key")]
         reason: Option<String>,
@@ -408,26 +430,32 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
             location,
             contact_info,
             signer_name,
+            level,
+            certify,
+            tsa_url,
             output,
         } => {
             if let (Some(key), Some(cert)) = (key, cert) {
-                let signer = sign::Signer::from_files(&key, &cert).map_err(anyhow::Error::msg)?;
+                let signer = sign::load_key(&key.to_string_lossy(), &cert, &config.signing.pkcs11)
+                    .map_err(anyhow::Error::msg)?;
                 for warning in signer.warnings() {
                     eprintln!("warning: {warning}");
                 }
-                let appearance = match image {
-                    Some(path) => {
-                        let mark = read(&path)?;
+                let appearance = match (image, x, y) {
+                    (image, Some(x), Some(y)) => {
+                        let mark = image.map(|path| read(&path)).transpose()?;
                         Some(sign::Appearance {
                             page,
-                            x: x.unwrap_or(0.0),
-                            y: y.unwrap_or(0.0),
+                            x,
+                            y,
                             width,
-                            image: mark.bytes.to_vec(),
-                            name: mark.name,
+                            name: mark
+                                .as_ref()
+                                .map_or_else(|| "text".to_string(), |m| m.name.clone()),
+                            image: mark.map(|m| m.bytes.to_vec()),
                         })
                     }
-                    None => None,
+                    _ => None,
                 };
                 let options = sign::SignOptions {
                     reason,
@@ -435,8 +463,25 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
                     contact_info,
                     signer_name,
                     appearance,
+                    level: level.as_deref().map(sign::Level::parse).transpose()?,
+                    certify: certify.as_deref().map(sign::DocMdp::parse).transpose()?,
+                    key: None,
                 };
-                let signed = sign::sign(&read(&file)?, Arc::new(signer), &options, t).await?;
+                let mut signing = sign::Signing::with_default(signer)
+                    .with_level(config.signing.level)
+                    .with_limits(config.signing.revocation.clone());
+                let tsa = match tsa_url {
+                    Some(url) => Some(sign::Tsa::new(url, std::time::Duration::from_secs(10))),
+                    None => config.signing.tsa.clone(),
+                };
+                if let Some(tsa) = tsa {
+                    signing = signing.with_tsa(tsa);
+                }
+                signing.set_outbound(Arc::new(
+                    rusticdoc_server::signing::PolicyOutbound::from_config(config)
+                        .map_err(anyhow::Error::msg)?,
+                ));
+                let signed = signing.sign(&read(&file)?, &options, t).await?;
                 return write(&output, &signed);
             }
             let (Some(image), Some(x), Some(y)) = (image, x, y) else {

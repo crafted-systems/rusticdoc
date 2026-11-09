@@ -191,22 +191,71 @@ The service sets the bucket from `RUSTICDOC_STORE`, so `AWS_BUCKET` has no effec
 | `RUSTICDOC_DOWNLOAD_FROM_ALLOW_PRIVATE` | `false` | Allow `downloadFrom` to fetch from private and loopback addresses |
 | `RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST` | None | The allow list for `downloadFrom` |
 | `RUSTICDOC_DOWNLOAD_FROM_DENY_LIST` | None | The deny list for `downloadFrom` |
-| `RUSTICDOC_OUTBOUND_PROXY` | None | Proxy for webhooks and `downloadFrom`. Proxy variables in the environment are otherwise ignored. With this set, DNS pinning no longer applies, because the proxy resolves names itself: it must enforce its own egress policy, including blocking private ranges. The URL and its resolved addresses are still checked first, and the service warns at start |
+| `RUSTICDOC_OUTBOUND_PROXY` | None | Proxy for webhooks, `downloadFrom` and the requests of [PDF signing](#timestamps-and-validation-data). Proxy variables in the environment are otherwise ignored. With this set, DNS pinning no longer applies, because the proxy resolves names itself: it must enforce its own egress policy, including blocking private ranges. The URL and its resolved addresses are still checked first, and the service warns at start |
 
 The allow and deny lists hold comma-separated regular expressions, matched against the URL with its host normalised, on every route. Deny wins. A refusal is `403`. They add to the refusal of private addresses and never relax it. An invalid one stops the service from starting.
 
 ## PDF signing
 
-The key and certificate for [cryptographic signatures](/docs/guides/pdf-operations/#with-a-certificate): `signature=certificate` on `/v1/pdf/sign` and the `sign` step. Requests never carry a key.
+The keys and services for [cryptographic signatures](/docs/guides/pdf-operations/#with-a-certificate): `signature=certificate` on `/v1/pdf/sign` and the `sign` step. Requests never carry a key; they choose one of these by name at most.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RUSTICDOC_SIGNING_KEY` | None | Path to the private key, PEM: PKCS#8 (`PRIVATE KEY`), PKCS#1 (`RSA PRIVATE KEY`) or SEC1 (`EC PRIVATE KEY`), unencrypted. RSA of 2,048 to 8,192 bits, or ECDSA P-256 |
+| `RUSTICDOC_SIGNING_KEY` | None | The default key: a path to the private key, PEM: PKCS#8 (`PRIVATE KEY`), PKCS#1 (`RSA PRIVATE KEY`) or SEC1 (`EC PRIVATE KEY`), unencrypted. RSA of 2,048 to 8,192 bits, or ECDSA P-256. Or `pkcs11:<label>` for a key on a PKCS#11 token, below |
 | `RUSTICDOC_SIGNING_CERT` | None | Path to the certificate for that key, PEM, followed by any chain certificates to include in signatures, in order |
+| `RUSTICDOC_SIGNING_ALLOW` | Every caller | Who may sign with the default key: comma-separated [principals](#who-may-use-a-key) |
+| `RUSTICDOC_SIGNING_LEVEL` | `b-b` | The PAdES level a request gets when it names none: `b-b`, `b-t`, `b-lt` or `b-lta`. From `b-t` on it needs a timestamp authority |
 
-Set both or neither. At start the service reads them and refuses to start when only one is set, a file cannot be read, the key is encrypted or does not match the first certificate, or that certificate is outside its validity period. It warns, and starts, when the certificate allows neither digitalSignature nor nonRepudiation, when it is self-signed, when the chain is out of order, and when the key file can be read by other users. The log names the certificate's subject, algorithm and expiry, never anything about the key. Unset, cryptographic signing answers `503`, and image signing works as before.
+Set the key and certificate both or neither. At start the service reads every key and refuses to start when only one of a pair is set, a file cannot be read, a key is encrypted or does not match its first certificate, or that certificate is outside its validity period. It warns, and starts, when a certificate allows neither digitalSignature nor nonRepudiation, when it is self-signed, when the chain is out of order, and when a key file can be read by other users. The log names each certificate's subject, algorithm and expiry, never anything about a key. With no key, cryptographic signing answers `503`, and image signing works as before.
 
-A certificate that expires while the service runs makes signing answer `503` from then on. Replace the files and restart.
+A certificate that expires while the service runs makes signing with it answer `503` from then on. Replace the files and restart.
+
+### Named keys
+
+Besides the default key a deployment can hold named keys, which a request chooses with `signingKey=<name>`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RUSTICDOC_SIGNING_KEYS` | None | Comma-separated key names: letters, digits, `-` and `_`, up to 64 characters |
+| `RUSTICDOC_SIGNING_KEY_<NAME>` | None | The key of `<name>`, as `RUSTICDOC_SIGNING_KEY`. `<NAME>` is the name in capitals with `-` as `_`, so `acme-eu` becomes `ACME_EU` |
+| `RUSTICDOC_SIGNING_CERT_<NAME>` | None | Its certificate chain, as `RUSTICDOC_SIGNING_CERT` |
+| `RUSTICDOC_SIGNING_ALLOW_<NAME>` | None | Who may sign with it. Required: a named key every caller may use says so with `*` |
+
+#### Who may use a key
+
+An allow list holds comma-separated entries matched against the caller's principal: exactly (`key:<sha256 of the API key>`, `basic:<sha256 of the user>`, `oidc:<sha256 of the subject>`, `public` when no credentials are configured), by prefix with a trailing `*` (`tenant:*`), or `*` for every caller. `rusticdoc webhook-secret` and the logs show a caller's principal. A caller not on the list gets `403`; a name that is not configured gets `400`.
+
+### Keys in an HSM
+
+A key variable set to `pkcs11:<label>` signs with the private key of that label on a PKCS#11 token: an HSM, a smart card or SoftHSM. The key never leaves the token. RFC 7512 attributes work too: `pkcs11:object=<label>;token=<token label>;slot-id=<n>`. The certificate still comes from the `CERT` file.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RUSTICDOC_PKCS11_MODULE` | None | Path to the token's PKCS#11 module, such as `/usr/lib/softhsm/libsofthsm2.so` |
+| `RUSTICDOC_PKCS11_TOKEN` | Any | The label of the token that holds the keys |
+| `RUSTICDOC_PKCS11_SLOT` | Any | The slot id, instead of or as well as the label |
+| `RUSTICDOC_PKCS11_PIN_FILE` | None | A file holding the user PIN. Preferred |
+| `RUSTICDOC_PKCS11_PIN` | None | The user PIN itself, when there is no file |
+
+At start the service logs in, finds the key, and has it sign a test message that the certificate's public key must verify, so a key that does not belong to its certificate stops the service from starting. Each key keeps one logged-in session, used by one signature at a time.
+
+### Timestamps and validation data
+
+Levels from `b-t` on ask a timestamp authority (RFC 3161) for a timestamp over the signature; `b-lt` also fetches OCSP responses or CRLs for every certificate in the signer's and the authority's chains, from the URLs those certificates name, and `b-lta` asks for a document timestamp at the end. A failure at any of these makes the request fail with `502`: the service never returns a file at a lower level than asked for.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RUSTICDOC_SIGNING_TSA_URL` | None | The timestamp authority, `http` or `https` |
+| `RUSTICDOC_SIGNING_TSA_USERNAME`, `RUSTICDOC_SIGNING_TSA_PASSWORD` | None | Basic credentials for it |
+| `RUSTICDOC_SIGNING_TSA_HEADERS` | None | Further headers for it, as a JSON object such as `{"X-Api-Key": "..."}` |
+| `RUSTICDOC_SIGNING_TSA_TIMEOUT` | `10s` | Time limit for one timestamp request |
+| `RUSTICDOC_SIGNING_REVOCATION_TIMEOUT` | `10s` | Time limit for one OCSP, CRL or issuer certificate request |
+| `RUSTICDOC_SIGNING_REVOCATION_MAX_BYTES` | `10MiB` | Largest OCSP response, CRL or certificate accepted |
+| `RUSTICDOC_SIGNING_OUTBOUND_ALLOW_LIST` | None | Regular expressions a timestamp, OCSP, CRL or issuer URL must match one of |
+| `RUSTICDOC_SIGNING_OUTBOUND_DENY_LIST` | None | Regular expressions none of those URLs may match |
+| `RUSTICDOC_SIGNING_OUTBOUND_ALLOW_PRIVATE` | `false` | Allow those URLs to reach private and loopback addresses |
+
+These requests follow the same rules as webhooks: the URL is checked against the lists with its host normalised, private addresses are refused unless allowed, the connection is pinned to the addresses that were checked, redirects are not followed, and `RUSTICDOC_OUTBOUND_PROXY` applies. The whole of a signature, network included, keeps to `RUSTICDOC_API_TIMEOUT`, and one signature makes at most 32 requests for validation data.
 
 ## Passed to engines and otherwise unused
 

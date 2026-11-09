@@ -68,6 +68,28 @@ pub struct RenderForm {
     /// For `sign`: the signer's name as shown.
     #[schema(rename = "signerName")]
     pub signer_name: Option<String>,
+    /// For `sign`: `b-b`, `b-t`, `b-lt` or `b-lta`, as on `/v1/pdf/sign`.
+    pub level: Option<String>,
+    /// For `sign`: certify with DocMDP permission `1`, `2` or `3` instead of
+    /// approving.
+    pub certify: Option<u8>,
+    /// For `sign`: a named key instead of the default one.
+    #[schema(rename = "signingKey")]
+    pub signing_key: Option<String>,
+    /// For `sign`: a PNG or JPEG to show the signature with, at `page`, `x`,
+    /// `y` and `width`. With `x` and `y` and no image, the signature is shown
+    /// as text: the signer, the date and the reason.
+    #[schema(rename = "signatureImage", value_type = String, format = Binary, required = false)]
+    pub signature_image: Option<String>,
+    /// For a visible `sign`: the 1-based page. Default 1.
+    pub page: Option<u32>,
+    /// For a visible `sign`: points from the page's left edge.
+    pub x: Option<f32>,
+    /// For a visible `sign`: points from the page's bottom edge.
+    pub y: Option<f32>,
+    /// For a visible `sign`: width in points. Default the image's natural
+    /// size, or 200 for text.
+    pub width: Option<f32>,
     /// File name of the result, without extension.
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
@@ -238,6 +260,8 @@ pub async fn render(
     options.pdfua = false;
     req.convert_options = options;
     req.steps = named_steps(&mut form)?;
+    sign_appearance(&mut form, &mut req.steps)?;
+    crate::signing::authorize_steps(&state.engines.signing, &principal, &req.steps)?;
     // Here, so a webhook request hears about a bad step list at once.
     state.engines.check_steps(&req.steps)?;
     req.output_name = form.output_name();
@@ -336,6 +360,34 @@ fn named_steps(form: &mut Form) -> ApiResult<Vec<Step>> {
     Ok(steps)
 }
 
+/// The `sign` step's appearance, from the fields `/v1/pdf/sign` reads: an
+/// image under `signatureImage` at `page`, `x`, `y` and `width`, or text at
+/// that place when no image is sent.
+fn sign_appearance(form: &mut Form, steps: &mut [Step]) -> ApiResult<()> {
+    let mut images = form.take_field("signatureImage");
+    if !steps.iter().any(|s| matches!(s, Step::Sign { .. })) {
+        if !images.is_empty() {
+            return Err(ApiError::bad_request(
+                "'signatureImage' is for the 'sign' step, and the steps have none",
+            ));
+        }
+        return Ok(());
+    }
+    if images.len() > 1 {
+        return Err(ApiError::bad_request(
+            "send at most one 'signatureImage' to show the signature with",
+        ));
+    }
+    let appearance = crate::routes::pdfops::appearance(form, images.pop())?;
+    for step in steps {
+        if let Step::Sign { options } = step {
+            options.appearance = appearance.clone();
+            options.validate()?;
+        }
+    }
+    Ok(())
+}
+
 /// Runs a request now, or hands it to a webhook task.
 pub async fn run(
     state: AppState,
@@ -408,7 +460,9 @@ pub async fn batch(
             }
         },
     };
-    let steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
+    let mut steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
+    sign_appearance(&mut form, &mut steps)?;
+    crate::signing::authorize_steps(&state.engines.signing, &principal, &steps)?;
     state.engines.check_steps(&steps)?;
     let split_by = form
         .field("splitBy")

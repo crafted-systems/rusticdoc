@@ -23,6 +23,7 @@ const FILE_FIELDS: &[&str] = &["template", "files"];
 
 const SPECIAL_FIELDS: &[&str] = &[
     "embeds",
+    "signatureImage",
     "watermark",
     "stamp",
     "underlay",

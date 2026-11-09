@@ -3,7 +3,8 @@
 //! Signed attributes are content-type, message-digest and ESS
 //! signing-certificate-v2. There is no signing-time attribute: ETSI EN 319
 //! 142-1 (PAdES baseline) forbids it for `/ETSI.CAdES.detached`, and the
-//! claimed time goes in the signature dictionary's `/M` instead.
+//! claimed time goes in the signature dictionary's `/M` instead. From B-T
+//! on, the one unsigned attribute is an RFC 3161 signature timestamp.
 
 use cms::cert::{CertificateChoices, IssuerAndSerialNumber};
 use cms::content_info::{CmsVersion, ContentInfo};
@@ -11,7 +12,7 @@ use cms::signed_data::{
     CertificateSet, EncapsulatedContentInfo, SignedData, SignerIdentifier, SignerInfo, SignerInfos,
 };
 use der::asn1::{Any, ObjectIdentifier, OctetString, SetOfVec};
-use der::{Encode, Sequence};
+use der::{Decode, Encode, Sequence};
 use sha2::{Digest, Sha256};
 use x509_cert::attr::Attribute;
 use x509_cert::ext::pkix::name::GeneralName;
@@ -33,6 +34,8 @@ pub(super) const ID_MESSAGE_DIGEST: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.4");
 pub(super) const ID_SIGNING_CERTIFICATE_V2: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.47");
+pub(super) const ID_SIGNATURE_TIME_STAMP_TOKEN: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.16.2.14");
 
 /// RFC 5035 `SigningCertificateV2`, without the optional policies.
 #[derive(Sequence)]
@@ -109,13 +112,13 @@ fn signed_attributes(signer: &Signer, digest: &[u8]) -> Result<SetOfVec<Attribut
     SetOfVec::try_from(attributes).map_err(encoding)
 }
 
-/// A DER `ContentInfo` holding the detached `SignedData` over `digest`, with
-/// the signature `sign` makes over the DER of the signed attributes.
+/// The detached `SignedData` over `digest`, with the signature `sign` makes
+/// over the DER of the signed attributes, and no unsigned attributes yet.
 fn build(
     signer: &Signer,
     digest: &[u8],
     sign: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
-) -> Result<Vec<u8>> {
+) -> Result<SignedData> {
     let cert = &signer.chain()[0];
     let signed_attrs = signed_attributes(signer, digest)?;
     // RFC 5652 5.4: the signature covers the attributes encoded as a SET OF,
@@ -139,7 +142,7 @@ fn build(
         .cloned()
         .map(CertificateChoices::Certificate)
         .collect::<Vec<_>>();
-    let signed_data = SignedData {
+    Ok(SignedData {
         version: CmsVersion::V1,
         digest_algorithms: SetOfVec::try_from(vec![sha256()]).map_err(encoding)?,
         encap_content_info: EncapsulatedContentInfo {
@@ -151,23 +154,64 @@ fn build(
         )),
         crls: None,
         signer_infos: SignerInfos(SetOfVec::try_from(vec![signer_info]).map_err(encoding)?),
-    };
+    })
+}
+
+/// The signature over `digest`, signed with the key.
+pub(super) fn signed_data(signer: &Signer, digest: &[u8; 32]) -> Result<SignedData> {
+    build(signer, digest, |message| signer.sign(message))
+}
+
+/// The signature value of the one signer: what an RFC 3161 signature
+/// timestamp is made over.
+pub(super) fn signature_value(signed_data: &SignedData) -> Vec<u8> {
+    signed_data
+        .signer_infos
+        .0
+        .as_slice()
+        .first()
+        .map(|info| info.signature.as_bytes().to_vec())
+        .unwrap_or_default()
+}
+
+/// Adds `token`, a DER `TimeStampToken` over the signature value, as the
+/// `id-aa-signatureTimeStampToken` unsigned attribute (RFC 3161 appendix A).
+/// The signed attributes and the signature stay as they are.
+pub(super) fn add_timestamp(signed_data: &mut SignedData, token: &[u8]) -> Result<()> {
+    let value = Any::from_der(token).map_err(encoding)?;
+    let mut infos = signed_data.signer_infos.0.as_slice().to_vec();
+    for info in &mut infos {
+        info.unsigned_attrs = Some(
+            SetOfVec::try_from(vec![attribute(
+                ID_SIGNATURE_TIME_STAMP_TOKEN,
+                value.clone(),
+            )?])
+            .map_err(encoding)?,
+        );
+    }
+    signed_data.signer_infos = SignerInfos(SetOfVec::try_from(infos).map_err(encoding)?);
+    Ok(())
+}
+
+/// The DER `ContentInfo` that goes in `/Contents`.
+pub(super) fn encode(signed_data: &SignedData) -> Result<Vec<u8>> {
     ContentInfo {
         content_type: ID_SIGNED_DATA,
-        content: Any::encode_from(&signed_data).map_err(encoding)?,
+        content: Any::encode_from(signed_data).map_err(encoding)?,
     }
     .to_der()
     .map_err(encoding)
 }
 
-/// The signature over `digest`, signed with the key.
-pub(super) fn signed_data(signer: &Signer, digest: &[u8; 32]) -> Result<Vec<u8>> {
-    build(signer, digest, |message| signer.sign(message))
-}
-
 /// The length of the longest `ContentInfo` [`signed_data`] can produce for
-/// this signer, without using the key.
-pub(super) fn max_len(signer: &Signer) -> Result<usize> {
+/// this signer, without using the key, plus `token` bytes of timestamp.
+pub(super) fn max_len(signer: &Signer, token: usize) -> Result<usize> {
     let longest = vec![0xff; signer.max_signature_len()];
-    Ok(build(signer, &[0; 32], |_| Ok(longest))?.len())
+    let unsigned = if token == 0 {
+        0
+    } else {
+        // The attribute's SEQUENCE, OID and SET headers around the token.
+        token + 32
+    };
+    Ok(encode(&build(signer, &[0; 32], |_| Ok(longest))?)?.len() + unsigned)
 }

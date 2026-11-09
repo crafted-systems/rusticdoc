@@ -14,6 +14,7 @@ pub mod oidc;
 pub mod openapi;
 pub mod preview;
 pub mod routes;
+pub mod signing;
 pub mod stall;
 pub mod state;
 pub mod telemetry;
@@ -215,16 +216,20 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
         tracing::warn!("{warning}");
     }
     // Which certificate signs, never anything about the key itself.
-    if let Some(signer) = &state.engines.signer {
+    for (name, signer) in state.engines.signing.keys() {
         tracing::info!(
+            key = name.unwrap_or("default"),
             subject = signer.subject(),
             algorithm = %signer.algorithm(),
             not_after = %signer.expiry(),
             "PDF signing key loaded"
         );
         for warning in signer.warnings() {
-            tracing::warn!("{warning}");
+            tracing::warn!(key = name.unwrap_or("default"), "{warning}");
         }
+    }
+    if let Some(tsa) = state.engines.signing.tsa() {
+        tracing::info!(url = %webhook::redact(&tsa.url), level = state.engines.signing.default_level().name(), "PDF signing timestamp authority");
     }
     tracing::info!(%bind, version = rusticdoc_core::VERSION, engines = %state.engines.describe(), "rusticdoc listening");
     // Start the LibreOffice workers now rather than on the first request,
