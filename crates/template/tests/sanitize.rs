@@ -1748,3 +1748,117 @@ fn a_hyperlink_field_with_escaped_or_unbalanced_quotes_loses_its_link() {
         assert!(doc.contains(words), "{doc}");
     }
 }
+
+// --- Fourth review: part names are percent-encoded IRIs.
+
+/// Content-type overrides and relationship targets name parts by IRI, so
+/// `/word/%64ocument.xml` is `word/document.xml`. Both sides are decoded
+/// before they are compared.
+#[test]
+fn percent_encoded_part_names_name_the_same_parts() {
+    let mut p = docx_with_link("http://10.0.0.1/");
+    // The VBA project reached through an encoded target and override.
+    let rels = p
+        .text("word/_rels/document.xml.rels")
+        .replace("Target=\"vbaProject.bin\"", "Target=\"%76baProject.bin\"");
+    p.set("word/_rels/document.xml.rels", rels);
+    p.edit(
+        "[Content_Types].xml",
+        "PartName=\"/word/vbaProject.bin\"",
+        "PartName=\"/word/%76ba%50roject.bin\"",
+    );
+    // The main part's macro-enabled type, through an encoded override.
+    p.edit(
+        "[Content_Types].xml",
+        "PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"",
+        "PartName=\"/word/%64ocument.xml\" ContentType=\"application/vnd.ms-word.document.macroEnabled.main+xml\"",
+    );
+    // A header named as no XML part is, typed as XML by an encoded override.
+    p.set(
+        "word/hdr9.dat",
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p>{}</w:p></w:hdr>",
+            complex_field(" INCLUDEPICTURE \"http://example.com/a.png\" ", "header picture")
+        ),
+    );
+    p.rels(
+        "word/_rels/document.xml.rels",
+        &[("rId30", &format!("{REL}/header"), "hdr9%2Edat", false)],
+    );
+    p.types(
+        "<Override PartName=\"/word/hdr9%2edat\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml\"/>",
+    );
+    let out = clean(Format::Docx, &p.bytes());
+    assert!(
+        !names(&out).iter().any(|n| n.contains("vbaProject")),
+        "{:?}",
+        names(&out)
+    );
+    let types = part(&out, "[Content_Types].xml");
+    assert!(
+        !types.contains("macroEnabled") && !types.contains("%76ba"),
+        "{types}"
+    );
+    assert!(
+        types.contains("PartName=\"/word/%64ocument.xml\""),
+        "{types}"
+    );
+    let header = part(&out, "word/hdr9.dat");
+    assert!(
+        !header.contains("INCLUDEPICTURE") && header.contains("header picture"),
+        "{header}"
+    );
+    let rels = part(&out, "word/_rels/document.xml.rels");
+    assert!(
+        !rels.contains("10.0.0.1") && !rels.contains("%76ba"),
+        "{rels}"
+    );
+}
+
+/// An override that names no part, once decoded, could type some other
+/// part; the package is refused.
+#[test]
+fn an_override_naming_no_part_is_refused() {
+    let mut p = Pkg::open(&docx(&p("body")));
+    p.types(
+        "<Override PartName=\"/word/%6eowhere.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml\"/>",
+    );
+    let message = refused(Format::Docx, &p.bytes());
+    assert!(message.contains("names no part"), "{message}");
+}
+
+/// A part that a relationship reads as XML but the package does not type as
+/// XML would never be scanned; the package is refused.
+#[test]
+fn a_relationship_to_xml_content_in_a_part_not_typed_xml_is_refused() {
+    let mut p = Pkg::open(&docx(&p("body")));
+    p.set(
+        "word/hdr9.bin",
+        format!(
+            "<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p>{}</w:p></w:hdr>",
+            complex_field(" INCLUDEPICTURE \"http://example.com/a.png\" ", "x")
+        ),
+    );
+    p.rels(
+        "word/_rels/document.xml.rels",
+        &[("rId30", &format!("{REL}/header"), "hdr9.bin", false)],
+    );
+    p.types("<Default Extension=\"bin\" ContentType=\"application/octet-stream\"/>");
+    let message = refused(Format::Docx, &p.bytes());
+    assert!(message.contains("not type as XML"), "{message}");
+
+    // A separator hidden by encoding resolves one way before decoding and
+    // another after.
+    let mut p = Pkg::open(&docx(&common::p("body")));
+    p.rels(
+        "word/_rels/document.xml.rels",
+        &[(
+            "rId30",
+            &format!("{REL}/header"),
+            "x%2F..%2Fheader1.xml",
+            false,
+        )],
+    );
+    let message = refused(Format::Docx, &p.bytes());
+    assert!(message.contains("folder separator"), "{message}");
+}

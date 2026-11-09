@@ -359,6 +359,9 @@ fn xml_part_names(format: Format, entries: &[Entry]) -> Result<HashSet<String>, 
     let Some(root) = xml::root(&nodes) else {
         return Ok(out);
     };
+    // Both sides are compared as OPC compares part names: percent-decoded,
+    // without the leading slash, in lower case.
+    let keys: HashSet<String> = entries.iter().map(|e| part_key(&e.name)).collect();
     let mut named: HashMap<String, String> = HashMap::new();
     let mut by_ext: HashMap<String, String> = HashMap::new();
     for e in root.children.iter().filter_map(|n| match n {
@@ -368,33 +371,67 @@ fn xml_part_names(format: Format, entries: &[Entry]) -> Result<HashSet<String>, 
         match e.name.as_str() {
             "Override" => {
                 if let (Some(p), Some(t)) = (e.attr("PartName"), e.attr("ContentType")) {
-                    named.insert(p.trim_start_matches('/').to_ascii_lowercase(), t);
+                    let key = part_key(&p);
+                    // An override naming no part is a type that could land
+                    // on a part other than the one a reader thinks it does.
+                    if !keys.contains(&key) {
+                        return Err(TemplateError::new(format!(
+                            "{listing}: the content type override for {p:?} names no part \
+                             in the package; the document is refused"
+                        )));
+                    }
+                    named.insert(key, t);
                 }
             }
             "Default" => {
                 if let (Some(x), Some(t)) = (e.attr("Extension"), e.attr("ContentType")) {
-                    by_ext.insert(x.to_ascii_lowercase(), t);
+                    by_ext.insert(part_key(&x), t);
                 }
             }
             "manifest:file-entry" => {
                 if let (Some(p), Some(t)) =
                     (e.attr("manifest:full-path"), e.attr("manifest:media-type"))
                 {
-                    named.insert(p.to_ascii_lowercase(), t);
+                    named.insert(part_key(&p), t);
                 }
             }
             _ => {}
         }
     }
     for e in entries.iter().filter(|e| !e.name.ends_with('/')) {
-        let lower = e.name.to_ascii_lowercase();
-        let ext = lower.rsplit_once('.').map_or("", |(_, x)| x);
-        let ty = named.get(&lower).or_else(|| by_ext.get(ext));
+        let key = part_key(&e.name);
+        let ext = key.rsplit_once('.').map_or("", |(_, x)| x);
+        let ty = named.get(&key).or_else(|| by_ext.get(ext));
         if ty.is_some_and(|t| is_xml_type(t)) {
             out.insert(e.name.clone());
         }
     }
     Ok(out)
+}
+
+/// A part name as OPC compares it: percent-decoded (part names are IRIs, so
+/// `/word/%64ocument.xml` names `word/document.xml`), without the leading
+/// slash, in lower case.
+fn part_key(name: &str) -> String {
+    percent_decode(name.trim_start_matches('/')).to_ascii_lowercase()
+}
+
+/// The key of the part an internal relationship target names from `base`.
+/// The target is decoded before it is resolved, so that `%2e%2e` cannot
+/// climb a folder after the check. An encoded or literal slash variant
+/// that would resolve one way before decoding and another after is refused.
+fn target_key(base: &str, target: &str) -> Result<String, TemplateError> {
+    let lower = target.to_ascii_lowercase();
+    if lower.contains("%2f") || lower.contains("%5c") || target.contains('\\') {
+        return Err(TemplateError::new(format!(
+            "the relationship target {target:?} hides a folder separator; the document is \
+             refused"
+        )));
+    }
+    Ok(part_key(&package::resolve(
+        &percent_decode(base),
+        &percent_decode(target),
+    )))
 }
 
 /// Rewrites every XML part as UTF-8 with a UTF-8 declaration, so that what
@@ -610,9 +647,10 @@ fn checked_part(entries: &[Entry], name: &str) -> Result<Option<String>, Templat
 fn check_case(entries: &[Entry]) -> Result<(), TemplateError> {
     let mut seen: HashSet<String> = HashSet::new();
     for e in entries {
-        if !seen.insert(e.name.to_ascii_lowercase()) {
+        if !seen.insert(part_key(&e.name)) {
             return Err(TemplateError::new(format!(
-                "{}: two parts have this name in different cases; the document is refused",
+                "{}: two parts have this name in different cases or encodings; the \
+                 document is refused",
                 e.name
             )));
         }
@@ -620,16 +658,17 @@ fn check_case(entries: &[Entry]) -> Result<(), TemplateError> {
     Ok(())
 }
 
-/// The entry with this name, compared without case.
+/// The entry with this name, compared as OPC compares part names.
 fn entry_name(entries: &[Entry], name: &str) -> Option<String> {
+    let key = part_key(name);
     entries
         .iter()
-        .find(|e| e.name.eq_ignore_ascii_case(name))
+        .find(|e| part_key(&e.name) == key)
         .map(|e| e.name.clone())
 }
 
 /// `(type, target, external)` of each relationship in a relationships file,
-/// internal targets resolved against `base` and in lower case.
+/// internal targets as part keys resolved against `base`.
 fn relationships(
     entries: &[Entry],
     rels: &str,
@@ -642,23 +681,48 @@ fn relationships(
     let Some(root) = xml::root(&nodes) else {
         return Ok(Vec::new());
     };
-    Ok(root
-        .children_named("Relationship")
-        .filter_map(|r| {
-            let ty = r.attr("Type")?;
-            let target = r.attr("Target")?;
-            let external = r
-                .attr("TargetMode")
-                .is_some_and(|m| m.eq_ignore_ascii_case("External"));
-            let target = if external {
-                target
-            } else {
-                package::resolve(base, &target).to_ascii_lowercase()
-            };
-            Some((ty, target, external))
-        })
-        .collect())
+    let mut out = Vec::new();
+    for r in root.children_named("Relationship") {
+        let (Some(ty), Some(target)) = (r.attr("Type"), r.attr("Target")) else {
+            continue;
+        };
+        let external = r
+            .attr("TargetMode")
+            .is_some_and(|m| m.eq_ignore_ascii_case("External"));
+        let target = if external {
+            target
+        } else {
+            target_key(base, &target).map_err(|e| in_part(rels, e))?
+        };
+        out.push((ty, target, external));
+    }
+    Ok(out)
 }
+
+fn in_part(part: &str, e: TemplateError) -> TemplateError {
+    TemplateError::new(format!("{part}: {}", e.message))
+}
+
+/// Relationship types whose target is not XML; every other internal
+/// relationship names an XML part.
+const BINARY_TARGET_TYPES: &[&str] = &[
+    "image",
+    "oleobject",
+    "package",
+    "vbaproject",
+    "vbaprojectsignature",
+    "vbaprojectsignatureagile",
+    "vbaprojectsignaturev3",
+    "activexcontrolbinary",
+    "printersettings",
+    "font",
+    "thumbnail",
+    "media",
+    "video",
+    "audio",
+    "hdphoto",
+    "wdp",
+];
 
 fn is_rels(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with(".rels")
@@ -1070,6 +1134,8 @@ fn ooxml(
         .filter(|e| is_rels(&e.name))
         .map(|e| e.name.clone())
         .collect();
+    let entry_keys: HashSet<String> = ctx.entries.iter().map(|e| part_key(&e.name)).collect();
+    let xml_keys: HashSet<String> = ctx.xml.iter().map(|n| part_key(n)).collect();
     for rels in &rels_files {
         let Some(src) = checked_part(ctx.entries, rels)? else {
             continue;
@@ -1108,13 +1174,39 @@ fn ooxml(
             let external = r
                 .attr("TargetMode")
                 .is_some_and(|m| m.eq_ignore_ascii_case("External"));
+            let key = if external {
+                None
+            } else {
+                match target_key(&base, &target) {
+                    Ok(key) => Some(key),
+                    Err(e) => {
+                        refused.get_or_insert(format!("{rels}: {}", e.message));
+                        return true;
+                    }
+                }
+            };
+            // A part a relationship reads as XML must be one the sanitiser
+            // reads as XML, whatever it is named or typed.
+            if let Some(key) = &key {
+                if entry_keys.contains(key)
+                    && !xml_keys.contains(key)
+                    && !BINARY_TARGET_TYPES.contains(&kind.as_str())
+                    && kind != "hyperlink"
+                {
+                    refused.get_or_insert(format!(
+                        "{rels}: a {} relationship names {target:?}, which the package does \
+                         not type as XML; the document is refused",
+                        last_segment(&ty)
+                    ));
+                }
+            }
             let Some(why) = classify(&ty, &target, external, &source, keep) else {
                 return true;
             };
             dropped.push((source.clone(), why));
             lost.entry(source.clone()).or_default().insert(id, why);
-            if !external {
-                doomed.insert(package::resolve(&base, &target).to_ascii_lowercase());
+            if let Some(key) = key {
+                doomed.insert(key);
             }
             changed = true;
             false
@@ -1129,8 +1221,9 @@ fn ooxml(
     // A macro project nothing points at still goes, found by name or type.
     if !keep.macros {
         for e in ctx.entries.iter() {
-            if e.name.to_ascii_lowercase().ends_with("vbaproject.bin") {
-                doomed.insert(e.name.to_ascii_lowercase());
+            let key = part_key(&e.name);
+            if key.ends_with("vbaproject.bin") {
+                doomed.insert(key);
             }
         }
         doomed.extend(ctx.macro_parts()?);
@@ -1141,7 +1234,7 @@ fn ooxml(
     // A part that went with another, such as an ActiveX control's binary,
     // is not counted again.
     for (source, why) in dropped {
-        if !gone.contains(&source.to_ascii_lowercase()) {
+        if !gone.contains(&part_key(&source)) {
             ctx.removed.count(why);
         }
     }
@@ -1149,7 +1242,7 @@ fn ooxml(
     // 3. Markup that named a dropped relationship.
     let mut sources: Vec<&String> = lost
         .keys()
-        .filter(|s| !gone.contains(&s.to_ascii_lowercase()))
+        .filter(|s| !gone.contains(&part_key(s)))
         .collect();
     sources.sort();
     for source in sources {
@@ -1190,7 +1283,7 @@ impl Ooxml<'_> {
                 let Some(source) = source_of(&rels) else {
                     continue;
                 };
-                if gone.contains(&source.to_ascii_lowercase()) {
+                if gone.contains(&part_key(&source)) {
                     continue;
                 }
                 for (_, target, _) in relationships(self.entries, &rels, base_of(&source))? {
@@ -1217,10 +1310,10 @@ impl Ooxml<'_> {
                         }
                     }
                 }
-                let rels = rels.to_ascii_lowercase();
+                let rels = part_key(&rels);
                 self.entries.retain(|e| {
-                    let lower = e.name.to_ascii_lowercase();
-                    lower != part && lower != rels
+                    let key = part_key(&e.name);
+                    key != part && key != rels
                 });
                 gone.insert(part.clone());
                 gone.insert(rels);
@@ -1393,22 +1486,18 @@ impl Ooxml<'_> {
             return Ok(());
         };
         let before = xml::to_xml(std::slice::from_ref(&Node::Elem(root.clone())));
-        let names: HashSet<String> = self
-            .entries
-            .iter()
-            .map(|e| e.name.to_ascii_lowercase())
-            .collect();
+        let names: HashSet<String> = self.entries.iter().map(|e| part_key(&e.name)).collect();
         let overridden: HashSet<String> = root
             .children_named("Override")
             .filter_map(|o| o.attr("PartName"))
-            .map(|p| p.trim_start_matches('/').to_ascii_lowercase())
+            .map(|p| part_key(&p))
             .collect();
         let macros_gone = !self.keep.macros;
         root.children.retain(|n| {
             let Node::Elem(e) = n else { return true };
             match e.name.as_str() {
                 "Override" => e.attr("PartName").is_none_or(|p| {
-                    let p = p.trim_start_matches('/').to_ascii_lowercase();
+                    let p = part_key(&p);
                     !gone.contains(&p) && names.contains(&p)
                 }),
                 // A default for macro projects stays only while a part uses it.
@@ -1417,7 +1506,7 @@ impl Ooxml<'_> {
                         && e.attr("ContentType")
                             .is_some_and(|t| t.trim().eq_ignore_ascii_case(VBA_CONTENT_TYPE)) =>
                 {
-                    let ext = e.attr("Extension").unwrap_or_default().to_ascii_lowercase();
+                    let ext = part_key(&e.attr("Extension").unwrap_or_default());
                     names
                         .iter()
                         .any(|n| n.ends_with(&format!(".{ext}")) && !overridden.contains(n))
@@ -1470,22 +1559,19 @@ impl Ooxml<'_> {
             .children_named("Override")
             .filter(|e| is_vba(e))
             .filter_map(|e| e.attr("PartName"))
-            .map(|p| p.trim_start_matches('/').to_ascii_lowercase())
+            .map(|p| part_key(&p))
             .collect();
         let overridden: HashSet<String> = root
             .children_named("Override")
             .filter_map(|e| e.attr("PartName"))
-            .map(|p| p.trim_start_matches('/').to_ascii_lowercase())
+            .map(|p| part_key(&p))
             .collect();
         for d in root.children_named("Default").filter(|e| is_vba(e)) {
-            let ext = format!(
-                ".{}",
-                d.attr("Extension").unwrap_or_default().to_ascii_lowercase()
-            );
+            let ext = format!(".{}", part_key(&d.attr("Extension").unwrap_or_default()));
             out.extend(
                 self.entries
                     .iter()
-                    .map(|e| e.name.to_ascii_lowercase())
+                    .map(|e| part_key(&e.name))
                     .filter(|n| n.ends_with(&ext) && !overridden.contains(n)),
             );
         }

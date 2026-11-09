@@ -344,7 +344,7 @@ A template comes from whoever sends it, and the document is read by someone else
 
 This covers what the template held and what data put in, such as a `link` filter given an intranet address. Every relationship, content type and manifest entry that pointed at something removed goes with it, so the file opens without a repair. Public hyperlinks, embedded pictures and the template's own parts stay as they were.
 
-What the sanitiser cannot read with certainty is refused with an error naming the part, rather than passed through: a part that is neither UTF-8 nor UTF-16 or declares an encoding its bytes are not, one that gives the standard namespaces prefixes Office and LibreOffice never write, and two parts whose names differ only in case. An Excel 4.0 macro or dialog sheet is refused unless the request keeps macros, and a data connection or query table unless it keeps external links, since neither can be taken out without breaking the workbook.
+What the sanitiser cannot read with certainty is refused with an error naming the part, rather than passed through: a part that is neither UTF-8 nor UTF-16 or declares an encoding its bytes are not, one that gives the standard namespaces prefixes Office and LibreOffice never write, two parts whose names differ only in case or percent-encoding, a content-type override that names no part, and a part that a relationship reads as XML but the package does not type as XML. Part names are compared as OPC compares them, percent-decoded and without case. An Excel 4.0 macro or dialog sheet is refused unless the request keeps macros, and a data connection or query table unless it keeps external links, since neither can be taken out without breaking the workbook.
 
 ### Keep what a template needs
 
