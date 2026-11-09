@@ -24,25 +24,9 @@ export default defineConfig({
         ThemeSelect: './src/components/ThemeSwitch.astro',
       },
       customCss: ['./src/styles/fonts.css', './src/styles/tokens.css', './src/styles/docs.css'],
-      expressiveCode: {
-        themes: ['github-dark-default', 'github-light-default'],
-        styleOverrides: {
-          borderRadius: '3px',
-          borderColor: 'var(--line)',
-          codeBackground: 'var(--code-bg)',
-          codeFontFamily: 'var(--font-mono)',
-          uiFontFamily: 'var(--font-body)',
-          frames: {
-            shadowColor: 'transparent',
-            terminalBackground: 'var(--code-bg)',
-            terminalTitlebarBackground: 'var(--code-bar)',
-            terminalTitlebarBorderBottomColor: 'var(--line)',
-            editorTabBarBackground: 'var(--code-bar)',
-            editorActiveTabBackground: 'var(--code-bg)',
-            editorTabBarBorderBottomColor: 'var(--line)',
-          },
-        },
-      },
+      // Code block settings live in ec.config.mjs: they use functions, which
+      // Expressive Code reads only from there.
+      expressiveCode: true,
       sidebar: [
         { label: 'Start here', items: [{ autogenerate: { directory: 'docs/start' } }] },
         { label: 'Write templates', items: [{ autogenerate: { directory: 'docs/templates' } }] },

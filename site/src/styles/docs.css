@@ -110,7 +110,7 @@ mobile-starlight-toc nav, mobile-starlight-toc .toggle { border-color: var(--lin
 /* Inline code */
 .sl-markdown-content :not(pre) > code {
   background: var(--blue-wash); color: var(--blue-deep);
-  border: 0; border-radius: var(--r-small); padding: 0.1em 0.35em; font-size: 0.86em; font-weight: 500;
+  border: 0; border-radius: var(--r-small); padding: 0.1em 0.35em; font-size: 0.82em; font-weight: 500;
 }
 
 /* Tables */
