@@ -56,6 +56,8 @@ enum Op {
     Validate { name: String, limit: usize },
     /// A template being stored. Blobs: the file.
     Syntax { name: String },
+    /// The tags a template holds. Blobs: the file.
+    Tags { name: String },
     /// A template string, for `batchName`. Blobs: the source, the context.
     Text { limit: usize },
     /// HTML to PDF. Blobs: the page, then each asset, named in order.
@@ -268,6 +270,14 @@ fn evaluate(blobs: &[Vec<u8>]) -> Result<(ReplyMeta, Vec<u8>)> {
         Op::Syntax { name } => {
             let doc = Document::new(name, blob_bytes(blobs, 1));
             let found = template::check_syntax(&doc);
+            plain(serde_json::to_vec(&found).map_err(|e| Error::Engine {
+                engine: "template",
+                message: e.to_string(),
+            })?)
+        }
+        Op::Tags { name } => {
+            let doc = Document::new(name, blob_bytes(blobs, 1));
+            let found = template::tags(&doc)?;
             plain(serde_json::to_vec(&found).map_err(|e| Error::Engine {
                 engine: "template",
                 message: e.to_string(),
@@ -529,6 +539,24 @@ impl Renderer {
         serde_json::from_slice(&payload).map_err(|e| Error::Engine {
             engine: "template",
             message: format!("unexpected validation reply: {e}"),
+        })
+    }
+
+    /// The tags a template holds, in document order, read where its renders
+    /// would run.
+    pub async fn tags(&self, doc: &Document, timeout: Duration) -> Result<Vec<String>> {
+        let mut session = self.session(timeout).await?;
+        if session.worker.is_none() {
+            let doc = doc.clone();
+            return blocking(timeout, move |_| template::tags(&doc)).await;
+        }
+        let op = Op::Tags {
+            name: doc.name.clone(),
+        };
+        let (_, payload) = session.call(&op, &[&doc.bytes]).await?;
+        serde_json::from_slice(&payload).map_err(|e| Error::Engine {
+            engine: "template",
+            message: format!("unexpected tags reply: {e}"),
         })
     }
 

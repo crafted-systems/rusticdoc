@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::Multipart;
+use axum::extract::{FromRequest as _, Multipart, Request};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use rusticdoc_core::limits::MAX_TEXT_PARTS;
@@ -18,6 +18,9 @@ use crate::webhook;
 
 /// File parts under these field names are not inputs to convert; routes
 /// read them from [`Form::by_field`].
+/// Fields that only ever hold files.
+const FILE_FIELDS: &[&str] = &["template", "files"];
+
 const SPECIAL_FIELDS: &[&str] = &[
     "embeds",
     "watermark",
@@ -88,6 +91,87 @@ impl Form {
                     form.fields.insert(name, text);
                 }
             }
+        }
+        if let Some(raw) = form.fields.remove("downloadFrom") {
+            form.download_from(&raw, state).await?;
+        }
+        Ok(form)
+    }
+
+    /// Reads a multipart form, as [`Form::read`], or a JSON object when the
+    /// request says `Content-Type: application/json`. JSON is for requests with
+    /// no files to send, such as a render by `templateId`: each member becomes
+    /// the field of that name, with the same meaning and the same checks.
+    pub async fn from_request(req: Request, state: &AppState) -> ApiResult<Self> {
+        if !is_json(req.headers()) {
+            let multipart = Multipart::from_request(req, state)
+                .await
+                .map_err(|e| ApiError::bad_request(e.body_text()))?;
+            return Self::read(multipart, state).await;
+        }
+        let limit = state.config.body_limit;
+        let bytes = axum::body::to_bytes(req.into_body(), limit)
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "payload_too_large",
+                    format!("the body is larger than the limit of {limit} bytes"),
+                )
+            })?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|e| ApiError::bad_request(format!("the body is not valid JSON: {e}")))?;
+        Self::from_json(value, state).await
+    }
+
+    /// A form from a JSON object. Strings, numbers and booleans become text
+    /// fields; objects and arrays are kept as JSON text, as a form carries
+    /// `data` or `metadata`. `steps` may be a list of names. Files cannot come
+    /// this way, so a member that names one is refused rather than ignored.
+    pub async fn from_json(value: serde_json::Value, state: &AppState) -> ApiResult<Self> {
+        let serde_json::Value::Object(members) = value else {
+            return Err(ApiError::bad_request(
+                "the JSON body must be an object of fields",
+            ));
+        };
+        if members.len() > MAX_TEXT_PARTS {
+            return Err(ApiError::bad_request(format!(
+                "the body has more than {MAX_TEXT_PARTS} fields"
+            )));
+        }
+        let mut form = Form::default();
+        for (name, value) in members {
+            if FILE_FIELDS.contains(&name.as_str()) || SPECIAL_FIELDS.contains(&name.as_str()) {
+                return Err(ApiError::bad_request(format!(
+                    "'{name}' is a file, and a JSON body cannot carry files; send multipart/form-data, or a 'templateId'"
+                )));
+            }
+            let text = match value {
+                serde_json::Value::Null => continue,
+                serde_json::Value::String(text) => text,
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Array(items) if name == "steps" => {
+                    let mut names = Vec::with_capacity(items.len());
+                    for item in items {
+                        match item {
+                            serde_json::Value::String(step) => names.push(step),
+                            _ => {
+                                return Err(ApiError::bad_request(
+                                    "'steps' is a list of step names",
+                                ));
+                            }
+                        }
+                    }
+                    names.join(",")
+                }
+                other => other.to_string(),
+            };
+            form.multi
+                .entry(name.clone())
+                .or_default()
+                .push(text.clone());
+            form.fields.insert(name, text);
         }
         if let Some(raw) = form.fields.remove("downloadFrom") {
             form.download_from(&raw, state).await?;
@@ -288,6 +372,15 @@ impl Form {
     pub fn take_field(&mut self, field: &str) -> Vec<Document> {
         self.by_field.remove(field).unwrap_or_default()
     }
+}
+
+/// True when the request says its body is JSON.
+pub fn is_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<mime::Mime>().ok())
+        .is_some_and(|m| m.type_() == mime::APPLICATION && m.subtype() == mime::JSON)
 }
 
 fn disposition_filename(value: &str) -> Option<String> {

@@ -6,11 +6,12 @@ use rusticdoc_core::{Document, Format, Output, RenderRequest, Step};
 use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
+use crate::jobs::Delivery;
 use crate::routes::form::{Form, request_id, zip};
 use crate::routes::forms::finish_within;
 use crate::routes::options;
 use crate::state::AppState;
-use crate::webhook::{self, Hook, Webhook};
+use crate::webhook::{self, Hook};
 
 /// The multipart form `/v1/convert` and `/v1/pdf/convert` accept.
 /// LibreOffice options (`landscape`, `nativePageRanges`,
@@ -197,7 +198,7 @@ pub async fn convert_pdf(
 /// several as a ZIP; webhooks as everywhere.
 pub async fn run_each(
     state: AppState,
-    hook: Option<Webhook>,
+    hook: Delivery,
     rid: String,
     files: Vec<Document>,
     steps: Vec<Step>,

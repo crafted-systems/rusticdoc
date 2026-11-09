@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::extract::{Multipart, Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use rusticdoc_core::fonts::{self, FontInfo, SkippedFile};
@@ -13,7 +13,7 @@ use rusticdoc_core::store::FontMeta;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::auth::{self, Principal};
+use crate::auth::{self, Admin, Principal};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::routes::form::Form;
 use crate::routes::templates::{store_of, user_store_error};
@@ -226,7 +226,7 @@ pub async fn reload(State(state): State<AppState>) -> ApiResult<Json<Reloaded>> 
 }
 
 /// Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,
-/// or one such file. Takes an admin key. They are in use on this replica when this
+/// or one such file. Takes an admin. They are in use on this replica when this
 /// returns, and on the others within `syncIntervalSeconds`.
 #[utoipa::path(
     post, path = "/v1/fonts", tag = "fonts", operation_id = "uploadFonts",
@@ -234,19 +234,19 @@ pub async fn reload(State(state): State<AppState>) -> ApiResult<Json<Reloaded>> 
     responses(
         (status = 201, description = "Stored", body = FontsStored),
         (status = 400, description = "Not fonts, or too large", body = ErrorBody),
-        (status = 403, description = "Needs an admin key, or the store is full", body = ErrorBody),
+        (status = 403, description = "Needs an admin, or the store is full", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []))
+    security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn upload(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-    headers: HeaderMap,
+    Extension(admin): Extension<Admin>,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    auth::require_admin(&state, &headers)?;
+    auth::require_admin(&state, admin)?;
     let store = store_of(&state)?;
     let _one_at_a_time = state
         .font_uploads
@@ -313,7 +313,7 @@ pub async fn upload(
         .into_response())
 }
 
-/// Deletes a stored font. Takes an admin key. It leaves this replica when this
+/// Deletes a stored font. Takes an admin. It leaves this replica when this
 /// returns, and the others within the sync interval. Documents that name it fall
 /// back to another font.
 #[utoipa::path(
@@ -321,20 +321,20 @@ pub async fn upload(
     params(("id" = String, Path, description = "The font's id, from `GET /v1/fonts`")),
     responses(
         (status = 204, description = "Deleted"),
-        (status = 403, description = "Needs an admin key", body = ErrorBody),
+        (status = 403, description = "Needs an admin", body = ErrorBody),
         (status = 404, description = "No such stored font", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []))
+    security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn remove(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-    headers: HeaderMap,
+    Extension(admin): Extension<Admin>,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
-    auth::require_admin(&state, &headers)?;
+    auth::require_admin(&state, admin)?;
     let store = store_of(&state)?;
     store.delete_font(&id).await.map_err(user_store_error)?;
     tracing::info!(

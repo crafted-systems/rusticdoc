@@ -1,4 +1,4 @@
-use axum::extract::{Multipart, State};
+use axum::extract::{Request, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::{Extension, Json};
@@ -10,12 +10,13 @@ use utoipa::ToSchema;
 
 use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
+use crate::jobs::Delivery;
 use crate::metrics::StageLabels;
 use crate::routes::form::{Form, request_id};
 use crate::routes::forms::{finish, finish_within};
 use crate::routes::{options, templates};
 use crate::state::AppState;
-use crate::webhook::{self, Hook, Webhook};
+use crate::webhook::{self, Hook};
 
 /// The multipart form `/v1/render` accepts. Documented here; parsed by hand.
 #[derive(ToSchema)]
@@ -24,8 +25,9 @@ pub struct RenderForm {
     /// The template file. Send this or `templateId`.
     #[schema(value_type = String, format = Binary)]
     pub template: Option<String>,
-    /// The id of a stored template, from `POST /v1/templates`. Send this or
-    /// `template`. Files in the form are then only further inputs, for `merge`.
+    /// The id of a stored template, from `POST /v1/templates`, or an alias as
+    /// `name` or `name@version`. Send this or `template`. Files in the form are
+    /// then only further inputs, for `merge`.
     #[schema(rename = "templateId")]
     pub template_id: Option<String>,
     /// JSON object the template sees as its root, sent as text or as a file.
@@ -73,7 +75,60 @@ pub struct RenderForm {
     pub files: Option<Vec<String>>,
 }
 
+/// The JSON body `/v1/render`, `/v1/render/batch` and
+/// `/v1/templates/validate` accept with `Content-Type: application/json`, for a
+/// stored template: there are no files to send. Every text field of the
+/// multipart form is accepted under the same name, with the same meaning and
+/// limits; objects such as `data` and `metadata` are sent as JSON rather than as
+/// text, and `steps` may be a list. Fields that carry files cannot be sent.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct RenderJson {
+    /// The stored template: its id, or an alias as `name` or `name@version`.
+    #[schema(rename = "templateId", example = "invoice")]
+    pub template_id: String,
+    /// The object the template sees as its root.
+    #[schema(example = json!({"customer": {"name": "Ada"}}))]
+    pub data: Option<serde_json::Value>,
+    /// The object visible as `ctx`.
+    pub ctx: Option<serde_json::Value>,
+    /// The steps in order, as a list or as comma-separated text.
+    #[schema(value_type = Option<Vec<String>>, example = json!(["convert", "pdfa"]))]
+    pub steps: Option<serde_json::Value>,
+    /// Output format for `convert`. Default `pdf`.
+    pub to: Option<String>,
+    /// PDF/A level for `pdfa`.
+    pub pdfa: Option<String>,
+    /// Metadata fields for `metadata`.
+    pub metadata: Option<serde_json::Value>,
+    #[schema(rename = "userPassword")]
+    pub user_password: Option<String>,
+    #[schema(rename = "ownerPassword")]
+    pub owner_password: Option<String>,
+    /// File name of the result, without extension.
+    #[schema(rename = "outputFilename")]
+    pub output_filename: Option<String>,
+    /// `fulgur` (default) or `libreoffice`, for HTML.
+    #[schema(rename = "htmlEngine")]
+    pub html_engine: Option<String>,
+    /// For `/v1/render/batch`: the array to render once per element.
+    #[schema(rename = "splitBy")]
+    pub split_by: Option<String>,
+    /// For `/v1/render/batch`: each file's name, as a template.
+    #[schema(rename = "batchName")]
+    pub batch_name: Option<String>,
+    /// URLs to fetch as further inputs, as on the multipart form.
+    #[schema(rename = "downloadFrom", value_type = Option<Vec<Object>>)]
+    pub download_from: Option<serde_json::Value>,
+}
+
 /// Fills a template and runs the steps.
+///
+/// Send a multipart form, or JSON with a `templateId` (see `RenderJson`).
+///
+/// Add `Prefer: respond-async` to get 202 at once, with the job in the body and
+/// its address in `Location`, and fetch the result from `/v1/jobs/{id}/result`
+/// once it is done. This needs `RUSTICDOC_STORE`.
 ///
 /// Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.
 /// With `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its
@@ -84,13 +139,18 @@ pub struct RenderForm {
 /// when the service requires no credentials; `rusticdoc webhook-secret` prints it.
 #[utoipa::path(
     post, path = "/v1/render", tag = "render",
-    request_body(content_type = "multipart/form-data", content = RenderForm),
+    request_body(content(
+        (RenderForm = "multipart/form-data"),
+        (RenderJson = "application/json"),
+    )),
     params(
         ("X-Rusticdoc-Webhook-Url" = Option<String>, Header, description = "Deliver the result here instead of in the response"),
         ("X-Rusticdoc-Webhook-Error-Url" = Option<String>, Header, description = "Deliver failures here as JSON"),
+        ("Prefer" = Option<String>, Header, description = "`respond-async` to run in the background and answer 202"),
     ),
     responses(
         (status = 200, description = "The rendered file", content_type = "application/octet-stream", body = BinaryFile),
+        (status = 202, description = "Accepted as a background job (`Prefer: respond-async`)", body = crate::routes::jobs::JobSchema),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 401, description = "Credentials required", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
         (status = 501, description = "Not supported in this version", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
@@ -102,9 +162,9 @@ pub async fn render(
     Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
-    multipart: Multipart,
+    req: Request,
 ) -> ApiResult<Response> {
-    let mut form = Form::read(multipart, &state).await?;
+    let mut form = Form::from_request(req, &state).await?;
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
@@ -226,7 +286,7 @@ fn named_steps(form: &mut Form) -> ApiResult<Vec<Step>> {
 /// Runs a request now, or hands it to a webhook task.
 pub async fn run(
     state: AppState,
-    hook: Option<Webhook>,
+    hook: Delivery,
     request_id: String,
     req: RenderRequest,
 ) -> ApiResult<Response> {
@@ -250,12 +310,17 @@ pub async fn run(
 /// `{{ batch.index }}`.
 #[utoipa::path(
     post, path = "/v1/render/batch", tag = "render",
-    request_body(content_type = "multipart/form-data", content = RenderForm),
+    request_body(content(
+        (RenderForm = "multipart/form-data"),
+        (RenderJson = "application/json"),
+    )),
     params(
         ("X-Rusticdoc-Webhook-Url" = Option<String>, Header, description = "Deliver the ZIP here instead of in the response"),
+        ("Prefer" = Option<String>, Header, description = "`respond-async` to run in the background and answer 202"),
     ),
     responses(
         (status = 200, description = "A ZIP of the rendered files", content_type = "application/zip", body = BinaryFile),
+        (status = 202, description = "Accepted as a background job (`Prefer: respond-async`)", body = crate::routes::jobs::JobSchema),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
     ),
@@ -266,10 +331,10 @@ pub async fn batch(
     Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
-    multipart: Multipart,
+    req: Request,
 ) -> ApiResult<Response> {
     // The route's time limit is the batch's; reading the form gets the usual one.
-    let read = Form::read(multipart, &state);
+    let read = Form::from_request(req, &state);
     let mut form = webhook::within(state.config.api_timeout, read).await?;
     // First, because the first file left is the template.
     let data = form.json("data")?;
@@ -479,16 +544,19 @@ pub struct Validation {
 /// Checks a template against sample data without converting anything.
 #[utoipa::path(
     post, path = "/v1/templates/validate", tag = "render",
-    request_body(content_type = "multipart/form-data", content = RenderForm),
+    request_body(content(
+        (RenderForm = "multipart/form-data"),
+        (RenderJson = "application/json"),
+    )),
     responses((status = 200, description = "The validation result", body = Validation), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn validate(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-    multipart: Multipart,
+    req: Request,
 ) -> ApiResult<Json<Validation>> {
-    let mut form = Form::read(multipart, &state).await?;
+    let mut form = Form::from_request(req, &state).await?;
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;

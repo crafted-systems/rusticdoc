@@ -740,7 +740,7 @@ pub async fn sign(
 /// `signature=image`: each image drawn at its place, in one budget.
 async fn sign_with_images(
     state: AppState,
-    hook: Option<crate::webhook::Webhook>,
+    hook: crate::jobs::Delivery,
     headers: HeaderMap,
     mut form: Form,
     doc: Document,
@@ -817,7 +817,7 @@ async fn sign_with_images(
 /// key. The key never comes from the request.
 async fn sign_with_certificate(
     state: AppState,
-    hook: Option<crate::webhook::Webhook>,
+    hook: crate::jobs::Delivery,
     headers: HeaderMap,
     mut form: Form,
     doc: Document,

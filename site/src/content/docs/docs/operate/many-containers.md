@@ -7,7 +7,7 @@ sidebar:
 
 With this page you can run several replicas behind a load balancer, store templates and fonts for all of them, and know what each failure looks like.
 
-Replicas that receive their templates in the request need no store, because they share nothing. You need a store for stored templates and uploaded fonts.
+Replicas that receive their templates in the request need no store, because they share nothing. You need a store for stored templates, aliases, uploaded fonts and background jobs.
 
 ## Name a store
 
@@ -59,8 +59,10 @@ Back up the bucket and turn on its encryption yourself. This is the only copy, a
 |---|---|---|
 | Templates | `templates/<caller>/`. The content is cached in memory, and the metadata is read on every request | At once. A delete is also seen at once |
 | Fonts | `fonts/`, named by their hash, and copied to each replica's `RUSTICDOC_FONT_CACHE_DIR` because LibreOffice needs files | The uploading replica at once, the others within `RUSTICDOC_STORE_SYNC_INTERVAL`, 30 seconds by default |
+| Aliases | `aliases/<caller>/<name>/`, one object per version, read on every request | At once, as is a delete |
+| Background jobs | `jobs/<caller>/<id>/`, one object per state and one for the result | At once. Every replica removes expired jobs now and then |
 
-Replicas have no messages, locks or leader between them. Everything written to the store is immutable, so they need no coordination. A stored template cannot be changed: store the new one and use its id.
+Replicas have no messages, locks or leader between them. Everything written to the store is immutable, so they need no coordination. A stored template cannot be changed: store the new one and point an [alias](/docs/guides/stored-templates/#aliases-and-versions) at it. A background job runs on the replica that accepted it, and any replica can answer for it.
 
 Limits on what a scope may hold are checked by each replica. Replicas storing at the same moment can pass `RUSTICDOC_MAX_TEMPLATES` and `RUSTICDOC_MAX_TEMPLATE_STORAGE` by what is in flight.
 
@@ -89,9 +91,11 @@ A font that fails its hash is left out and logged, so one bad object does not ho
 
 | Value | Behaviour |
 |---|---|
-| `caller`, the default | Each credential sees only its own templates. Another caller's id answers `404`. Replacing a key leaves what the old key stored behind |
-| `shared` | Every credential reads and deletes the same templates |
+| `caller`, the default | Each credential sees only its own templates and aliases. Another caller's id answers `404`. Replacing a key leaves what the old key stored behind, unless it is a [tenant key](/docs/guides/authentication/#tenant-keys) |
+| `shared` | Every credential reads and deletes the same templates and aliases |
+
+Background jobs are always each caller's own.
 
 With no credentials configured, every caller is the same caller.
 
-Fonts are one set per deployment, not per caller. Changing them takes a key from `RUSTICDOC_ADMIN_KEYS`, and any other key gets `403`, because a font decides what the digits look like in everyone's documents.
+Fonts are one set per deployment, not per caller. Changing them takes an [admin](/docs/guides/authentication/#admins), and any other credential gets `403`, because a font decides what the digits look like in everyone's documents.

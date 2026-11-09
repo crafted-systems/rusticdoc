@@ -1,8 +1,10 @@
+pub mod aliases;
 pub mod convert;
 pub mod fonts;
 pub mod form;
 pub mod forms;
 pub mod health;
+pub mod jobs;
 pub mod options;
 pub mod pdf;
 pub mod pdfops;
@@ -11,7 +13,7 @@ pub mod templates;
 
 use axum::Router;
 use axum::http::{HeaderValue, header};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use rusticdoc_core::Config;
 use tower_http::set_header::SetResponseHeaderLayer;
 use utoipa::OpenApi;
@@ -36,6 +38,15 @@ pub fn router(config: &Config) -> Router<AppState> {
             get(templates::show).delete(templates::remove),
         )
         .route("/v1/templates/{id}/content", get(templates::content))
+        .route("/v1/templates/{id}/variables", get(templates::variables))
+        .route("/v1/templates/{id}/preview", post(templates::preview))
+        .route("/v1/aliases", get(aliases::list))
+        .route(
+            "/v1/aliases/{name}",
+            put(aliases::set).get(aliases::show).delete(aliases::remove),
+        )
+        .route("/v1/jobs/{id}", get(jobs::show))
+        .route("/v1/jobs/{id}/result", get(jobs::result))
         .route("/v1/fonts", get(fonts::list).post(fonts::upload))
         .route("/v1/fonts/{id}", delete(fonts::remove))
         .route("/fonts", get(fonts::list))

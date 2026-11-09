@@ -1117,3 +1117,985 @@ async fn health_names_the_store_only_when_there_is_one() {
     let health = json(res).await;
     assert!(health["details"].get("store").is_none(), "{health}");
 }
+
+// --- JSON bodies, aliases, variables, previews and background jobs ---
+
+fn send_json(
+    method: &str,
+    path: &str,
+    body: serde_json::Value,
+    key: Option<&str>,
+) -> Request<Body> {
+    let mut req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(key) = key {
+        req = req.header("x-api-key", key);
+    }
+    req.body(Body::from(body.to_string())).unwrap()
+}
+
+fn post_json(path: &str, body: serde_json::Value, key: Option<&str>) -> Request<Body> {
+    send_json("POST", path, body, key)
+}
+
+async fn store_text(router: &Router, name: &str, content: &[u8], key: Option<&str>) -> String {
+    let parts: &[Part<'_>] = &[("template", Some(name), content)];
+    let res = router
+        .clone()
+        .oneshot(post_as("/v1/templates", parts, key))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    json(res).await["id"].as_str().unwrap().to_string()
+}
+
+async fn set_alias(
+    router: &Router,
+    name: &str,
+    id: &str,
+    key: Option<&str>,
+) -> axum::response::Response {
+    router
+        .clone()
+        .oneshot(send_json(
+            "PUT",
+            &format!("/v1/aliases/{name}"),
+            serde_json::json!({ "templateId": id }),
+            key,
+        ))
+        .await
+        .unwrap()
+}
+
+async fn render_text(router: &Router, template: &str, key: Option<&str>) -> (StatusCode, String) {
+    let res = router
+        .clone()
+        .oneshot(post_json(
+            "/v1/render",
+            serde_json::json!({ "templateId": template, "data": { "name": "Ada" } }),
+            key,
+        ))
+        .await
+        .unwrap();
+    let status = res.status();
+    (
+        status,
+        String::from_utf8_lossy(&bytes(res).await).into_owned(),
+    )
+}
+
+#[tokio::test]
+async fn a_json_body_renders_validates_and_batches_by_id() {
+    let pair = two_replicas(|_| {});
+    let id = store_template(&pair.a, None).await;
+    let (status, body) = render_text(&pair.b, &id, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "Hello Ada"));
+
+    // Options mean what they mean on the form: here a name for the result.
+    let res = pair
+        .b
+        .clone()
+        .oneshot(post_json(
+            "/v1/render",
+            serde_json::json!({ "templateId": id, "data": { "name": "Ada" }, "outputFilename": "greeting" }),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        res.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("greeting.txt")
+    );
+
+    let res = pair
+        .b
+        .clone()
+        .oneshot(post_json(
+            "/v1/templates/validate",
+            serde_json::json!({ "templateId": id, "data": {} }),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(json(res).await["ok"], false);
+
+    let res = pair
+        .b
+        .clone()
+        .oneshot(post_json(
+            "/v1/render/batch",
+            serde_json::json!({
+                "templateId": id,
+                "data": { "name": "All", "people": [{ "id": 1 }, { "id": 2 }] },
+                "splitBy": "people",
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(bytes(res).await.starts_with(b"PK"));
+}
+
+#[tokio::test]
+async fn a_json_body_gets_the_forms_checks() {
+    let pair = two_replicas(|_| {});
+    let id = store_template(&pair.a, None).await;
+    let refused = |body: serde_json::Value| post_json("/v1/render", body, None);
+    for (body, says) in [
+        (
+            serde_json::json!(["not", "an", "object"]),
+            "object of fields",
+        ),
+        (
+            serde_json::json!({ "template": "x", "templateId": id }),
+            "cannot carry files",
+        ),
+        (
+            serde_json::json!({ "templateId": id, "steps": ["teleport"] }),
+            "teleport",
+        ),
+        (
+            serde_json::json!({ "templateId": id, "steps": [1] }),
+            "list of step names",
+        ),
+        (
+            serde_json::json!({ "data": { "name": "Ada" } }),
+            "templateId",
+        ),
+        (
+            serde_json::json!({ "templateId": id, "data": "not json" }),
+            "not valid JSON",
+        ),
+    ] {
+        let res = pair.a.clone().oneshot(refused(body.clone())).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{body}");
+        let text = String::from_utf8(bytes(res).await).unwrap();
+        assert!(text.contains(says), "{body}: {text}");
+    }
+    let many: serde_json::Map<String, serde_json::Value> = (0..2001)
+        .map(|i| (format!("f{i}"), serde_json::Value::from(i)))
+        .collect();
+    assert_eq!(
+        status(&pair.a, refused(serde_json::Value::Object(many))).await,
+        StatusCode::BAD_REQUEST
+    );
+    let res = pair
+        .a
+        .clone()
+        .oneshot(
+            Request::post("/v1/render")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{ not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // The body limit holds for JSON as for forms.
+    let small = two_replicas(|c| c.body_limit = 64);
+    let big = serde_json::json!({ "templateId": id, "data": { "pad": "x".repeat(200) } });
+    assert_eq!(
+        status(&small.a, post_json("/v1/render", big, None)).await,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+}
+
+#[tokio::test]
+async fn an_alias_keeps_its_versions_and_renders_any_of_them() {
+    let pair = two_replicas(|_| {});
+    let first = store_text(&pair.a, "v1.txt", b"One {{ name }}", None).await;
+    let second = store_text(&pair.a, "v2.txt", b"Two {{ name }}", None).await;
+
+    let res = set_alias(&pair.a, "invoice", &first, None).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(res.headers()[header::LOCATION], "/v1/aliases/invoice");
+    let set = json(res).await;
+    assert_eq!(
+        (set["version"].as_u64(), set["templateId"].as_str()),
+        (Some(1), Some(first.as_str()))
+    );
+    assert_eq!(render_text(&pair.b, "invoice", None).await.1, "One Ada");
+
+    // A new version, seen by the other replica at once.
+    let res = set_alias(&pair.a, "invoice", &second, None).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(json(res).await["version"], 2);
+    assert_eq!(render_text(&pair.b, "invoice", None).await.1, "Two Ada");
+    assert_eq!(render_text(&pair.b, "invoice@1", None).await.1, "One Ada");
+    assert_eq!(render_text(&pair.b, "invoice@2", None).await.1, "Two Ada");
+    assert_eq!(
+        render_text(&pair.b, "invoice@3", None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        render_text(&pair.b, "invoice@x", None).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    let history = json(
+        pair.b
+            .clone()
+            .oneshot(call("GET", "/v1/aliases/invoice", None))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(history["templateId"], second.as_str());
+    assert_eq!(history["version"], 2);
+    let versions = history["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0]["templateId"], first.as_str());
+    assert_eq!(versions[0]["version"], 1);
+    assert_eq!(versions[1]["templateId"], second.as_str());
+
+    // The template routes take an alias too, and say which template it is.
+    let meta = json(
+        pair.b
+            .clone()
+            .oneshot(call("GET", "/v1/templates/invoice@1", None))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(meta["id"], first.as_str());
+
+    // An alias may name another alias's template.
+    assert_eq!(
+        set_alias(&pair.a, "latest", "invoice", None).await.status(),
+        StatusCode::CREATED
+    );
+    let listed = json(
+        pair.a
+            .clone()
+            .oneshot(call("GET", "/v1/aliases", None))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let names: Vec<(&str, u64)> = listed["aliases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["name"].as_str().unwrap(), a["version"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(names, [("invoice", 2), ("latest", 1)]);
+    let page = json(
+        pair.a
+            .clone()
+            .oneshot(call("GET", "/v1/aliases?limit=1", None))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(page["aliases"].as_array().unwrap().len(), 1);
+    assert_eq!(page["nextCursor"], "invoice");
+
+    // Deleting the template an alias names says so where it is used.
+    assert_eq!(
+        status(
+            &pair.a,
+            call("DELETE", &format!("/v1/templates/{second}"), None)
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let (status_now, body) = render_text(&pair.b, "invoice", None).await;
+    assert_eq!(status_now, StatusCode::NOT_FOUND);
+    assert!(body.contains("has been deleted"), "{body}");
+    assert_eq!(render_text(&pair.b, "invoice@1", None).await.1, "One Ada");
+
+    // Deleting the alias ends it everywhere, and setting it again starts over.
+    assert_eq!(
+        status(&pair.b, call("DELETE", "/v1/aliases/invoice", None)).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        status(&pair.a, call("GET", "/v1/aliases/invoice", None)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        render_text(&pair.a, "invoice", None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        render_text(&pair.a, "invoice@1", None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(&pair.a, call("DELETE", "/v1/aliases/invoice", None)).await,
+        StatusCode::NOT_FOUND
+    );
+    let again = set_alias(&pair.a, "invoice", &first, None).await;
+    assert_eq!(again.status(), StatusCode::CREATED);
+    assert_eq!(json(again).await["version"], 1);
+    let history = json(
+        pair.a
+            .clone()
+            .oneshot(call("GET", "/v1/aliases/invoice", None))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(history["versions"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn alias_names_are_checked_and_cannot_reach_outside_the_store() {
+    let pair = two_replicas(|_| {});
+    let id = store_template(&pair.a, None).await;
+    for name in [
+        "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d",
+        ".hidden",
+        "-x",
+        "a%2Fb",
+        "x".repeat(65).as_str(),
+        "has%20space",
+    ] {
+        let res = set_alias(&pair.a, name, &id, None).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{name}");
+    }
+    assert_eq!(
+        set_alias(&pair.a, "ok", "", None).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        set_alias(&pair.a, "ok", "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d", None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        set_alias(&pair.a, "ok", "missing", None).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    for name in ["..", "a..b%2F", "%2E%2E"] {
+        assert_eq!(
+            render_text(&pair.a, name, None).await.0,
+            StatusCode::NOT_FOUND,
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn one_caller_cannot_see_or_use_anothers_aliases() {
+    let pair = two_replicas(|c| c.api_keys = vec!["alice-key".into(), "bob-key".into()]);
+    let (alice, bob) = (Some("alice-key"), Some("bob-key"));
+    let id = store_template(&pair.a, alice).await;
+    assert_eq!(
+        set_alias(&pair.a, "invoice", &id, alice).await.status(),
+        StatusCode::CREATED
+    );
+
+    assert_eq!(
+        render_text(&pair.b, "invoice", bob).await.0,
+        StatusCode::NOT_FOUND
+    );
+    for (method, path) in [
+        ("GET", "/v1/aliases/invoice"),
+        ("DELETE", "/v1/aliases/invoice"),
+        ("GET", "/v1/templates/invoice"),
+        ("GET", "/v1/templates/invoice/variables"),
+    ] {
+        assert_eq!(
+            status(&pair.b, call(method, path, bob)).await,
+            StatusCode::NOT_FOUND,
+            "{method} {path}"
+        );
+    }
+    let listed = json(
+        pair.b
+            .clone()
+            .oneshot(call("GET", "/v1/aliases", bob))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(listed["aliases"].as_array().unwrap().is_empty());
+    // Bob cannot point a name of his own at Alice's template either.
+    assert_eq!(
+        set_alias(&pair.b, "mine", &id, bob).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    // Bob's own alias of the same name is his.
+    let bobs = store_text(&pair.b, "b.txt", b"Bob {{ name }}", bob).await;
+    assert_eq!(
+        set_alias(&pair.b, "invoice", &bobs, bob).await.status(),
+        StatusCode::CREATED
+    );
+    assert_eq!(render_text(&pair.a, "invoice", alice).await.1, "Hello Ada");
+    assert_eq!(render_text(&pair.b, "invoice", bob).await.1, "Bob Ada");
+}
+
+#[tokio::test]
+async fn aliases_count_against_the_template_limit() {
+    let pair = two_replicas(|c| c.max_templates = 2);
+    let id = store_template(&pair.a, None).await;
+    assert_eq!(
+        set_alias(&pair.a, "one", &id, None).await.status(),
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        set_alias(&pair.a, "two", &id, None).await.status(),
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        set_alias(&pair.a, "three", &id, None).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    // A new version of an existing alias is not a new alias.
+    assert_eq!(
+        set_alias(&pair.a, "one", &id, None).await.status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn variables_list_paths_loops_and_item_fields() {
+    let pair = two_replicas(|_| {});
+    let template = b"Dear {{ customer.name }},\n{% for line in lines %}{{ line.sku }} x {{ line.qty }}\n{% endfor %}{{ total | round(2) }}";
+    let id = store_text(&pair.a, "order.txt", template, None).await;
+    assert_eq!(
+        set_alias(&pair.a, "order", &id, None).await.status(),
+        StatusCode::CREATED
+    );
+    for reference in [id.as_str(), "order", "order@1"] {
+        let res = pair
+            .b
+            .clone()
+            .oneshot(call(
+                "GET",
+                &format!("/v1/templates/{reference}/variables"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{reference}");
+        let found = json(res).await;
+        assert_eq!(found["templateId"], id.as_str());
+        assert_eq!(found["format"], "txt");
+        let variables: Vec<(String, String)> = found["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                (
+                    v["path"].as_str().unwrap().into(),
+                    v["type"].as_str().unwrap().into(),
+                )
+            })
+            .collect();
+        for (path, kind) in [
+            ("customer", "object"),
+            ("customer.name", "value"),
+            ("lines", "array"),
+            ("lines[].sku", "value"),
+            ("lines[].qty", "value"),
+            ("total", "value"),
+        ] {
+            assert!(
+                variables.contains(&(path.into(), kind.into())),
+                "{path} in {variables:?}"
+            );
+        }
+        assert!(!variables.iter().any(|(p, _)| p.starts_with("line.")));
+        assert_eq!(
+            found["example"],
+            serde_json::json!({"customer": {"name": ""}, "lines": [{"sku": "", "qty": ""}], "total": ""})
+        );
+    }
+    assert_eq!(
+        status(
+            &pair.a,
+            call("GET", "/v1/templates/missing/variables", None)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn a_pdf_forms_variables_are_its_fields() {
+    let pair = two_replicas(|_| {});
+    let form = rusticdoc_core::pdfops::fixtures::form();
+    let id = store_text(&pair.a, "form.pdf", &form, None).await;
+    let res = pair
+        .a
+        .clone()
+        .oneshot(call("GET", &format!("/v1/templates/{id}/variables"), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let found = json(res).await;
+    assert_eq!(found["format"], "pdf");
+    assert!(
+        !found["variables"].as_array().unwrap().is_empty(),
+        "{found}"
+    );
+}
+
+#[tokio::test]
+async fn a_preview_without_pdftoppm_is_a_503_before_any_work() {
+    let pair = two_replicas(|c| c.pdftoppm_bin = None);
+    let id = store_template(&pair.a, None).await;
+    let res = pair
+        .a
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/templates/{id}/preview"),
+            serde_json::json!({}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json(res).await["error"], "engine_unavailable");
+}
+
+/// The width and height a PNG says it has.
+fn png_size(png: &[u8]) -> (u32, u32) {
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    let w = u32::from_be_bytes(png[16..20].try_into().unwrap());
+    let h = u32::from_be_bytes(png[20..24].try_into().unwrap());
+    (w, h)
+}
+
+#[tokio::test]
+async fn a_preview_draws_the_page_asked_for_within_limits() {
+    let pair = two_replicas(|_| {});
+    if pair.state_a.config.pdftoppm_bin.is_none() {
+        eprintln!("skipped: no pdftoppm here");
+        return;
+    }
+    let id = store_text(&pair.a, "page.html", b"<h1>Hello {{ name }}</h1>", None).await;
+    assert_eq!(
+        set_alias(&pair.a, "page", &id, None).await.status(),
+        StatusCode::CREATED
+    );
+    let preview = |body: serde_json::Value| post_json("/v1/templates/page/preview", body, None);
+    let res = pair
+        .b
+        .clone()
+        .oneshot(preview(
+            serde_json::json!({ "data": { "name": "Ada" }, "width": 200 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/png");
+    assert_eq!(res.headers()["x-page-count"], "1");
+    let (w, h) = png_size(&bytes(res).await);
+    assert_eq!(w, 200);
+    assert!(h > 200, "a portrait page is taller than wide: {h}");
+
+    let res = pair
+        .b
+        .clone()
+        .oneshot(preview(
+            serde_json::json!({ "data": { "name": "Ada" }, "dpi": 36 }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let (w, _) = png_size(&bytes(res).await);
+    assert!((290..=310).contains(&w), "A4 or Letter at 36 DPI: {w}");
+
+    for (body, says) in [
+        (
+            serde_json::json!({ "data": { "name": "Ada" }, "page": 2 }),
+            "the document has 1",
+        ),
+        (
+            serde_json::json!({ "data": { "name": "Ada" }, "width": 5000 }),
+            "'width'",
+        ),
+        (
+            serde_json::json!({ "data": { "name": "Ada" }, "width": 300, "dpi": 72 }),
+            "not both",
+        ),
+        (
+            serde_json::json!({ "data": { "name": "Ada" }, "page": 0 }),
+            "'page'",
+        ),
+    ] {
+        let res = pair.b.clone().oneshot(preview(body.clone())).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{body}");
+        let text = String::from_utf8(bytes(res).await).unwrap();
+        assert!(text.contains(says), "{body}: {text}");
+    }
+    // Missing data is the template's error, as on a render.
+    let res = pair
+        .b
+        .clone()
+        .oneshot(preview(serde_json::json!({})))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A PDF template is drawn as it is, or filled first.
+    let pdf = rusticdoc_core::pdfops::fixtures::form();
+    let pdf_id = store_text(&pair.a, "form.pdf", &pdf, None).await;
+    let res = pair
+        .a
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/templates/{pdf_id}/preview"),
+            serde_json::json!({ "width": 100 }),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(png_size(&bytes(res).await).0, 100);
+}
+
+fn async_render(body: serde_json::Value, key: Option<&str>) -> Request<Body> {
+    let mut req = post_json("/v1/render", body, key);
+    req.headers_mut()
+        .insert("prefer", "respond-async".parse().unwrap());
+    req
+}
+
+/// Asks for a job until it ends.
+async fn job_until_ended(router: &Router, location: &str, key: Option<&str>) -> serde_json::Value {
+    for _ in 0..200 {
+        let res = router
+            .clone()
+            .oneshot(call("GET", location, key))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let job = json(res).await;
+        if matches!(job["status"].as_str(), Some("done" | "failed")) {
+            return job;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the job never ended");
+}
+
+#[tokio::test]
+async fn a_background_job_answers_202_and_any_replica_serves_its_result() {
+    let pair = two_replicas(|c| c.api_keys = vec!["alice-key".into(), "bob-key".into()]);
+    let alice = Some("alice-key");
+    store_text(&pair.a, "hello.txt", b"Hello {{ name }}", alice).await;
+    let id = store_text(&pair.a, "hello.txt", b"Hello {{ name }}", alice).await;
+    assert_eq!(
+        set_alias(&pair.a, "hello", &id, alice).await.status(),
+        StatusCode::CREATED
+    );
+
+    let res = pair
+        .a
+        .clone()
+        .oneshot(async_render(
+            serde_json::json!({ "templateId": "hello", "data": { "name": "Ada" } }),
+            alice,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    assert_eq!(res.headers()["preference-applied"], "respond-async");
+    let location = res.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let job = json(res).await;
+    let job_id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(location, format!("/v1/jobs/{job_id}"));
+    assert_eq!(job["status"], "queued");
+
+    let ended = job_until_ended(&pair.b, &location, alice).await;
+    assert_eq!(ended["status"], "done", "{ended}");
+    assert_eq!(ended["result"]["name"], "hello.txt");
+    assert_eq!(ended["result"]["size"], 9);
+    assert!(ended["expiresAt"].as_str().is_some());
+    let res = pair
+        .b
+        .clone()
+        .oneshot(call("GET", &format!("{location}/result"), alice))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("hello.txt")
+    );
+    assert_eq!(bytes(res).await, b"Hello Ada");
+
+    // Another caller cannot see it, whatever it knows.
+    let bob = Some("bob-key");
+    assert_eq!(
+        status(&pair.b, call("GET", &location, bob)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(&pair.b, call("GET", &format!("{location}/result"), bob)).await,
+        StatusCode::NOT_FOUND
+    );
+    for bad in ["not-an-id", "..", "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"] {
+        assert_eq!(
+            status(&pair.b, call("GET", &format!("/v1/jobs/{bad}"), alice)).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_failed_job_keeps_the_error_its_request_would_have_had() {
+    let pair = two_replicas(|_| {});
+    let id = store_template(&pair.a, None).await;
+    // Accepted, since nothing is wrong with the request; the template then
+    // fails without its data.
+    let res = pair
+        .a
+        .clone()
+        .oneshot(async_render(serde_json::json!({ "templateId": id }), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let location = res.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let ended = job_until_ended(&pair.a, &location, None).await;
+    assert_eq!(ended["status"], "failed");
+    assert_eq!(ended["error"]["error"], "template_error");
+    assert_eq!(ended["error"]["status"], 422);
+    let res = pair
+        .a
+        .clone()
+        .oneshot(call("GET", &format!("{location}/result"), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(json(res).await["error"], "job_failed");
+
+    // A request that is wrong is refused at once, not queued.
+    let res = pair
+        .a
+        .clone()
+        .oneshot(async_render(
+            serde_json::json!({ "templateId": id, "steps": "teleport" }),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_job_that_has_not_ended_says_so_and_a_lost_one_fails() {
+    let pair = two_replicas(|_| {});
+    let store = pair.state_a.store.clone().unwrap();
+    let scope = rusticdoc_core::store::scope_key("public");
+    let waiting = rusticdoc_core::store::new_job_id();
+    let record = rusticdoc_core::store::JobRecord::queued(
+        waiting.clone(),
+        "-".into(),
+        Duration::from_secs(60),
+    );
+    store.put_job(&scope, &record).await.unwrap();
+    let res = pair
+        .b
+        .clone()
+        .oneshot(call("GET", &format!("/v1/jobs/{waiting}"), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.headers().contains_key(header::RETRY_AFTER));
+    assert_eq!(json(res).await["status"], "queued");
+    let res = pair
+        .b
+        .clone()
+        .oneshot(call("GET", &format!("/v1/jobs/{waiting}/result"), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(json(res).await["error"], "job_not_done");
+
+    // A job past its time never ended: the replica running it went away.
+    let lost = rusticdoc_core::store::new_job_id();
+    let record = rusticdoc_core::store::JobRecord::queued(lost.clone(), "-".into(), Duration::ZERO);
+    store.put_job(&scope, &record).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let job = json(
+        pair.b
+            .clone()
+            .oneshot(call("GET", &format!("/v1/jobs/{lost}"), None))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(job["status"], "failed");
+    assert_eq!(job["error"]["error"], "job_lost");
+}
+
+#[tokio::test]
+async fn jobs_expire_and_are_removed_from_the_store() {
+    let pair = two_replicas(|c| c.job_ttl = Duration::from_millis(600));
+    let id = store_template(&pair.a, None).await;
+    let res = pair
+        .a
+        .clone()
+        .oneshot(async_render(
+            serde_json::json!({ "templateId": id, "data": { "name": "Ada" } }),
+            None,
+        ))
+        .await
+        .unwrap();
+    let location = res.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        job_until_ended(&pair.a, &location, None).await["status"],
+        "done"
+    );
+    let jobs_dir = pair.store.path().join("jobs");
+    assert!(std::fs::read_dir(&jobs_dir).unwrap().next().is_some());
+
+    let store = pair.state_b.store.clone().unwrap();
+    assert_eq!(
+        store
+            .expire_jobs(pair.state_b.config.job_ttl)
+            .await
+            .unwrap(),
+        0,
+        "not yet"
+    );
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    // Gone for the caller as soon as it expires, before anything is removed.
+    assert_eq!(
+        status(&pair.b, call("GET", &location, None)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(&pair.b, call("GET", &format!("{location}/result"), None)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        store
+            .expire_jobs(pair.state_b.config.job_ttl)
+            .await
+            .unwrap(),
+        1
+    );
+    let left: Vec<_> = walk(&jobs_dir);
+    assert!(left.is_empty(), "{left:?}");
+}
+
+/// Every file under `dir`.
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .flat_map(|e| {
+            let path = e.path();
+            if path.is_dir() {
+                walk(&path)
+            } else {
+                vec![path]
+            }
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn background_jobs_share_the_webhook_limit_and_exclude_webhooks() {
+    let pair = two_replicas(|c| c.max_async_jobs_per_caller = 0);
+    let id = store_template(&pair.a, None).await;
+    let body = serde_json::json!({ "templateId": id, "data": { "name": "Ada" } });
+    assert_eq!(
+        status(&pair.a, async_render(body.clone(), None)).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    let pair = two_replicas(|_| {});
+    let mut both = async_render(body, None);
+    both.headers_mut().insert(
+        "x-rusticdoc-webhook-url",
+        "https://hooks.invalid/x".parse().unwrap(),
+    );
+    let res = pair.a.clone().oneshot(both).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        String::from_utf8(bytes(res).await)
+            .unwrap()
+            .contains("not both")
+    );
+}
+
+#[tokio::test]
+async fn a_tenant_keeps_its_templates_aliases_and_jobs_when_its_key_is_replaced() {
+    let pair = two_replicas(|c| {
+        c.api_keys = vec!["solo".into()];
+        c.tenant_keys = vec![
+            ("acme".into(), "old-secret".into()),
+            ("acme".into(), "new-secret".into()),
+        ];
+    });
+    let (old, new) = (Some("old-secret"), Some("new-secret"));
+    let id = store_template(&pair.a, old).await;
+    assert_eq!(
+        set_alias(&pair.a, "hello", &id, old).await.status(),
+        StatusCode::CREATED
+    );
+    let res = pair
+        .a
+        .clone()
+        .oneshot(async_render(
+            serde_json::json!({ "templateId": "hello", "data": { "name": "Ada" } }),
+            old,
+        ))
+        .await
+        .unwrap();
+    let location = res.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    job_until_ended(&pair.a, &location, old).await;
+
+    // The new key is the same caller.
+    assert_eq!(render_text(&pair.b, "hello", new).await.1, "Hello Ada");
+    assert_eq!(render_text(&pair.b, &id, new).await.1, "Hello Ada");
+    assert_eq!(
+        status(&pair.b, call("GET", &format!("{location}/result"), new)).await,
+        StatusCode::OK
+    );
+    let listed = json(
+        pair.b
+            .clone()
+            .oneshot(call("GET", "/v1/templates", new))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(listed["templates"].as_array().unwrap().len(), 1);
+
+    // An unnamed key is still a caller of its own.
+    assert_eq!(
+        render_text(&pair.b, "hello", Some("solo")).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(&pair.b, call("GET", &location, Some("solo"))).await,
+        StatusCode::NOT_FOUND
+    );
+    // A key that was removed is no credential at all.
+    assert_eq!(
+        status(&pair.b, call("GET", "/v1/templates", Some("older-secret"))).await,
+        StatusCode::UNAUTHORIZED
+    );
+}

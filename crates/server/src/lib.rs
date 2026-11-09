@@ -12,10 +12,12 @@ pub mod jobs;
 pub mod metrics;
 pub mod oidc;
 pub mod openapi;
+pub mod preview;
 pub mod routes;
 pub mod stall;
 pub mod state;
 pub mod telemetry;
+pub mod variables;
 pub mod webhook;
 
 use std::sync::Arc;
@@ -230,6 +232,7 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
     let fonts_first = state.clone();
     if state.store.is_some() {
         fontsync::spawn(state.clone());
+        jobs::spawn_cleanup(state.clone());
     }
     if let Some(lo) = state.engines.libreoffice.clone() {
         tokio::spawn(async move {

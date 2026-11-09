@@ -1689,3 +1689,130 @@ async fn validation_reports_fonts_the_service_lacks() {
         "{warning}"
     );
 }
+
+#[tokio::test]
+async fn the_api_description_covers_json_bodies_aliases_variables_previews_and_jobs() {
+    let res = app(AppState::new(config()))
+        .oneshot(Request::get("/openapi.json").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let spec: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    for path in ["/v1/render", "/v1/render/batch", "/v1/templates/validate"] {
+        let content = &spec["paths"][path]["post"]["requestBody"]["content"];
+        assert!(content["multipart/form-data"].is_object(), "{path}");
+        assert!(content["application/json"].is_object(), "{path}");
+    }
+    assert!(spec["paths"]["/v1/render"]["post"]["responses"]["202"].is_object());
+    for (path, method) in [
+        ("/v1/aliases", "get"),
+        ("/v1/aliases/{name}", "put"),
+        ("/v1/aliases/{name}", "get"),
+        ("/v1/aliases/{name}", "delete"),
+        ("/v1/templates/{id}/variables", "get"),
+        ("/v1/templates/{id}/preview", "post"),
+        ("/v1/jobs/{id}", "get"),
+        ("/v1/jobs/{id}/result", "get"),
+    ] {
+        assert!(spec["paths"][path][method].is_object(), "{method} {path}");
+    }
+    for schema in [
+        "RenderJson",
+        "JobSchema",
+        "AliasHistorySchema",
+        "TemplateVariables",
+    ] {
+        assert!(
+            spec["components"]["schemas"][schema].is_object(),
+            "{schema}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn background_jobs_and_aliases_need_a_store_and_say_so() {
+    let router = app(AppState::new(config()));
+    let mut req = post_form(
+        "/v1/render",
+        &[("template", Some("t.txt"), "Hi"), ("data", None, "{}")],
+    );
+    req.headers_mut()
+        .insert("prefer", "respond-async".parse().unwrap());
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
+    let body = text(res).await;
+    assert!(body.contains("store_not_configured"), "{body}");
+
+    for (method, path) in [
+        ("GET", "/v1/jobs/01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"),
+        ("GET", "/v1/aliases"),
+        ("GET", "/v1/aliases/invoice"),
+        ("GET", "/v1/templates/invoice/variables"),
+    ] {
+        let res = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED, "{method} {path}");
+    }
+
+    // Without the preference, the same request renders as it always did.
+    let res = router
+        .oneshot(post_form(
+            "/v1/render",
+            &[("template", Some("t.txt"), "Hi"), ("data", None, "{}")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_json_body_without_a_store_can_still_use_a_template_hash() {
+    let router = app(AppState::new(config()));
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("hash.txt"), "Hi {{ name }}"),
+                ("data", None, r#"{"name":"A"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let hash = rusticdoc_core::template::template_hash(b"Hi {{ name }}");
+    let res = router
+        .clone()
+        .oneshot(
+            Request::post("/v1/render")
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .body(Body::from(
+                    serde_json::json!({ "templateHash": hash, "data": { "name": "B" } })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(text(res).await, "Hi B");
+    // A templateId needs a store.
+    let res = router
+        .oneshot(
+            Request::post("/v1/render")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"templateId":"invoice"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
+}

@@ -16,7 +16,7 @@ This page lists every environment variable the service reads. All of them are op
 
 An empty variable counts as unset.
 
-**A bad value does not always stop the service.** These settings stop it from starting, with a message that names the problem: `RUSTICDOC_STORE`, `RUSTICDOC_STORE_SCOPE`, `RUSTICDOC_ADMIN_KEYS`, `RUSTICDOC_API_KEYS`, `RUSTICDOC_BASIC_AUTH_USERNAME` and `RUSTICDOC_BASIC_AUTH_PASSWORD` when only one is set, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE`, `RUSTICDOC_STORE_SYNC_INTERVAL`, a `RUSTICDOC_PDF_ENGINES_*` list that names an unknown engine, an invalid regular expression in an allow or deny list, and OpenID Connect with only one of the issuer and audience set, or with an issuer or JWKS URL that is neither `https` nor `http` on a loopback host.
+**A bad value does not always stop the service.** These settings stop it from starting, with a message that names the problem: `RUSTICDOC_STORE`, `RUSTICDOC_STORE_SCOPE`, `RUSTICDOC_ADMIN_KEYS`, `RUSTICDOC_API_KEYS`, `RUSTICDOC_TENANT_KEYS`, `RUSTICDOC_BASIC_AUTH_USERNAME` and `RUSTICDOC_BASIC_AUTH_PASSWORD` when only one is set, `RUSTICDOC_BASIC_AUTH_ADMIN` without basic auth, `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM` without OpenID Connect or in the wrong form, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE`, `RUSTICDOC_STORE_SYNC_INTERVAL`, a `RUSTICDOC_PDF_ENGINES_*` list that names an unknown engine, an invalid regular expression in an allow or deny list, and OpenID Connect with only one of the issuer and audience set, or with an issuer or JWKS URL that is neither `https` nor `http` on a loopback host.
 
 Every other number, size or duration that the service cannot parse is ignored, and the default stays in place with no warning. `RUSTICDOC_RENDER_MEMORY=2g` leaves the limit at 1 GiB.
 
@@ -48,12 +48,16 @@ The image sets `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN`, `RUSTICDOC_PDF
 | Variable | Default | Purpose |
 |---|---|---|
 | `RUSTICDOC_API_KEYS` | None | Comma-separated keys for `X-Api-Key` or `Authorization: Bearer`. A value with no key in it, such as `,`, stops the service from starting |
+| `RUSTICDOC_TENANT_KEYS` | None | Comma-separated `tenant:key` entries. Every key of a tenant is the same caller, so replacing a key keeps its templates, aliases, jobs and webhook signing key. A tenant is 1 to 64 lowercase letters, digits and hyphens |
 | `RUSTICDOC_BASIC_AUTH_USERNAME` | None | Basic auth user. Set it together with `RUSTICDOC_BASIC_AUTH_PASSWORD` |
 | `RUSTICDOC_BASIC_AUTH_PASSWORD` | None | Basic auth password. Set it together with `RUSTICDOC_BASIC_AUTH_USERNAME` |
-| `RUSTICDOC_ADMIN_KEYS` | None | Comma-separated keys that may upload and delete fonts. With credentials configured and none of these, nobody may |
+| `RUSTICDOC_BASIC_AUTH_ADMIN` | `false` | The basic-auth user is an admin and may upload and delete fonts |
+| `RUSTICDOC_ADMIN_KEYS` | None | Comma-separated keys that may upload and delete fonts. With credentials configured and no admin of any kind, nobody may |
 | `RUSTICDOC_OIDC_ISSUER` | None | Accept bearer tokens from this OpenID Connect provider on the protected routes. Must be `https`, or `http` on a loopback host |
 | `RUSTICDOC_OIDC_AUDIENCE` | None | The audience tokens must carry. Required with the issuer |
 | `RUSTICDOC_OIDC_JWKS_URL` | Discovered from the issuer | Where the signing keys live, under the same rule as the issuer |
+| `RUSTICDOC_OIDC_ADMIN_SUBJECTS` | None | Comma-separated token subjects that are admins |
+| `RUSTICDOC_OIDC_ADMIN_CLAIM` | None | `claim=value`: tokens whose claim equals the value, or is a list holding it, are admins. The claim may be a dotted path, such as `realm_access.roles` |
 
 OpenID Connect is on when `RUSTICDOC_OIDC_ISSUER` is set. Set the issuer and the audience together: one without the other stops the service from starting. See [authentication](/docs/guides/authentication/).
 
@@ -96,6 +100,7 @@ OpenID Connect is on when `RUSTICDOC_OIDC_ISSUER` is set. Set the issuer and the
 | `RUSTICDOC_PYTHON` | `python3` | The interpreter that runs the LibreOffice bridge |
 | `RUSTICDOC_QPDF_BIN` | The first of `/usr/bin/qpdf`, `/opt/homebrew/bin/qpdf`, `/usr/local/bin/qpdf` | Path to qpdf. `none` disables it |
 | `RUSTICDOC_PDFCPU_BIN` | The first of `/usr/bin/pdfcpu`, `/opt/homebrew/bin/pdfcpu`, `/usr/local/bin/pdfcpu` | Path to pdfcpu. `none` disables it |
+| `RUSTICDOC_PDFTOPPM_BIN` | The first of `/usr/bin/pdftoppm`, `/opt/homebrew/bin/pdftoppm`, `/usr/local/bin/pdftoppm` | Path to poppler's pdftoppm, which draws template previews. `none` disables previews |
 | `RUSTICDOC_FONTS_DIR` | `/fonts` | Mounted fonts, picked up by LibreOffice |
 
 The service does not search your `PATH` for engines.
@@ -127,13 +132,14 @@ Each of these takes a comma-separated list from `lopdf`, `qpdf`, `pdfcpu` and `q
 | Variable | Default | Purpose |
 |---|---|---|
 | `RUSTICDOC_STORE` | None | Where stored templates and uploaded fonts live: `s3://bucket/prefix` or `file:///path`. With none, those routes answer `501`. See [many containers](/docs/operate/many-containers/) |
-| `RUSTICDOC_STORE_SCOPE` | `caller` | `caller`: each credential sees only its own templates, so replacing a key leaves its templates behind. `shared`: every credential reads and deletes the same ones |
+| `RUSTICDOC_STORE_SCOPE` | `caller` | `caller`: each credential sees only its own templates and aliases, so replacing a key leaves them behind unless it is a tenant key. `shared`: every credential reads and deletes the same ones. Background jobs are always each caller's own |
 | `RUSTICDOC_MAX_TEMPLATE_BYTES` | `50MB` | Largest template that can be stored |
-| `RUSTICDOC_MAX_TEMPLATES` | `10000` | Most templates one scope may hold. Replicas storing at the same moment can pass this by what is in flight |
+| `RUSTICDOC_MAX_TEMPLATES` | `10000` | Most templates one scope may hold, and apart from them, most aliases. Replicas storing at the same moment can pass this by what is in flight |
 | `RUSTICDOC_MAX_TEMPLATE_STORAGE` | `5GB` | Most bytes of templates one scope may hold, with the same caveat |
 | `RUSTICDOC_MAX_STORED_FONTS` | `2000` | Most fonts the store may hold |
 | `RUSTICDOC_MAX_FONT_STORAGE` | `1GB` | Most bytes of fonts the store may hold. Every replica copies them all to disk |
 | `RUSTICDOC_FONT_CACHE_DIR` | `rusticdoc-stored-fonts` in the temp directory | This replica's copy of the stored fonts. It is local, and rebuilt when the replica starts |
+| `RUSTICDOC_JOB_TTL` | `1h` | How long a background job and its result are kept after it ends. Every replica removes expired jobs from the store |
 | `RUSTICDOC_STORE_SYNC_INTERVAL` | `30s` | How often a replica looks for fonts added or deleted elsewhere |
 
 ## S3 credentials and endpoint
@@ -178,8 +184,8 @@ The service sets the bucket from `RUSTICDOC_STORE`, so `AWS_BUCKET` has no effec
 | `RUSTICDOC_WEBHOOK_DENY_LIST` | None | Regular expressions no webhook URL may match |
 | `RUSTICDOC_WEBHOOK_ERROR_ALLOW_LIST` | `RUSTICDOC_WEBHOOK_ALLOW_LIST` | The allow list for error URLs |
 | `RUSTICDOC_WEBHOOK_ERROR_DENY_LIST` | None | More refusals for error URLs |
-| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook jobs running at once, across the service. Past it, a request gets `429` before its body is read |
-| `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | Webhook jobs running at once for one caller |
+| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook and background jobs running at once, across the service. Past it, a request gets `429` before its body is read |
+| `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | Webhook and background jobs running at once for one caller |
 | `RUSTICDOC_DOWNLOAD_FROM_DISABLED` | `false` | Refuse the `downloadFrom` form field entirely |
 | `RUSTICDOC_DOWNLOAD_FROM_MAX_ENTRIES` | `10` | Most URLs one request may fetch through `downloadFrom` |
 | `RUSTICDOC_DOWNLOAD_FROM_ALLOW_PRIVATE` | `false` | Allow `downloadFrom` to fetch from private and loopback addresses |

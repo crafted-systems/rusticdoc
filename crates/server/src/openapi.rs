@@ -5,13 +5,13 @@ use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder
 use utoipa::{Modify, OpenApi};
 
 use crate::error::ErrorBody;
-use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render, templates};
+use crate::routes::{aliases, convert, fonts, forms, health, jobs, pdf, pdfops, render, templates};
 
 #[derive(OpenApi)]
 #[openapi(
     info(
         title = "rusticdoc",
-        description = "Fills Office and PDF templates from JSON, converts documents with LibreOffice, and runs PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously.",
+        description = "Fills Office and PDF templates from JSON, converts documents with LibreOffice, and runs PDF operations. One multipart request, or a JSON one for a stored template, does the whole job; webhooks or background jobs deliver results asynchronously.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
@@ -40,6 +40,14 @@ use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render, template
         templates::show,
         templates::content,
         templates::remove,
+        templates::variables,
+        templates::preview,
+        aliases::set,
+        aliases::show,
+        aliases::list,
+        aliases::remove,
+        jobs::show,
+        jobs::result,
         fonts::list,
         fonts::upload,
         fonts::remove,
@@ -57,6 +65,18 @@ use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render, template
         templates::TemplateUploadForm,
         templates::TemplateSchema,
         templates::TemplateList,
+        templates::TemplateVariables,
+        templates::PreviewForm,
+        crate::variables::Variable,
+        crate::variables::Kind,
+        aliases::AliasSet,
+        aliases::AliasSchema,
+        aliases::AliasVersionSchema,
+        aliases::AliasHistorySchema,
+        aliases::AliasList,
+        jobs::JobSchema,
+        jobs::JobResultSchema,
+        render::RenderJson,
         fonts::FontUploadForm,
         fonts::FontsStored,
         fonts::StoredFontSchema,
@@ -90,7 +110,8 @@ use crate::routes::{convert, fonts, forms, health, pdf, pdfops, render, template
         (name = "convert", description = "Documents in, converted documents out"),
         (name = "pdf", description = "PDF operations"),
         (name = "pdf-forms", description = "PDF templates: form fields, tags in annotations, overlays"),
-        (name = "templates", description = "Store a template and render it by id from any replica"),
+        (name = "templates", description = "Store a template, name it with an alias, and render it by id or alias from any replica"),
+        (name = "jobs", description = "Requests run in the background with `Prefer: respond-async`, and their results"),
         (name = "fonts", description = "List, upload and delete fonts, and reload a mounted directory"),
         (name = "service", description = "Health, version, metrics"),
     ),
