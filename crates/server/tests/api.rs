@@ -1879,3 +1879,28 @@ async fn undefined_values_can_print_as_nothing() {
     assert_eq!(lenient.status(), StatusCode::OK);
     assert_eq!(text(lenient).await, "Dear .");
 }
+
+#[tokio::test]
+async fn keep_names_only_what_rendering_takes_out() {
+    let template = ("template", Some("letter.txt"), "Hello");
+    let res = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/render",
+            &[template, ("keep", None, "macros, bogus")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(text(res).await.contains("'bogus'"));
+    let res = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                template,
+                ("keep", None, "macros,objects,externalLinks,privateLinks"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}

@@ -39,6 +39,12 @@ pub struct RenderForm {
     /// failing the render. Default `false`, so a misspelt name is an error.
     #[schema(rename = "undefinedAsEmpty")]
     pub undefined_as_empty: Option<bool>,
+    /// What an Office template's result may keep of what rendering takes
+    /// out, comma-separated: `macros`, `objects` (OLE objects and ActiveX
+    /// controls), `externalLinks`, `privateLinks` (hyperlinks to private
+    /// addresses), or `all`. Default: none of them.
+    #[schema(example = "privateLinks")]
+    pub keep: Option<String>,
     /// Comma-separated steps in order: `convert`, `pdfa`, `metadata`,
     /// `encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the
     /// service's key; it must be last and cannot be combined with `encrypt`.
@@ -103,6 +109,12 @@ pub struct RenderJson {
     /// `true` prints a value missing from the data as nothing.
     #[schema(rename = "undefinedAsEmpty")]
     pub undefined_as_empty: Option<bool>,
+    /// What an Office template's result may keep of what rendering takes
+    /// out, comma-separated: `macros`, `objects` (OLE objects and ActiveX
+    /// controls), `externalLinks`, `privateLinks` (hyperlinks to private
+    /// addresses), or `all`. Default: none of them.
+    #[schema(example = "privateLinks")]
+    pub keep: Option<String>,
     /// The steps in order, as a list or as comma-separated text.
     #[schema(value_type = Option<Vec<String>>, example = json!(["convert", "pdfa"]))]
     pub steps: Option<serde_json::Value>,
@@ -218,7 +230,7 @@ pub async fn render(
     let mut req = RenderRequest::new(template);
     req.data = data;
     req.ctx = ctx;
-    req.render_options = render_options(&form);
+    req.render_options = render_options(&form)?;
     let mut options = options::convert_options(&form)?;
     // Here PDF/A and PDF/UA happen where the step list says, not on every
     // conversion.
@@ -265,10 +277,28 @@ pub async fn render(
 }
 
 /// What the form asks of the template stage.
-fn render_options(form: &Form) -> rusticdoc_template::RenderOptions {
-    rusticdoc_template::RenderOptions {
-        undefined_as_empty: form.bool("undefinedAsEmpty"),
+fn render_options(form: &Form) -> ApiResult<rusticdoc_template::RenderOptions> {
+    let mut keep = rusticdoc_template::Keep::default();
+    if let Some(list) = form.field("keep") {
+        for item in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            match item {
+                "macros" => keep.macros = true,
+                "objects" => keep.objects = true,
+                "externalLinks" => keep.external_links = true,
+                "privateLinks" => keep.private_links = true,
+                "all" => keep = rusticdoc_template::Keep::ALL,
+                other => {
+                    return Err(ApiError::bad_request(format!(
+                        "'keep' has '{other}'; use macros, objects, externalLinks, privateLinks or all"
+                    )));
+                }
+            }
+        }
     }
+    Ok(rusticdoc_template::RenderOptions {
+        undefined_as_empty: form.bool("undefinedAsEmpty"),
+        keep,
+    })
 }
 
 /// The form's `steps` list. Steps that carry files or repeat
@@ -436,7 +466,7 @@ pub async fn batch(
     let count = elements.len();
     let limit = state.config.batch_timeout;
     let max_render = state.config.max_render_bytes;
-    let render_choices = render_options(&form);
+    let render_choices = render_options(&form)?;
     let st = state.clone();
     let job = async move {
         let renderer = st.pipeline.renderer().clone();

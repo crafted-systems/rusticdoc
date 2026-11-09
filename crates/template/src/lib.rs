@@ -22,11 +22,22 @@ mod package;
 mod program;
 mod properties;
 mod rich;
+mod sanitize;
 mod sheet;
 mod workbook;
 mod xml;
 
 use program::{Mode, PartTree, Source, Tag, TagCtx};
+pub use sanitize::{is_private_url, Keep, Removed};
+
+/// Takes macros, objects, external links and private hyperlinks out of an
+/// Office package, as every render does, keeping what `keep` names. For
+/// documents that did not come from [`Compiled::render`].
+pub fn sanitize(format: Format, bytes: &[u8], keep: Keep) -> Result<(Vec<u8>, Removed)> {
+    let mut entries = package::read(bytes)?;
+    let removed = sanitize::sanitize(format, &mut entries, keep)?;
+    Ok((package::write(&entries)?, removed))
+}
 
 /// Formats the engine understands. Each is a ZIP of XML parts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -156,6 +167,11 @@ pub struct RenderOptions {
     /// print nothing for it too, and a sheet cell holding only it is left
     /// empty. Off by default: a misspelt name is an error.
     pub undefined_as_empty: bool,
+    /// What the result may keep of what rendering otherwise takes out: macros,
+    /// OLE objects, external links and private hyperlinks. Keeps nothing by
+    /// default.
+    #[serde(default)]
+    pub keep: Keep,
 }
 
 /// A template parsed once, renderable many times.
@@ -224,25 +240,28 @@ impl Compiled {
 
     /// Fills the template. `data` is the root the expressions see; the
     /// caller puts request context under `ctx` before calling.
+    /// Macros, OLE objects and ActiveX controls, external links and private
+    /// hyperlinks are taken out of the result; see [`Compiled::render_with`].
     pub fn render(&self, data: &serde_json::Value) -> Result<Vec<u8>> {
-        let (rendered, table) = self.render_text(&self.env, &self.source, data)?;
-        self.assemble(&rendered, table.as_deref())
+        self.render_with(data, &RenderOptions::default())
     }
 
-    /// [`Compiled::render`] with per-render choices.
+    /// [`Compiled::render`] with per-render choices: undefined values as
+    /// nothing, and what to keep of what rendering otherwise takes out.
     pub fn render_with(
         &self,
         data: &serde_json::Value,
         options: &RenderOptions,
     ) -> Result<Vec<u8>> {
-        if !options.undefined_as_empty {
-            return self.render(data);
-        }
-        // Cloning shares the parsed template; only the settings differ.
-        let mut env = self.env.clone();
-        filters::undefined_as_empty(&mut env, &self.settings);
-        let (rendered, table) = self.render_text(&env, &self.source, data)?;
-        self.assemble(&rendered, table.as_deref())
+        let (rendered, table) = if options.undefined_as_empty {
+            // Cloning shares the parsed template; only the settings differ.
+            let mut env = self.env.clone();
+            filters::undefined_as_empty(&mut env, &self.settings);
+            self.render_text(&env, &self.source, data)?
+        } else {
+            self.render_text(&self.env, &self.source, data)?
+        };
+        self.assemble(&rendered, table.as_deref(), options.keep)
     }
 
     fn render_text(
@@ -284,7 +303,7 @@ impl Compiled {
     }
 
     /// Puts the rendered parts back into the container.
-    fn assemble(&self, rendered: &str, table: Option<&rich::Table>) -> Result<Vec<u8>> {
+    fn assemble(&self, rendered: &str, table: Option<&rich::Table>, keep: Keep) -> Result<Vec<u8>> {
         let outputs = program::split_output(rendered);
         if let Some((name, _)) = outputs
             .iter()
@@ -304,7 +323,11 @@ impl Compiled {
         };
         let mut names: Vec<String> = outputs.iter().map(|(n, _)| n.clone()).collect();
         match self.format {
-            Format::Pptx => package::apply_slides(&mut entries, &outputs)?,
+            Format::Pptx => {
+                package::apply_slides(&mut entries, &outputs)?;
+                // Before rich values, which are placed where their shape now sits.
+                rich::shift::apply(&mut entries)?;
+            }
             Format::Xlsx => {
                 let mut formulas = false;
                 let mut sheets = Vec::with_capacity(outputs.len());
@@ -354,6 +377,8 @@ impl Compiled {
             let names: Vec<&str> = names.iter().map(String::as_str).collect();
             rich::apply(self.format, &mut entries, table, rendered, &names)?;
         }
+        // Last, so that links data put in are checked too.
+        sanitize::sanitize(self.format, &mut entries, keep)?;
         package::write(&entries)
     }
 }
@@ -598,7 +623,7 @@ fn validate_within(
         // them is part of the test.
         Ok((rendered, table)) => {
             if table.is_some() || matches!(format, Format::Xlsx | Format::Ods) {
-                if let Err(e) = compiled.assemble(&rendered, table.as_deref()) {
+                if let Err(e) = compiled.assemble(&rendered, table.as_deref(), Keep::default()) {
                     diags.push(to_diag(e));
                 }
             }
@@ -813,6 +838,7 @@ mod tests {
         assert!(err.message.contains("package limit"), "{err}");
         let lenient = RenderOptions {
             undefined_as_empty: true,
+            ..Default::default()
         };
         let err = compiled
             .render_with(&serde_json::json!({}), &lenient)

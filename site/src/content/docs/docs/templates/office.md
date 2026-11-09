@@ -36,6 +36,7 @@ Apart from the sheet loop, there are no special loop tags. The positions of a bl
 | In different paragraphs | Those paragraphs, and everything between |
 | On different slides (PPTX) or pages (ODP) | That run of slides |
 | In different shapes of one slide (PPTX) | That slide |
+| On one slide, with `\| shift(…)` (PPTX) | Those shapes, each copy moved by a step |
 | In rows of a sheet (XLSX, ODS) | Those rows |
 | `{% sheet for s in sites %}` in any cell of a sheet (XLSX, ODS) | That sheet, once per item: see [repeating a sheet](#repeating-a-sheet) |
 
@@ -247,11 +248,52 @@ Put the opening tag on one slide and the closing tag on the same or a later slid
 | Both in one shape, in the same paragraph | The text between them |
 | Both in one shape, in different paragraphs | Those paragraphs |
 | In different shapes on one slide, such as the title and the body | That slide, once per item |
+| On one slide, with `\| shift(…)` on the list | Those shapes, once per item, each moved by the step. See [below](#shapes-that-move-down-or-across-a-slide) |
 | In rows of a table | Those rows |
 
 Each copy of a slide gets its own parts, relationships and ids, and the original's speaker notes are not shared with the copies. An empty list removes the slides, and slides with no tags stay where they are.
 
 For a condition across slides, the slide holding `{% else %}` starts the second branch, even if text sits before the tag on that slide. A block that repeats one slide cannot hold an `{% else %}` or `{% elif %}`: `cannot divide a slide`.
+
+### Shapes that move down or across a slide
+
+To lay a list out on one slide, such as a card per person, add `shift` to the loop's list with the distance from one copy to the next:
+
+```text
+{% for person in team | shift(y="3cm") %}{{ person.name }}
+{{ person.role }}{% endfor %}
+```
+
+The loop then repeats the shapes that hold its tags, not the slide, and moves each copy by the step: the first copy stays where the shapes are, the second sits 3 cm lower, the third 6 cm lower. The tags can sit in one text box, which repeats that box, or in several shapes, such as a filled rectangle holding `{% for … %}{{ person.name }}` and a text box beside it holding `{{ person.role }}{% endfor %}`, which repeats both as a pair. A group counts as one shape and moves as a whole.
+
+| Step | Moves each copy |
+|---|---|
+| `shift(y="3cm")` | Down |
+| `shift(x="6cm")` | Across, to the right |
+| `shift(x="6cm", y="1cm")` | Both ways at once |
+| `shift(y="-2cm")` | Up |
+
+A step is a quoted number and a unit: `cm`, `mm`, `in`, `pt` or `emu` (914,400 to the inch). PowerPoint's curly quotes work as well as straight ones. The step is read when the template is compiled, so it must be written in the tag and cannot come from data.
+
+Two shifted loops nest into a grid. Here each row moves down and each cell across, and every row starts again at the left:
+
+```text
+{% for row in rows | shift(y="2cm") %}{% for cell in row | shift(x="4cm") %}{{ cell }}{% endfor %}{% endfor %}
+```
+
+Each copy gets a shape id of its own, and pictures and charts printed in a copy go at that copy's position. A placeholder that PowerPoint has not moved takes the position its layout gives it before it moves. Copies that run off the slide are not stopped: a long list needs a smaller step, or a slide loop.
+
+Refused, with the tag's slide named:
+
+| Mistake | Error |
+|---|---|
+| No unit | `y="4" has no unit` |
+| A step from data, such as `shift(y=gap)` | `the step is read when the template is compiled, so it cannot come from data` |
+| An unknown argument | `shift takes x= and y=, not down=` |
+| A step longer than the largest slide | `is longer than the largest slide (56 in, 142.24 cm)` |
+| `{% else %}` in the loop | `cannot sit in a loop that moves shapes with shift` |
+| The tags on two slides | `shift moves shapes on one slide` |
+| `shift` in another format | `it does not work in DOCX templates` |
 
 ```bash test
 mkdir t && cd t && unzip -q ../deck.pptx
@@ -272,7 +314,7 @@ Page breaks are refused, `html` becomes plain text, and a newline in a value sta
 
 Tags are read in `content.xml`, which holds the pages and their speaker notes. Masters are not read. Tags on different pages repeat that run of pages, and copies keep the page name the original had.
 
-Charts and page breaks are refused, `html` becomes plain text, and a newline in a value stays a newline character.
+Page breaks and `shift` are refused, `html` becomes plain text, and a newline in a value stays a newline character. A chart is an embedded chart object at the position of the shape that held the tag.
 
 ```bash test
 curl -F files=@deck.pptx -F to=odp http://localhost:9027/v1/convert -o deck.odp
@@ -288,7 +330,33 @@ unzip -p out.odp content.xml | grep -o 'Q3 results'
 
 - Tags in attributes, field codes or document properties, apart from sheet names. They stay as written. Custom document properties can hold [settings](/docs/templates/translations/#settings-in-document-properties).
 - `{% raw %}`. To print braces, see [printing literal braces](/docs/templates/syntax/#printing-literal-braces).
-- Macros and OLE objects are not stripped. See [known limits](/docs/project/known-limits/).
+
+## What rendering takes out
+
+A template comes from whoever sends it, and the document is read by someone else, so a render takes out of every output what could run or reach out when the document is opened:
+
+| What | Formats | What is left |
+|---|---|---|
+| Macro projects: `vbaProject.bin` with its data and signatures, and Basic or script libraries (`Basic/`, `Scripts/`, `Dialogs/`) | All | A macro-enabled DOCX, XLSX or PPTX gets the plain content type, so the output is an ordinary file. In ODF, the event bindings and links that call a macro go too, and a macro link keeps its text |
+| OLE objects, ActiveX controls, applets and plugins | All | The object's preview picture, where it has one. Charts and formulas are content and stay, once their own content shows they are what the manifest says |
+| External links: linked pictures, linked data and workbooks, attached templates, linked sections, DDE links, Word `INCLUDEPICTURE`, `INCLUDETEXT`, `LINK`, `DDE` and `DDEAUTO` fields, and formulas using `WEBSERVICE`, `RTD`, `CALL`, `REGISTER`, DDE or another file | All | A linked picture keeps its frame in DOCX and PPTX and goes in ODF. A field keeps its last result as text. A formula goes and its cell keeps the last value where the file holds one; rendering an XLSX drops cached formula values, so there the cell is left empty |
+| Hyperlinks to private or local networks: `localhost`, `*.local`, `*.internal`, `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.0.0/24`, `192.168/16`, `198.18/15`, multicast and reserved addresses, `::1`, `::`, `fc00::/7`, `fe80::/10`, `fec0::/10`, IPv6 forms of those IPv4 ranges, `file:`, drive and UNC paths. Hyperlinks written as fields, and `HYPERLINK` formulas whose target is not a plain text value | All | The link's text. Addresses are read as a browser reads them, so `http://2130706433/`, `http:\\10.0.0.1` and an address with a tab in it count too, and one a browser cannot read counts as private |
+
+This covers what the template held and what data put in, such as a `link` filter given an intranet address. Every relationship, content type and manifest entry that pointed at something removed goes with it, so the file opens without a repair. Public hyperlinks, embedded pictures and the template's own parts stay as they were.
+
+What the sanitiser cannot read with certainty is refused with an error naming the part, rather than passed through: a part that is neither UTF-8 nor UTF-16 or declares an encoding its bytes are not, one that gives the standard namespaces prefixes Office and LibreOffice never write, and two parts whose names differ only in case. An Excel 4.0 macro or dialog sheet is refused unless the request keeps macros, and a data connection or query table unless it keeps external links, since neither can be taken out without breaking the workbook.
+
+### Keep what a template needs
+
+When you trust a template and it needs one of these, send `keep` on `/v1/render` or `/v1/render/batch` with a comma-separated list: `macros`, `objects`, `externalLinks`, `privateLinks`, or `all`. Anything else is a `400`.
+
+```bash test
+curl -F template=@invoice.docx -F "data=<invoice.json" -F keep=privateLinks \
+  http://localhost:9027/v1/render -o out.docx
+unzip -tq out.docx
+```
+
+`keep` changes only what the template stage takes out. LibreOffice still runs no macros and fetches nothing when it converts.
 
 ## Check a template
 

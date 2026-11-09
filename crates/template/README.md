@@ -66,7 +66,7 @@ What each becomes:
 | `link` | `w:hyperlink` | `a:hlinkClick` on the run | `hyperlinks` entry on the cell | `text:a` | `text:a` | `text:a` |
 | `color` | `w:color`, `w:shd` on the run | `a:solidFill`, `a:highlight` on the run | new font, fill and format for the whole cell | `text:span` with a style | new style for the whole cell | `text:span` with a style |
 | `html` | native paragraphs and tables | plain text with line breaks | plain text with line breaks | native paragraphs, lists and tables | plain text with line breaks | plain text with line breaks |
-| `chart` | native chart | native chart at the tag's shape | native chart at the tag's cell, data on a hidden sheet | error | error | error |
+| `chart` | native chart | native chart at the tag's shape | native chart at the tag's cell, data on a hidden sheet | inline `draw:frame` with an embedded chart object (`Object N/`, data in its local table) | the same on the cell | the same on the page at the tag's shape |
 | `pagebreak` | page break | error | error | page break | error | error |
 
 **`image`** takes a data URI, raw base64, or an object
@@ -188,6 +188,39 @@ comments and sheet-scoped defined names; calcChain is dropped and
 Slides: copies get their own parts, rels, ids and content types; the notes
 of the original are not shared with the copies.
 
+PPTX shapes: `{% for c in cards | shift(y="3cm") %}` … `{% endfor %}` on one
+slide repeats the top-level shapes holding the two tags (a group is one
+shape) instead of the slide, and moves copy *n* by *n* steps. `x=` and `y=`
+take a quoted length in `cm`, `mm`, `in`, `pt` or `emu`, read at compile
+time (`rich::shift::of_for`). The compiler hoists the tags onto the shapes
+with a comment marking each copy; `rich::shift::apply` moves the shapes
+between the comments after rendering, before rich values are placed, gives
+copies fresh shape ids, and drops the comments. Nested shifted loops make a
+grid. The `shift` filter itself only checks its arguments and passes the
+list on.
+
+## Sanitising
+
+`Compiled::render` ends with `sanitize::sanitize`, which takes out of the
+package what `Keep` does not keep (by default, everything listed here):
+VBA projects and their parts, with the main content type made plain; ODF
+`Basic/`, `Scripts/` and `Dialogs/` with event listeners and macro links;
+OLE objects, ActiveX controls, applets and plugins, leaving their preview
+picture (charts and formulas stay); external relationships other than
+hyperlinks, XLSX `externalLink` parts and the formulas that used them, and
+ODF linked images, sections and DDE links; and hyperlinks to private or
+local addresses, which keep their text; Word fields that link out or pull
+content in (simple and complex), and formulas that reach outside. Dangling
+relationships, overrides and manifest entries go with what they named.
+`Compiled::render_with` takes a `Keep`; the free function `sanitize` cleans
+any package. It fails closed: parts it must read are decoded as UTF-8 or
+UTF-16 and refused otherwise, the namespaces it matches must carry their
+standard prefixes, OPC names compare without case and a package with two
+names differing only in case is refused, an embedded ODF object is kept as
+a chart or formula only when its own content is one (and is then walked
+too), and addresses are parsed by the WHATWG rules (`url` crate) with
+unparseable ones counted as private.
+
 ## Validation
 
 `validate` reports, without stopping: unparseable tags, unbalanced or
@@ -208,7 +241,9 @@ sample data holds, and bad values in the sample data like any other error.
 - Tags in attributes, field codes or document properties; `{% raw %}`.
 - Tags inside DOCX text boxes nested in drawings are read, but a block
   cannot span a text box and the body.
-- Charts in ODT, ODS and ODP. Editing a chart's data in Word or PowerPoint.
+- Editing a chart's data in Word or PowerPoint.
+- Sanitising Excel 4.0 macro sheets, data connections and query tables:
+  a package holding one is refused unless the request keeps that kind.
 - A picture in a PPTX placeholder that inherits its position from the layout
   lands at the slide's origin: the offset is read from the shape itself.
 - `html` inside a DOCX hyperlink or content control, and native structure for

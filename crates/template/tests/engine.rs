@@ -880,6 +880,7 @@ fn undefined_values_can_print_as_empty_per_render() {
 
     let lenient = RenderOptions {
         undefined_as_empty: true,
+        ..Default::default()
     };
     let out = compiled.render_with(&data, &lenient).unwrap();
     assert_eq!(docx_text(&out), ["Hello !", "||||", "end"]);

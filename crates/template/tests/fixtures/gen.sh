@@ -15,9 +15,10 @@ soffice --convert-to docx --outdir /w /w/invoice.fodt
 soffice --convert-to xlsx --outdir /w /w/invoice.fods
 for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
   soffice --convert-to "${pair%:*}" --outdir /w "/w/rich.${pair#*:}"
+  # Basic macros, links and a linked workbook, for the sanitiser.
+  soffice --convert-to "${pair%:*}" --outdir /w "/w/sanitize.${pair#*:}"
 done
 soffice --convert-to xlsx --outdir /w /w/sheets.fods
 soffice --convert-to ods --outdir /w /w/sheets.fods
 rm -rf profile
-ls -la invoice.docx invoice.xlsx rich.docx rich.odt rich.xlsx rich.ods rich.pptx rich.odp \
-  sheets.xlsx sheets.ods
+ls -la invoice.docx invoice.xlsx rich.* sanitize.* sheets.xlsx sheets.ods
