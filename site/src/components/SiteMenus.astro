@@ -1,8 +1,8 @@
 ---
 // The two menus every page's top bar carries, on the marketing pages and in the
 // docs alike: what rusticdoc is, and how to use it. Each is a disclosure that
-// works without JavaScript; a small script closes the others, and closes on
-// Escape or a click elsewhere.
+// works without JavaScript. With a mouse it also opens on hover; a small script
+// does that, closes the others, and closes on Escape or a click elsewhere.
 interface Props {
   /** The page's path, to mark the menu it belongs to. */
   path: string;
@@ -13,26 +13,47 @@ const menus = [
   {
     label: 'Product',
     current: path === '/',
-    items: [
-      { href: '/#how-it-works', title: 'How it works', text: 'A template and JSON in, a finished document out' },
-      { href: '/#formats', title: 'Formats', text: 'The templates it reads and the files it writes' },
-      { href: '/#made-for', title: 'What it is for', text: 'Invoices, contracts, statements and forms' },
-      { href: '/#building-blocks', title: 'Building blocks', text: 'Templates, conversion and PDF steps in one request' },
-      { href: '/#run-it', title: 'Run it your way', text: 'One container, on your own servers' },
-      { href: '/#questions', title: 'Questions', text: 'What people ask before they start' },
+    columns: [
+      {
+        title: 'What it does',
+        items: [
+          { href: '/#how-it-works', title: 'How it works', text: 'A template and JSON in, a finished document out' },
+          { href: '/#formats', title: 'Formats', text: 'The templates it reads and the files it writes' },
+          { href: '/#made-for', title: 'What it is for', text: 'Invoices, contracts, statements and forms' },
+        ],
+      },
+      {
+        title: 'How you use it',
+        items: [
+          { href: '/#building-blocks', title: 'Building blocks', text: 'Templates, conversion and PDF steps in one request' },
+          { href: '/#run-it', title: 'Run it your way', text: 'One container, on your own servers' },
+          { href: '/#questions', title: 'Questions', text: 'What people ask before they start' },
+        ],
+      },
     ],
   },
   {
     label: 'Docs',
     current: path.startsWith('/docs/') || path === '/security/' || path === '/status/',
-    items: [
-      { href: '/docs/start/quickstart/', title: 'Quickstart', text: 'Fill your first template in five minutes' },
-      { href: '/docs/templates/syntax/', title: 'Write templates', text: 'Tags, loops, conditions and filters' },
-      { href: '/docs/reference/api/', title: 'HTTP API', text: 'Every route, field and answer' },
-      { href: '/docs/operate/docker/', title: 'Run it', text: 'Docker, Kubernetes, sizing and logs' },
-      { href: '/security/', title: 'Security', text: 'How it handles documents from strangers' },
-      { href: '/status/', title: 'Status', text: 'What has been proven, and what has not' },
-      { href: '/docs/project/changelog/', title: 'Changelog', text: 'What each release contains' },
+    columns: [
+      {
+        title: 'Learn',
+        items: [
+          { href: '/docs/start/quickstart/', title: 'Quickstart', text: 'Fill your first template in five minutes' },
+          { href: '/docs/templates/syntax/', title: 'Write templates', text: 'Tags, loops, conditions and filters' },
+          { href: '/docs/reference/api/', title: 'HTTP API', text: 'Every route, field and answer' },
+          { href: '/docs/operate/docker/', title: 'Run it', text: 'Docker, Kubernetes, sizing and logs' },
+        ],
+      },
+      {
+        title: 'Project',
+        items: [
+          { href: '/security/', title: 'Security', text: 'How it handles documents from strangers' },
+          { href: '/status/', title: 'Status', text: 'What has been proven, and what has not' },
+          { href: '/docs/project/changelog/', title: 'Changelog', text: 'What each release contains' },
+          { href: '/docs/project/roadmap/', title: 'Roadmap', text: 'What comes next' },
+        ],
+      },
     ],
   },
 ];
@@ -44,23 +65,33 @@ const menus = [
         {menu.label}
         <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75" /></svg>
       </summary>
-      <ul class="site-menu-panel">
-        {menu.items.map((item) => (
-          <li>
-            <a href={item.href} aria-current={path === item.href ? 'page' : undefined}>
-              <span class="site-menu-title">{item.title}</span>
-              <span class="site-menu-text">{item.text}</span>
-            </a>
-          </li>
+      <div class="site-menu-panel">
+        {menu.columns.map((column) => (
+          <div class="site-menu-column">
+            <p class="site-menu-heading">{column.title}</p>
+            <ul>
+              {column.items.map((item) => (
+                <li>
+                  <a href={item.href} aria-current={path === item.href ? 'page' : undefined}>
+                    <span class="site-menu-title">{item.title}</span>
+                    <span class="site-menu-text">{item.text}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
         ))}
-      </ul>
+      </div>
     </details>
   ))}
 </div>
 
 <style>
+  /* Panels hang from the pair of menus, not from each button, so a wide
+     two-column panel lines up with the right edge of the pair and stays on
+     screen beside the theme switch or the edge of the window. */
   .site-menus { position: relative; display: flex; align-items: center; gap: 0.25rem; }
-  .site-menu { position: relative; }
+  .site-menu { position: static; }
   summary {
     display: inline-flex; align-items: center; gap: 0.35rem; list-style: none; cursor: pointer;
     color: var(--ink); font-size: 0.98rem; font-weight: 500; line-height: 1.5;
@@ -75,15 +106,22 @@ const menus = [
   @media (prefers-reduced-motion: reduce) { summary svg { transition: none; } }
 
   .site-menu-panel {
-    position: absolute; top: calc(100% + 0.4rem); left: 0; z-index: 30;
-    display: grid; gap: 0.15rem; width: min(22rem, calc(100vw - 2rem));
-    margin: 0; padding: 0.4rem; list-style: none;
+    position: absolute; top: calc(100% + 0.5rem); right: 0; z-index: 30;
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.25rem 0.75rem;
+    width: min(36rem, calc(100vw - 2rem)); padding: 0.75rem;
     background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--r-panel);
     box-shadow: var(--shadow-panel);
   }
-  /* The last menu opens towards the left, so it stays on screen near the edge. */
-  .site-menu:last-child .site-menu-panel { left: auto; right: 0; }
-  .site-menu-panel li { margin: 0; }
+  /* Covers the gap above the panel, so moving the mouse from the button down
+     to the panel does not leave the menu and close it. */
+  .site-menu-panel::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 0.6rem; }
+  .site-menu-column + .site-menu-column { border-inline-start: 1px solid var(--line); padding-inline-start: 0.75rem; }
+  .site-menu-heading {
+    margin: 0.15rem 0.7rem 0.35rem; color: var(--ink-soft);
+    font-size: 0.8rem; font-weight: 600; letter-spacing: 0.01em;
+  }
+  .site-menu-column ul { display: grid; gap: 0.1rem; margin: 0; padding: 0; list-style: none; }
+  .site-menu-column li { margin: 0; }
   .site-menu-panel a {
     display: grid; gap: 0.1rem; padding: 0.55rem 0.7rem; border-radius: var(--r-small);
     text-decoration: none; color: var(--ink);
@@ -96,20 +134,40 @@ const menus = [
 
   @media (max-width: 640px) {
     summary { padding: 0.35rem 0.6rem; font-size: 0.95rem; }
-    /* On a phone both panels hang from the start of the menus, which sit near
-       the left edge, so neither runs off the screen. */
-    .site-menu { position: static; }
-    .site-menu .site-menu-panel,
-    .site-menu:last-child .site-menu-panel { left: 0; right: auto; }
+    /* On a phone the panel is one column, hanging from the start of the menus. */
+    .site-menu-panel { left: 0; right: auto; grid-template-columns: minmax(0, 1fr); }
+    .site-menu-column + .site-menu-column { border-inline-start: 0; padding-inline-start: 0; border-top: 1px solid var(--line); padding-top: 0.5rem; }
   }
 </style>
 
 <script>
   const menus = () => [...document.querySelectorAll<HTMLDetailsElement>('[data-site-menu]')];
+  const closeOthers = (menu: HTMLDetailsElement) => {
+    for (const other of menus()) if (other !== menu) other.open = false;
+  };
+  // Hover opens a menu only where a mouse can hover; touch keeps tap to open.
+  const hovers = matchMedia('(hover: hover) and (pointer: fine)');
   for (const menu of menus()) {
+    let closing: number | undefined;
     menu.addEventListener('toggle', () => {
-      if (!menu.open) return;
-      for (const other of menus()) if (other !== menu) other.open = false;
+      if (menu.open) closeOthers(menu);
+    });
+    menu.addEventListener('pointerenter', (event) => {
+      if (event.pointerType !== 'mouse' || !hovers.matches) return;
+      window.clearTimeout(closing);
+      menu.open = true;
+    });
+    menu.addEventListener('pointerleave', (event) => {
+      if (event.pointerType !== 'mouse' || !hovers.matches) return;
+      // A short grace period, so a mouse that slips off the edge on its way
+      // to a link does not close the menu.
+      closing = window.setTimeout(() => {
+        if (!menu.contains(document.activeElement)) menu.open = false;
+      }, 180);
+    });
+    // A click on the button of a menu hover just opened would close it again.
+    menu.querySelector('summary')?.addEventListener('click', (event) => {
+      if (hovers.matches && menu.open && menu.matches(':hover')) event.preventDefault();
     });
   }
   document.addEventListener('click', (event) => {
