@@ -21,6 +21,14 @@ Not yet released. This is the first release. The image will be `ghcr.io/vmosoti/
 - `POST /v1/templates/validate` and `rusticdoc validate`, which list every problem in a template against sample data.
 - Values escaped by file type in `.html`, `.htm`, `.xml`, `.svg` and `.json` templates.
 - `data` and `ctx` sent as text or as a file, with any file name and in any position.
+- A whole sheet repeated per element of a list in XLSX and ODS with `{% sheet for … %}`, row loops nested in other row loops, and formulas, print areas, tables and charts that follow the copies, in ODS as well as XLSX.
+- Settings read from custom document properties as well as `{% settings %}`.
+- Native charts in ODT, ODS and ODP, and shapes that move along a loop in PowerPoint with `shift`.
+- Rendering takes macros, OLE objects and ActiveX controls, external links and links to private addresses out of every output, unless the request keeps them with `keep`.
+- `undefinedAsEmpty`, to print values missing from the data as nothing for one request.
+- Calculation helpers: `avg`, `ceil`, `floor`, `words`, `truncate`, `unaccent`, `pad_left`, `pad_right`, date arithmetic with `date_add`, `date_sub`, `start_of`, `end_of` and `date_diff`, `duration`, `now()`, and the `empty` test. New pages on [calculations](/docs/templates/calculations/) and [conditions](/docs/templates/conditions/).
+- Translations and formatting by language: `lang`, `translations`, `timezone` and `currency` request fields, dictionaries in `RUSTICDOC_TRANSLATIONS_DIR`, fallback from a region to its language, numbers, money and dates written by CLDR for 62 languages, IANA time zones, a `number` filter, and `t`, `date`, `currency` and `{% settings %}` in text templates and PDF tags. A template that sets `lang` now formats numbers, money and dates for that language. `rusticdoc translate` lists a template's keys in a dictionary file.
+- Validation reports fonts a template names that the service lacks, and keys without a translation in the language asked for.
 
 ### Conversion and PDF
 
@@ -32,7 +40,9 @@ Not yet released. This is the first release. The image will be `ghcr.io/vmosoti/
 - `POST /v1/convert`, for one or more files.
 - PDF operations under `/v1/pdf/*`: merge, split, rotate, flatten, optimize, encrypt, convert, watermark, stamp, overlay, sign, embed, Factur-X, metadata, bookmarks, and form fields and filling.
 - `lopdf`, qpdf and pdfcpu as PDF engines.
-- Cryptographic PDF signatures, PAdES B-B style: `signature=certificate` on `/v1/pdf/sign`, a `sign` step on `/v1/render`, and `rusticdoc pdf sign --key --cert`. The key comes from `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, RSA or ECDSA P-256. Without them, signing answers `503` and the image signature works as before.
+- Cryptographic PDF signatures from PAdES B-B to B-LTA: `signature=certificate` on `/v1/pdf/sign`, a `sign` step on `/v1/render` that can be visible, and `rusticdoc pdf sign`. Timestamps from a timestamp authority you trust, revocation data in a DSS and a document timestamp, certification with DocMDP, named keys each with its own callers, and keys in a PKCS#11 token. RSA or ECDSA P-256. Without a key, signing answers `503` and the image signature works as before.
+- Text in any script drawn into PDF form fields and annotations, shaped and in subset fonts.
+- An `underlay` step that lays a rendered document over a base PDF, such as letterhead.
 
 ### Service
 
@@ -40,7 +50,10 @@ Not yet released. This is the first release. The image will be `ghcr.io/vmosoti/
 - Webhooks with per-caller HMAC signatures.
 - Stored templates and uploaded fonts on S3-compatible storage or a shared volume, with several replicas on one store.
 - An OpenAPI description at `/openapi.json`.
-- JSON logs with access and audit lines, Prometheus metrics, and `/health` and `/ready`.
+- JSON request bodies for renders by stored template, template aliases with versions, a template's variables, page previews as PNG, and background jobs polled at `/v1/jobs/{id}` with `Prefer: respond-async`.
+- Tenants whose keys can be replaced without losing their templates, and admin rights for basic-auth and OpenID Connect users.
+- JSON logs with access and audit lines, Prometheus metrics including the LibreOffice queue, worker restarts and template cache hits, and `/health` and `/ready`.
+- A client that hangs up stops its conversion and frees its place in the queue.
 
 ### Security
 
@@ -53,7 +66,7 @@ Not yet released. This is the first release. The image will be `ghcr.io/vmosoti/
 
 ### CLI
 
-- The same binary as the service: `render`, `convert`, `validate`, `pdf`, `engines`, `openapi`, `serve`, `health` and `webhook-secret`.
+- The same binary as the service: `render`, `convert`, `validate`, `translate`, `pdf`, `engines`, `openapi`, `serve`, `health` and `webhook-secret`.
 
 ### Not in this release
 

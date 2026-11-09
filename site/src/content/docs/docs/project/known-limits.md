@@ -31,14 +31,20 @@ This page lists what does not work, what has not been checked, and what could su
 
 ## PDF signatures
 
-- **Signatures are PAdES B-B style only.** There is no timestamp from a timestamp authority (B-T), and no revocation data or document timestamp (B-LT, B-LTA). A validator has only the signer's claimed signing time, and cannot validate a signature after the certificate expires.
-- **Signed files have been validated with poppler's `pdfsig` and with pyHanko, not in Adobe Acrobat.**
-- **There is one signing key per deployment,** from `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`. Every caller who can reach the route signs as that certificate. Keys in an HSM or a cloud KMS are not supported, nor are encrypted key files.
+- **The service does not renew archive timestamps.** A B-LTA signature stays verifiable for as long as its document timestamp's certificate is valid. Extend it later with a tool such as pyHanko's `ltaupdate`.
+- **Signed files have been validated with poppler's `pdfsig` and with pyHanko at every level, not in Adobe Acrobat.**
+- **B-LT and B-LTA need certificates that name an OCSP responder or a CRL.** Without one, the request answers `502`. A timestamp authority needs a trust anchor in `RUSTICDOC_SIGNING_TSA_CERT` and an `https` URL.
 - **RSA and ECDSA P-256 keys only,** always with SHA-256.
-- **One signature per request.** The `sign` step on `/v1/render` is always invisible; a visible signature needs `/v1/pdf/sign`.
+- **One signature per request.**
 - **The signature image ignores page rotation,** and the image's transparency is dropped, as for stamps.
-- **A document certified with DocMDP is not checked** before another signature is added, so signing one that forbids changes breaks its certification.
+- **Keys in a cloud KMS and encrypted key files are not supported.** Keys are PEM files or live in a PKCS#11 token, which was tested with SoftHSM, not a hardware module.
 - **PDFs from LibreOffice are not byte-identical across architectures or runs.** Its layout moves text by up to hundredths of a point between processors, and each PDF gets its own dates and ids. `make golden` compares 14 outputs from the amd64 and arm64 images: the Office and text outputs and the PDF form the service fills itself are byte-identical, and LibreOffice's PDFs match as page images or in layout within 0.25 pt.
+
+## Languages
+
+- **Numbers, money and dates follow 62 languages and regions,** from CLDR 48. Another language falls back to its base language, then to the formatting used without one. See [translations and settings](/docs/templates/translations/).
+- **`words` spells numbers in English, French, Belgian and Swiss French, and Ukrainian only.** A template whose `lang` is another language gets English.
+- **`duration("human")` writes English.**
 
 ## Fonts
 
