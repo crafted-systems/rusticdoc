@@ -3724,6 +3724,7 @@
         "description": "The multipart form `/v1/render` accepts. Documented here; parsed by hand.",
         "required": [
           "template",
+          "underlay",
           "files"
         ],
         "properties": {
@@ -3754,6 +3755,13 @@
           "ctx": {
             "description": "JSON object visible as `ctx`, sent as text or as a file."
           },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The currency `currency` uses when given none, such as `EUR`. Wins over\nthe template's."
+          },
           "data": {
             "description": "JSON object the template sees as its root, sent as text or as a file."
           },
@@ -3772,6 +3780,22 @@
             ],
             "description": "What turns HTML into PDF: `fulgur` (default), a layout engine with\nno browser and no network, or `libreoffice`.",
             "example": "fulgur"
+          },
+          "keep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What an Office template's result may keep of what rendering takes\nout, comma-separated: `macros`, `objects` (OLE objects and ActiveX\ncontrols), `externalLinks`, `privateLinks` (hyperlinks to private\naddresses), or `all`. Default: none of them.",
+            "example": "privateLinks"
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins\nover the template's `lang`: it picks translations for `t`, and when CLDR\nhas data for it, how `number`, `currency` and `date` write numbers,\nmoney and month names.",
+            "example": "fr-CA"
           },
           "level": {
             "type": [
@@ -3850,7 +3874,7 @@
               "string",
               "null"
             ],
-            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`, `sign`. `sign` signs cryptographically with the\nservice's key; it must be last and cannot be combined with `encrypt`.",
+            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the\nservice's key; it must be last and cannot be combined with `encrypt`.",
             "example": "convert,pdfa,encrypt"
           },
           "template": {
@@ -3865,12 +3889,39 @@
             ],
             "description": "The id of a stored template, from `POST /v1/templates`, or an alias as\n`name` or `name@version`. Send this or `template`. Files in the form are\nthen only further inputs, for `merge`."
           },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The time zone `date` shows moments in: an offset such as `+02:00`, or an\nIANA zone such as `Europe/Paris`. Wins over the template's.",
+            "example": "Europe/Paris"
+          },
           "to": {
             "type": [
               "string",
               "null"
             ],
             "description": "Output format for `convert`. Default `pdf`."
+          },
+          "translations": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Translations for `t`, by language, each a flat object of keys and texts.\nThey win over the service's dictionaries and the template's own. At most\n10,000 entries, keys of 256 bytes and texts of 16 KiB."
+          },
+          "undefinedAsEmpty": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` prints a value missing from the data as nothing instead of\nfailing the render. Default `false`, so a misspelt name is an error."
+          },
+          "underlay": {
+            "type": "string",
+            "format": "binary",
+            "description": "For `underlay`: the PDF the document is laid over, page by page, such\nas letterhead or a pre-printed form."
           },
           "user_password": {
             "type": [
@@ -3921,6 +3972,13 @@
           "ctx": {
             "description": "The object visible as `ctx`."
           },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The currency `currency` uses when given none, such as `EUR`. Wins over\nthe template's."
+          },
           "data": {
             "description": "The object the template sees as its root."
           },
@@ -3940,6 +3998,22 @@
               "null"
             ],
             "description": "`fulgur` (default) or `libreoffice`, for HTML."
+          },
+          "keep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What an Office template's result may keep of what rendering takes\nout, comma-separated: `macros`, `objects` (OLE objects and ActiveX\ncontrols), `externalLinks`, `privateLinks` (hyperlinks to private\naddresses), or `all`. Default: none of them.",
+            "example": "privateLinks"
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins\nover the template's `lang`: it picks translations for `t`, and when CLDR\nhas data for it, how `number`, `currency` and `date` write numbers,\nmoney and month names.",
+            "example": "fr-CA"
           },
           "metadata": {
             "description": "Metadata fields for `metadata`."
@@ -3990,12 +4064,34 @@
             "description": "The stored template: its id, or an alias as `name` or `name@version`.",
             "example": "invoice"
           },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The time zone `date` shows moments in: an offset such as `+02:00`, or an\nIANA zone such as `Europe/Paris`. Wins over the template's.",
+            "example": "Europe/Paris"
+          },
           "to": {
             "type": [
               "string",
               "null"
             ],
             "description": "Output format for `convert`. Default `pdf`."
+          },
+          "translations": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Translations for `t`, by language, each a flat object of keys and texts.\nThey win over the service's dictionaries and the template's own. At most\n10,000 entries, keys of 256 bytes and texts of 16 KiB."
+          },
+          "undefinedAsEmpty": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` prints a value missing from the data as nothing."
           },
           "userPassword": {
             "type": [
@@ -4359,7 +4455,8 @@
           "template_hash",
           "format",
           "engine",
-          "diagnostics"
+          "diagnostics",
+          "missing_fonts"
         ],
         "properties": {
           "diagnostics": {
@@ -4382,6 +4479,13 @@
           },
           "format": {
             "type": "string"
+          },
+          "missing_fonts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fonts the template names that the service has neither loaded nor\nmapped to a substitute with the same metrics. Text set in them renders\nin a fallback font, which moves line and page breaks. Each also appears\nin `diagnostics` as a warning."
           },
           "ok": {
             "type": "boolean",
