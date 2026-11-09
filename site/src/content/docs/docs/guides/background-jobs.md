@@ -1,14 +1,14 @@
 ---
 title: Background jobs
-description: Run a request in the background with Prefer respond-async, ask where it is, and download the result from any replica.
+description: Run a request as a background job, poll it until it finishes, and download the result from any replica.
 sidebar: { order: 6 }
 ---
 
-A background job answers `202` at once and keeps the result for you to fetch. After this page you can start one, follow it to the end, download what it made, and know how long it is kept. Use it when a request takes longer than your client wants to wait and you cannot host a [webhook](/docs/guides/webhooks/) receiver.
+Run a request as a background job and you get a `202` straight away, with the result kept for you to fetch when it's ready. Use one when a request takes longer than your client wants to wait and you can't host a [webhook](/docs/guides/webhooks/) receiver.
 
 ## Turn it on
 
-Jobs keep their states and results in the store, so any replica can answer for a job another one ran. They need `RUSTICDOC_STORE`; a directory will do for one container:
+Jobs keep their state and results in the store, so any replica can serve a job that another one ran. That means you need `RUSTICDOC_STORE`, and for one container a directory will do:
 
 ```bash
 RUSTICDOC_STORE=file:///data/rusticdoc
@@ -18,7 +18,7 @@ Without a store, a request that asks for a job gets `501 store_not_configured` a
 
 ## Start a job
 
-Add `Prefer: respond-async` to any request that produces a file: `/v1/render`, `/v1/render/batch`, `/v1/convert` and `/v1/pdf/*`. The rest of the request is as usual, a multipart form or, for a stored template, [JSON](/docs/guides/stored-templates/#send-json-instead-of-a-form).
+Add `Prefer: respond-async` to any request that produces a file: `/v1/render`, `/v1/render/batch`, `/v1/convert` or `/v1/pdf/*`. The rest of the request doesn't change, so it's a multipart form or, for a stored template, [JSON](/docs/guides/stored-templates/#send-json-instead-of-a-form).
 
 ```bash test
 curl -F template=@letter.txt http://localhost:9027/v1/templates -o stored.json
@@ -37,7 +37,7 @@ grep -qi "^location: /v1/jobs/" headers.txt
 jq -e '.status == "queued"' job.json
 ```
 
-The `202` carries the job in its body, its address in `Location`, `Preference-Applied: respond-async`, and `Retry-After: 1`.
+The `202` has the job in its body and its address in `Location`, plus `Preference-Applied: respond-async` and `Retry-After: 1`.
 
 ```json
 {
@@ -49,13 +49,13 @@ The `202` carries the job in its body, its address in `Location`, `Preference-Ap
 }
 ```
 
-A mistake in the request is answered at once, as without the header: a bad step list or a missing field is a `400` and starts no job. A failure while the job runs, such as a template error, is recorded on the job.
+Mistakes in the request are reported straight away, as they are without the header, so a bad step list or a missing field gets a `400` and starts no job. A failure while the job runs, like a template error, is recorded on the job.
 
-Asking for a webhook and a job in one request is a `400`. Routes that answer in JSON, such as `/v1/templates/validate`, ignore the header and answer at once.
+You can't ask for a webhook and a job in one request (you get a `400`). Routes that return JSON, like `/v1/templates/validate`, ignore the header and respond straight away.
 
 ## Follow it
 
-`GET /v1/jobs/{id}` says where the job is. Ask again until `status` is `done` or `failed`; while it is neither, the answer carries `Retry-After: 1`.
+`GET /v1/jobs/{id}` tells you where the job is. Poll it until `status` is `done` or `failed`. Until then, each response carries `Retry-After: 1`.
 
 ```bash test
 curl -F template=@letter.txt http://localhost:9027/v1/templates -o stored.json
@@ -80,11 +80,11 @@ grep -q "Dear Ada" result.txt
 | `id` | The job's id |
 | `status` | `queued`, `running`, `done` or `failed` |
 | `createdAt`, `startedAt`, `finishedAt` | RFC 3339, to the millisecond |
-| `expiresAt` | When the job and its result are removed. Set once it ends |
-| `runsUntil` | A job that has not ended by then never will, and reads as failed |
+| `expiresAt` | When the job and its result are removed. Set once the job ends |
+| `runsUntil` | A job that hasn't ended by then never will, and shows as failed |
 | `requestId` | The `X-Request-Id` of the request that started it, for the logs |
 | `result` | Once done: `name`, `contentType`, `size` and `sha256` of the file |
-| `error` | Once failed: `error`, `message` and `status`, what the request would have answered |
+| `error` | Once failed: `error`, `message` and `status`, as the request would have returned them |
 
 A failed job looks like this:
 
@@ -99,38 +99,38 @@ A failed job looks like this:
 }
 ```
 
-An engine's failure reads as the status's name, as on a synchronous response, with the detail in the log under `requestId`.
+As on a synchronous response, an engine failure is reported by the name of its status, with the detail in the log under `requestId`.
 
 ## Download the result
 
-`GET /v1/jobs/{id}/result` answers with the file, its type and its name, as the request would have.
+`GET /v1/jobs/{id}/result` returns the file with its type and name, the same way the request would have.
 
 | Status | When |
 |---|---|
 | `200` | The job is done |
-| `409 job_not_done` | It is queued or running. Ask the job first |
-| `409 job_failed` | It failed, so there is no file. The job holds the error |
+| `409 job_not_done` | It's still queued or running. Check the job first |
+| `409 job_failed` | It failed, so there's no file. The error is on the job |
 | `404 not_found` | No such job for this caller, or it expired |
 
 ## How long a job is kept
 
-`RUSTICDOC_JOB_TTL` (default `1h`) is how long a job and its result are kept after it ends. Past it, both routes answer `404` at once, and every replica removes expired jobs from the store now and then: every quarter of the TTL, between 10 seconds and 10 minutes apart.
+A job and its result are kept for `RUSTICDOC_JOB_TTL` (default `1h`) after the job ends. After that, both routes return `404` immediately. Each replica clears expired jobs out of the store every quarter of the TTL, at least 10 seconds and at most 10 minutes apart.
 
-A job runs on the replica that accepted it. If that replica stops before the job ends, nothing finishes it: once `runsUntil` passes, the job reads as `failed` with `job_lost` and a `503` status, and is removed a TTL later. Send the request again.
+A job runs on the replica that accepted it, so if that replica stops before the job ends, nothing finishes it. Once `runsUntil` passes, the job shows as `failed` with `job_lost` and a `503` status, and it's removed a TTL later. Send the request again.
 
 ## Who sees a job
 
-Jobs are always the caller's own, whatever `RUSTICDOC_STORE_SCOPE` says, because results hold the caller's data. Another caller's job id answers `404`. Every key of a [tenant](/docs/guides/authentication/#tenant-keys) is the same caller, so a job started with one key can be fetched with another.
+Jobs always belong to the caller that started them, whatever `RUSTICDOC_STORE_SCOPE` says, because results hold the caller's data. Another caller's job id gets a `404`. Every key of a [tenant](/docs/guides/authentication/#tenant-keys) is the same caller, so a job started with one key can be fetched with another.
 
 ## Limits
 
-Background jobs and webhook jobs share the same places:
+Background jobs and webhook jobs share the same slots:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook and background jobs running at once, in all |
+| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Total webhook and background jobs running at the same time |
 | `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | The same, for one caller |
 
-Past either, the request gets `429 too_many_jobs` before its body is read. A job holds its place until its result is stored. It has the same time limit as the request would have synchronously: `RUSTICDOC_API_TIMEOUT`, or `RUSTICDOC_BATCH_TIMEOUT` for a batch or a multi-file conversion.
+Past either limit, a request gets `429 too_many_jobs` before its body is read. A job holds its slot until its result is stored, and it has the same time limit the request would have synchronously: `RUSTICDOC_API_TIMEOUT`, or `RUSTICDOC_BATCH_TIMEOUT` for a batch or a multi-file conversion.
 
-Results count toward nothing else: what the store holds in jobs is what callers made within one TTL. If the store cannot be reached when the request arrives, it gets `503 store_unavailable` and no job starts.
+Results don't count towards any other limit, so what the store holds in jobs is whatever callers made within one TTL. If the store can't be reached when a request arrives, the request gets `503 store_unavailable` and no job starts.

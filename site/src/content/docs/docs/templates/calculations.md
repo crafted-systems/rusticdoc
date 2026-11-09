@@ -1,17 +1,17 @@
 ---
 title: Calculations
-description: Do arithmetic, totals, averages, counts, groups, running balances, lookups and date arithmetic inside a template.
+description: Do arithmetic, totals, averages, counts, per-group totals, running balances, lookups and date arithmetic inside a template.
 sidebar:
   order: 1.6
 ---
 
-This page shows how to calculate inside a template: arithmetic, totals and averages, counts, totals per group, running balances, lookups between lists, and dates. Everything here works in Office, text and PDF templates. It ends with a [worked invoice](#worked-example-an-invoice).
+A template can do its own sums: arithmetic, totals and averages, counts, totals per group, running balances, lookups between lists, and dates. All of it works in Office, text and PDF templates, and there's a [worked invoice](#worked-example-an-invoice) at the end.
 
-You can also do the sums in your application and send the results in `data`. Doing them in the template keeps the data plain and the layout's logic in one place.
+You can also do the sums in your application and send the results in `data`, but doing them in the template keeps the data plain and the layout's logic in one place.
 
 ## Arithmetic
 
-| Operator | Does | Example | Prints |
+| Operator | What it does | Example | Prints |
 |---|---|---|---|
 | `+`, `-`, `*` | Add, subtract, multiply | `{{ 2 + 3 * 4 }}` | `14` |
 | `/` | Divide, always giving a decimal | `{{ 10 / 4 }}`, `{{ 4 / 2 }}` | `2.5`, `2.0` |
@@ -36,7 +36,7 @@ test "$(cat out.txt)" = "$(printf '9\n7\n2.5\n3\n1\n1024')"
 
 ### Precedence
 
-From the loosest to the tightest:
+From loosest to tightest:
 
 1. `or`
 2. `and`
@@ -45,14 +45,14 @@ From the loosest to the tightest:
 5. `+`, `-`
 6. `~`, which joins text
 7. `*`, `/`, `//`, `%`
-8. `**`, read from left to right: `2 ** 3 ** 2` is `64`
-9. A filter: `|`
+8. `**`, read from left to right, so `2 ** 3 ** 2` is `64`
+9. `|`, a filter
 
-Three of these surprise people:
+Three of these catch people out:
 
-- **A filter binds tightest.** `a * b | currency` formats `b` alone. Write `(a * b) | currency`. See [a filter binds tighter than arithmetic](/docs/templates/syntax/#a-filter-binds-tighter-than-arithmetic).
-- **`~` binds tighter than `+`.** `"INV-" ~ n + 1` joins first and then fails to add a number to text. Write `"INV-" ~ (n + 1)`.
-- **A minus sign binds tighter than `**`.** `-2 ** 2` is `4`.
+- A filter binds tightest, so `a * b | currency` formats `b` alone. Write `(a * b) | currency`. See [a filter binds tighter than arithmetic](/docs/templates/syntax/#a-filter-binds-tighter-than-arithmetic).
+- `~` binds tighter than `+`, so `"INV-" ~ n + 1` joins first and then can't add a number to text. Write `"INV-" ~ (n + 1)`.
+- A minus sign binds tighter than `**`, so `-2 ** 2` is `4`.
 
 When in doubt, add brackets.
 
@@ -67,9 +67,9 @@ test "$(cat out.txt)" = 'INV-42|6.7|64'
 
 ### Decimals
 
-Numbers with decimals are binary floating point, as in most languages, so `0.1 + 0.2` prints `0.30000000000000004`. Round before you print: `round(2)` or [`currency`](/docs/templates/filters/#currency) does it.
+Numbers with decimals are binary floating point, as in most languages, so `0.1 + 0.2` prints `0.30000000000000004`. Round before you print, with `round(2)` or [`currency`](/docs/templates/filters/#currency).
 
-Dividing by zero stops the render with `unable to calculate 1 / 0`. Guard it with a condition: `{{ (done / total * 100) | round if total else 0 }}`.
+Dividing by zero stops the render with `unable to calculate 1 / 0`, so guard it with a condition: `{{ (done / total * 100) | round if total else 0 }}`.
 
 ### Rounding
 
@@ -81,7 +81,7 @@ Dividing by zero stops the render with `unable to calculate 1 / 0`. Guard it wit
 | `floor` | `{{ 2.9 \| floor }}`, `{{ -2.1 \| floor }}` | `2`, `-3` |
 | `abs` | `{{ (0 - 5) \| abs }}` | `5` |
 
-`round` always gives a decimal, and sends a half to the even neighbour: `{{ 2.5 | round }}` prints `2.0`, `{{ 3.5 | round }}` prints `4.0`, and `{{ 0.125 | round(2) }}` prints `0.12`. `currency` sends a half away from zero instead, so `{{ 0.125 | currency }}` prints `0.13`. Use the same one for every figure on a document, or totals may differ by a cent.
+`round` always gives a decimal, and rounds a half to the even neighbour: `{{ 2.5 | round }}` prints `2.0`, `{{ 3.5 | round }}` prints `4.0`, and `{{ 0.125 | round(2) }}` prints `0.12`. `currency` rounds a half away from zero instead, so `{{ 0.125 | currency }}` prints `0.13`. Use the same one for every figure on a document, or your totals can differ by a cent.
 
 ```bash test
 cat > round.txt <<'EOF'
@@ -101,7 +101,7 @@ test "$(cat out.txt)" = \
   "$(printf '%s\n' 2.57 2.57 2.56 -2 -3 2.0 4.0 0.12 0.13)"
 ```
 
-`ceil` and `floor` give a whole number, which prints without `.0`, so use them for counts such as the boxes needed for 25 items, 12 to a box:
+`ceil` and `floor` give a whole number, which prints without `.0`, so use them for counts, like the boxes you need for 25 items at 12 to a box:
 
 ```bash test
 cat > boxes.txt <<'EOF'
@@ -114,7 +114,7 @@ test "$(cat out.txt)" = '3 boxes, 2 full'
 
 ## Totals, averages, minimum and maximum
 
-For a list of objects, name the attribute to add up. For these examples `lines` is:
+For a list of objects, name the attribute to add up. In these examples `lines` is:
 
 ```json
 [
@@ -124,7 +124,7 @@ For a list of objects, name the attribute to add up. For these examples `lines` 
 ]
 ```
 
-| Want | Write | Gives |
+| To get | Write | Result |
 |---|---|---|
 | Total | `lines \| sum(attribute="price")` | `26.0` |
 | Average | `lines \| avg(attribute="price")` | `8.666…` |
@@ -155,15 +155,13 @@ curl -F template=@totals.txt -F data=@lines.json \
 test "$(cat out.txt)" = "$(printf '26.0\n8.67\n2.5\n19.5\nLamp\n3')"
 ```
 
-- A list of plain numbers needs no attribute: `{{ [1, 2, 4] | sum }}`, `{{ [1, 2, 4] | avg }}`.
-- An attribute can be a path: `sum(attribute="totals.net")`.
-- `sum` skips items that lack the attribute, and gives `0` for an empty list.
-- `avg` skips items whose value is missing or `null`, and gives `null` for an empty list, so `{{ lines | avg(attribute="price") | default(0, true) }}` prints `0` then.
-- `min` and `max` of an empty list are undefined, which stops the render when printed. Add `| default(0)`.
+A list of plain numbers needs no attribute, as in `{{ [1, 2, 4] | sum }}` or `{{ [1, 2, 4] | avg }}`, and an attribute can be a path, like `sum(attribute="totals.net")`.
+
+`sum` skips items that don't have the attribute and gives `0` for an empty list. `avg` skips items whose value is missing or `null`, but gives `null` for an empty list, so `{{ lines | avg(attribute="price") | default(0, true) }}` prints `0` in that case. `min` and `max` of an empty list are undefined, and printing that stops the render, so add `| default(0)`.
 
 ### Totals of a calculation
 
-`sum` adds one attribute. For quantity times price, add up in a loop with a [namespace](#store-values-with-set-and-namespace):
+`sum` adds one attribute. For quantity times price, add it up in a loop with a [namespace](#store-values-with-set-and-namespace):
 
 ```bash test
 cat > net.txt <<'EOF'
@@ -181,7 +179,7 @@ grep -x 'EUR 51.00' out.txt
 
 ## Counts
 
-| Want | Write |
+| To get | Write |
 |---|---|
 | Items | `lines \| length` |
 | Items that pass a test | `lines \| selectattr("qty", "gt", 1) \| list \| length` |
@@ -216,7 +214,7 @@ EOF
 test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
-`selectattr(attribute, test, value)` keeps the items that pass a [test](/docs/templates/conditions/#tests). The comparison tests are `eq`, `ne`, `lt`, `le`, `gt` and `ge`, and `in` checks a value against a list. `rejectattr` keeps the others.
+`selectattr(attribute, test, value)` keeps the items that pass a [test](/docs/templates/conditions/#tests), and `rejectattr` keeps the others. The comparison tests are `eq`, `ne`, `lt`, `le`, `gt` and `ge`, and `in` checks a value against a list.
 
 ## Filtered and per-group totals
 
@@ -227,7 +225,7 @@ Filter first, then add up:
 {{ lines | selectattr("group", "in", ["Food", "Drinks"]) | sum(attribute="price") }}
 ```
 
-To get a total for each group, `groupby` splits the list by an attribute. Each group has `grouper`, the shared value, and `list`, its items. Groups come out sorted by that value.
+For a total per group, use `groupby`, which splits the list by an attribute. Each group has a `grouper` (the shared value) and a `list` (its items), and the groups come out sorted by that value.
 
 ```bash test
 cat > groups.txt <<'EOF'
@@ -261,9 +259,7 @@ In an Office template, put the group loop around a table and the line loop on a 
 
 ## Running totals
 
-A running total, or balance, grows from one line to the next. Two ways work.
-
-Keep it in a namespace, which a loop can change:
+A running total, or balance, grows from one line to the next. You can keep it in a namespace, which a loop can change:
 
 ```text
 {% set ns = namespace(balance=0) %}
@@ -273,7 +269,7 @@ Keep it in a namespace, which a loop can change:
 {%- endfor %}
 ```
 
-Or add up the lines so far, with a slice of the list. `moves[:loop.index]` is every line up to this one:
+Or you can add up the lines so far with a slice of the list, where `moves[:loop.index]` is every line up to this one:
 
 ```text
 {% for t in moves -%}
@@ -311,7 +307,7 @@ EOF
 test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
-`loop.previtem` and `loop.nextitem` give the neighbouring items, to show a change from the line before: `{{ t.amount - loop.previtem.amount if not loop.first }}`.
+`loop.previtem` and `loop.nextitem` give the neighbouring items, so you can show the change from the line before: `{{ t.amount - loop.previtem.amount if not loop.first }}`.
 
 ## Sorting
 
@@ -321,7 +317,7 @@ test "$(cat out.txt)" = "$(cat expected.txt)"
 {{ lines | sort(attribute="group,price") }}
 ```
 
-A comma between attributes sorts by the first, then by the second within it. Text sorts without regard to case unless you add `case_sensitive=true`. To take the top three, sort and slice: `(lines | sort(attribute="price", reverse=true))[:3]`.
+A comma between attributes sorts by the first, then by the second within it. Sorting text ignores case unless you add `case_sensitive=true`. For the top three, sort and slice: `(lines | sort(attribute="price", reverse=true))[:3]`.
 
 ```bash test
 cat > sorted.txt <<'EOF'
@@ -377,15 +373,15 @@ EOF
 test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
-`first` of an empty list is undefined, so test it with `is defined` before reading from it.
+`first` of an empty list is undefined, so test it with `is defined` before you read from it.
 
-If the data can carry an object keyed by id instead of a list, the lookup is direct: with `customers` as `{"7": {"name": "Ada"}}`, write `{{ customers[o.customer | string].name }}`. JSON keys are always text, so a number id needs `| string`.
+If your data can carry an object keyed by id instead of a list, the lookup is direct. With `customers` as `{"7": {"name": "Ada"}}`, it's `{{ customers[o.customer | string].name }}`. JSON keys are always text, so a number id needs `| string`.
 
 The first and last items are `items[0]` and `items[-1]`, or `items | first` and `items | last`.
 
 ## Store values with set and namespace
 
-`{% set %}` names a value, so you calculate it once:
+`{% set %}` names a value, so you only calculate it once:
 
 ```text
 {% set net = lines | sum(attribute="price") %}
@@ -395,7 +391,7 @@ Net {{ net }}, tax {{ tax }}, total {{ net + tax }}
 
 `{% set name %}...{% endset %}` captures the text between the tags.
 
-A `set` inside a loop lasts only for that pass of the loop. A value set before the loop is unchanged after it:
+A `set` inside a loop only lasts for that pass, so a value set before the loop is unchanged after it:
 
 ```bash test
 cat > scope.txt <<'EOF'
@@ -412,7 +408,7 @@ curl -F template=@scope.txt -F 'data={"items":[1,2,3]}' \
 grep -x '0 3' out.txt
 ```
 
-To carry a value out of a loop, use `namespace()` and set its attributes, as the second counter does. A namespace can hold several values: `namespace(total=0, count=0, last=none)`.
+To carry a value out of a loop, use `namespace()` and set its attributes, as the second counter does. A namespace can hold several values, like `namespace(total=0, count=0, last=none)`.
 
 A macro is a calculation you name and reuse:
 
@@ -421,7 +417,7 @@ A macro is a calculation you name and reuse:
 {{ net(lines[0]) }}
 ```
 
-A macro returns text. To use its result in arithmetic, `{{ net(l) | float }}` turns it back into a number.
+A macro returns text. To use its result in arithmetic, turn it back into a number with `{{ net(l) | float }}`.
 
 ## Number helpers
 
@@ -433,7 +429,7 @@ A macro returns text. To use its result in arithmetic, `{{ net(l) | float }}` tu
 | `words(ordinal=true)` | `{{ 21 \| words(ordinal=true) }}` | `twenty-first` |
 | `words(currency="EUR")` | `{{ 12.5 \| words(currency="EUR") }}` | `twelve euros and fifty cents` |
 
-[`words`](/docs/templates/filters/#words) spells a number in English, French or Ukrainian, following the template's `lang` setting. Amounts on cheques and contracts use it:
+[`words`](/docs/templates/filters/#words) spells a number out in English, French or Ukrainian, following the template's `lang` setting. You'd use it for amounts on cheques and contracts:
 
 ```bash test
 cat > words.txt <<'EOF'
@@ -451,9 +447,9 @@ test "$(cat out.txt)" = "$(cat expected.txt)"
 
 ## Dates
 
-Dates in data are text such as `2026-11-06` or `2026-11-06T10:20:00Z`, or unix seconds. These filters calculate with them, and return text that the [`date`](/docs/templates/filters/#date) filter can print in any format.
+Dates in data are text like `2026-11-06` or `2026-11-06T10:20:00Z`, or unix seconds. These filters calculate with them and return text, which the [`date`](/docs/templates/filters/#date) filter can then print in any format.
 
-| Filter | Example | Gives |
+| Filter | Example | Result |
 |---|---|---|
 | `date_add(amount, unit)` | `{{ "2026-01-31" \| date_add(1, "month") }}` | `2026-02-28` |
 | `date_sub(amount, unit)` | `{{ "2026-03-31" \| date_sub(1, "month") }}` | `2026-02-28` |
@@ -462,7 +458,7 @@ Dates in data are text such as `2026-11-06` or `2026-11-06T10:20:00Z`, or unix s
 | `date_diff(other, unit)` | `{{ "2026-12-06" \| date_diff("2026-11-06", "days") }}` | `30` |
 | `now()` | `{{ now() }}` | `2026-11-06T10:20:00Z` |
 
-The units are `year`, `quarter`, `month`, `week`, `day`, `hour`, `minute` and `second`, in the singular or the plural. Without a unit, `date_add`, `date_sub` and `date_diff` count days.
+The units are `year`, `quarter`, `month`, `week`, `day`, `hour`, `minute` and `second`, singular or plural. If you leave the unit out, `date_add`, `date_sub` and `date_diff` count days.
 
 ```bash test
 cat > dates.txt <<'EOF'
@@ -485,21 +481,23 @@ EOF
 test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
-What each one does:
+Adding or subtracting months or years keeps the day of the month when the target month has it, and uses the month's last day when it doesn't, so 31 January plus one month is 28 February, or 29 in a leap year. A quarter is three months.
 
-- **Months and years keep the day of the month** when the target month has it, and use the month's last day when it does not: 31 January plus one month is 28 February, or 29 in a leap year. A quarter is three months.
-- **A date stays a date.** `2026-11-06` plus a day is `2026-11-07`. Adding hours, minutes or seconds to a date gives a time: `2026-11-07T12:00:00`.
-- **A time keeps its zone.** `2026-11-06T22:00:00+03:00` plus 4 hours is `2026-11-07T02:00:00+03:00`. Zones are fixed offsets, so there is no daylight saving to skip or repeat. Unix seconds come back as UTC text, such as `2026-11-06T10:20:00Z`.
-- **`start_of` and `end_of`** give the first and last second of the period: `start_of("day")` is midnight and `end_of("day")` is `23:59:59`. A week runs from Monday to Sunday. For a date with no time, `end_of("month")` is the month's last day.
-- **`date_diff` counts whole units** from the argument to the value, so it is negative when the value is earlier. Part of a unit is dropped: 23 hours is `0` days. Months follow the same rule as `date_add`, so 31 January to 29 February 2028 is one month. A value with no zone counts as UTC when compared with one that has a zone.
+A date stays a date, so `2026-11-06` plus a day is `2026-11-07`. Adding hours, minutes or seconds to a date gives a time instead, like `2026-11-07T12:00:00`.
 
-A result outside the years chrono can hold, about 262,000 years either side of year 0, is refused with `the date is out of range`. A unit that does not exist is refused with the list of units.
+A time keeps its zone, so `2026-11-06T22:00:00+03:00` plus 4 hours is `2026-11-07T02:00:00+03:00`. Zones are fixed offsets, so there's no daylight saving to skip or repeat. Unix seconds come back as UTC text, like `2026-11-06T10:20:00Z`.
+
+`start_of` and `end_of` give the first and last second of the period, so `start_of("day")` is midnight and `end_of("day")` is `23:59:59`. A week runs from Monday to Sunday. For a date with no time, `end_of("month")` is the month's last day.
+
+`date_diff` counts whole units from the argument to the value, so it's negative when the value is earlier. Part of a unit is dropped, which makes 23 hours `0` days. Months follow the same rule as `date_add`, so 31 January to 29 February 2028 is one month. A value with no zone counts as UTC when it's compared with one that has a zone.
+
+A result outside the years chrono can hold, about 262,000 years either side of year 0, fails with `the date is out of range`. A unit that doesn't exist fails too, with an error that lists the units.
 
 ### Today's date
 
-`now()` gives the time of the render in UTC, to the second, such as `2026-11-06T10:20:00Z`. Pass it to other filters: `{{ now() | date_add(14) | date("%d %B %Y") }}`.
+`now()` gives the time of the render in UTC, to the second. Pass it to other filters, as in `{{ now() | date_add(14) | date("%d %B %Y") }}`.
 
-Output that uses `now()` changes on every run, which breaks comparisons with a saved file. Send `ctx.now` to fix it for one request:
+Output that uses `now()` changes on every run, which breaks comparisons with a saved file. Send `ctx.now` to fix the time for one request:
 
 ```bash test
 cat > today.txt <<'EOF'
@@ -518,7 +516,7 @@ EOF
 test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
-`ctx.now` accepts anything `date` accepts. A date with no time, such as `2026-11-06`, makes `now()` a date too. A value that cannot be read is an error naming `ctx.now`. As with any `ctx` key, a `ctx` object inside `data` wins.
+`ctx.now` accepts anything `date` accepts. A date with no time, like `2026-11-06`, makes `now()` a date too, and a value it can't read is an error that names `ctx.now`. As with any `ctx` key, a `ctx` object inside `data` wins.
 
 ### Format the result
 
@@ -540,7 +538,7 @@ unzip -p out.docx word/document.xml |
 
 ### Durations
 
-`duration` prints a length of time given in milliseconds, or as an ISO 8601 duration such as `P1DT2H30M`. With no argument it gives words, and with a unit it gives a number:
+`duration` prints a length of time given in milliseconds, or as an ISO 8601 duration like `P1DT2H30M`. With no argument it gives words, and with a unit it gives a number:
 
 | Value | Tag | Prints |
 |---|---|---|
@@ -562,13 +560,13 @@ curl -F template=@took.txt -F 'data={"ms":5400000,"iso":"P1DT12H"}' \
 test "$(cat out.txt)" = "$(printf '2 hours\n90\n2 days\n36')"
 ```
 
-The units are `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` and `milliseconds` (or `ms`). In an ISO duration, and for the `months` and `years` units, a month counts 30 days and a year 365. The words are in English, rounded the way people say them: `5 minutes`, `an hour`, `3 days`, `a month`, `2 years`. The sign is ignored, so `-7200000` is also `2 hours`.
+The units are `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` and `milliseconds` (or `ms`). In an ISO duration, and for the `months` and `years` units, a month counts as 30 days and a year as 365. The words are in English, rounded the way people say them, like `5 minutes`, `an hour`, `3 days`, `a month` and `2 years`. The sign is ignored, so `-7200000` is also `2 hours`.
 
-To print the time between two dates, take the difference in a unit, `{{ end | date_diff(start, "minutes") }} minutes`, or turn seconds into milliseconds for `duration`: `{{ ((end | date_diff(start, "seconds")) * 1000) | duration }}`.
+To print the time between two dates, take the difference in a unit, as in `{{ end | date_diff(start, "minutes") }} minutes`, or turn seconds into milliseconds for `duration`: `{{ ((end | date_diff(start, "seconds")) * 1000) | duration }}`.
 
 ## Worked example: an invoice
 
-This invoice groups its lines, shows a subtotal for each group and a running balance on each line, adds tax, and prints the due date and the amount in words. It is a text template so the whole output fits on this page. The same tags work in a DOCX, with the line loop on a table row.
+This invoice groups its lines, shows a subtotal for each group and a running balance on each line, adds tax, and prints the due date and the amount in words. It's a text template so that the whole output fits here, but the same tags work in a DOCX, with the line loop on a table row.
 
 ```bash test
 cat > invoice.txt <<'EOF'
@@ -642,10 +640,10 @@ EOF
 test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
-Each part of it:
+What the parts do:
 
 - `namespace(balance=0)` holds the running balance across both loops, and `sub` holds each group's subtotal.
 - `groupby("group")` sorts the groups, so Design comes before Printing whatever the order of the lines.
-- `"%9.2f" | format(x)` pads numbers to line up; `pad_left` and `pad_right` do the same for text.
-- `words(currency="DOLLAR")` gives `dollars` and `cents`, which `replace` turns into shillings, since Kenyan shillings are not one of the [currencies `words` knows](/docs/templates/filters/#words).
+- `"%9.2f" | format(x)` pads numbers so they line up, and `pad_left` and `pad_right` do the same for text.
+- `words(currency="DOLLAR")` gives `dollars` and `cents`, which `replace` turns into shillings, because Kenyan shillings aren't one of the [currencies `words` knows](/docs/templates/filters/#words).
 - `{%-` and `-%}` remove the line breaks the statements would leave in a text template.

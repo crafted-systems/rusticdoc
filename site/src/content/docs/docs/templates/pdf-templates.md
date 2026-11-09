@@ -5,11 +5,11 @@ sidebar:
   order: 5
 ---
 
-This page shows how to fill an existing PDF: its form fields, tags written in fields and annotations, and a second PDF laid over it. Use it for forms you did not design and cannot rebuild, such as a government form or a supplier's order sheet.
+You can fill an existing PDF through its form fields, through tags written in fields and annotations, or by laying a second PDF over it. That's useful for forms you didn't design and can't rebuild, like a government form or a supplier's order sheet.
 
 ## List the fields
 
-Find out what a PDF has before filling it. A PDF with no form lists nothing.
+List a PDF's fields before you fill it. If it has no form, the list is empty.
 
 ```bash test
 curl -F files=@form.pdf http://localhost:9027/v1/pdf/forms/fields -o fields.json
@@ -24,18 +24,18 @@ jq -e 'map(.name) == ["name", "date", "agree"]' fields.json
 ]
 ```
 
-`kind` is `text`, `checkbox`, `radio`, `choice`, `signature` or `button`. `page` starts at 1, and a choice field also lists its `options`.
+`kind` is `text`, `checkbox`, `radio`, `choice`, `signature` or `button`, and `page` starts at 1. A choice field also lists its `options`.
 
 ## Fill a form
 
 Two routes do this:
 
-| Route | The PDF is sent as | Then |
+| Route | Send the PDF as | Then |
 |---|---|---|
 | `POST /v1/pdf/forms/fill` | `files` | Returns the filled PDF |
-| `POST /v1/render` | `template`, with non-empty `data` | Runs any `steps` on the filled PDF, like any other document |
+| `POST /v1/render` | `template`, with non-empty `data` | Runs any `steps` on the filled PDF, as with any other document |
 
-Both take `data`, `ctx`, `flatten` and `stripAnnotations`, and `outputFilename` names the result.
+Both take `data`, `ctx`, `flatten` and `stripAnnotations`, plus `outputFilename` to name the result.
 
 ```bash test
 curl -F files=@form.pdf \
@@ -55,47 +55,44 @@ curl -F files=@filled.pdf \
 jq -e '.[0].value == "Ada"' fields.json
 ```
 
-On `/v1/render`, a PDF with empty `data` is returned unchanged.
+On `/v1/render`, a PDF sent with empty `data` comes back unchanged.
 
 ### How values match fields
 
-A field's full name is a path into the data. A field named `customer.name` takes `{"customer":{"name":"Ada"}}`, and `items.0.qty` takes the first element's `qty`. Fields with no match keep what they had, and data with no matching field is ignored.
+A field's full name is a path into the data, so a field named `customer.name` takes `{"customer":{"name":"Ada"}}` and `items.0.qty` takes the first element's `qty`. A field with no match keeps what it had, and data with no matching field is ignored.
 
 | Kind | What the value does |
 |---|---|
 | `text` | Stored as text. Numbers and booleans are written out |
-| `checkbox` | On for `true`, a non-zero number, or the strings `true`, `yes`, `on` and `1` in any case, and the checkbox's own on-state. Anything else is off |
-| `radio` | Selects the button whose on-state equals the value. `""` and `Off` clear it. Any other value is a `400` that lists the options |
-| `choice` | A value or a list of values. A value that is not an option is a `400`, unless the field allows free text |
+| `checkbox` | On for `true`, a non-zero number, the strings `true`, `yes`, `on` and `1` in any case, or the checkbox's own on-state. Anything else is off |
+| `radio` | Selects the button whose on-state equals the value. `""` and `Off` clear it. Any other value fails with a `400` that lists the options |
+| `choice` | A value or a list of values. A value that isn't an option fails with a `400`, unless the field allows free text |
 | `signature`, `button` | Left alone |
 
 ## Tags in fields
 
-A field whose value or default value holds a `{{ }}` or `{% %}` tag is rendered, unless the data already has a value under the field's name. A field holding `Dear {{ customer.name }}` becomes `Dear Ada`.
-
-Type the tag in as the field's value in your PDF editor.
+A field whose value or default value holds a `{{ }}` or `{% %}` tag is rendered, unless the data already has a value under the field's name, so a field holding `Dear {{ customer.name }}` becomes `Dear Ada`. You type the tag as the field's value in your PDF editor.
 
 ## Tags in annotations
 
-A `Text`, `FreeText` or `Square` annotation whose contents hold a tag is rendered too. Other annotations, and those with no tag, stay as they are.
+A `Text`, `FreeText` or `Square` annotation is rendered too when its contents hold a tag. Other annotations, and any without a tag, stay as they are.
 
-- **Over a form field**, the rendered value fills the field with the largest overlap.
-- **Over nothing**, the value is drawn on the page inside the annotation's rectangle.
+If the annotation sits over a form field, the rendered value fills the field it overlaps most. If there's nothing under it, the value is drawn on the page inside the annotation's rectangle.
 
-A tag may end in one of two shorthands:
+A tag can end in one of two shorthands:
 
 | Ending | Over a field | Over nothing |
 |---|---|---|
 | `{{ customer.name \| fill }}` | Fills it | Draws the value |
 | `{{ vip \| check }}` | Fills it, so a checkbox follows the checkbox rules above | Draws `X` when the value counts as true, and nothing otherwise |
 
-`fill` and `check` work only as the last filter in a tag that is the annotation's whole content.
+`fill` and `check` only work as the last filter in a tag, and that tag has to be the annotation's whole content.
 
-Tagged annotations are removed from the output. Send `stripAnnotations=false` to keep them.
+Tagged annotations are removed from the output unless you send `stripAnnotations=false`.
 
 ### Filters in PDF tags
 
-PDF tags have `currency`, `number`, `date`, `t` and the [built-in filters](/docs/templates/filters/#built-in-filters), such as `upper` and `default`. A PDF holds no `{% settings %}`, so the request's `lang`, `timezone`, `currency` and `translations` fields, and the service's dictionaries, are what they read. See [Translations and settings](/docs/templates/translations/).
+PDF tags can use `currency`, `number`, `date`, `t` and the [built-in filters](/docs/templates/filters/#built-in-filters), like `upper` and `default`. A PDF holds no `{% settings %}`, so these filters read the request's `lang`, `timezone`, `currency` and `translations` fields and the service's dictionaries instead (see [Translations and settings](/docs/templates/translations/)).
 
 ```bash test
 curl -F template=@form.pdf \
@@ -103,17 +100,17 @@ curl -F template=@form.pdf \
   -F lang=de http://localhost:9027/v1/render -o filled.pdf
 ```
 
-The rich content filters do not exist here. A tag using one is a `422`, with its place in the message:
+The rich content filters don't exist here. A tag that uses one fails with a `422`, and the message says where it is:
 
 ```text
 template error: annotation on page 1: unknown filter: filter image is unknown (in <string>:1)
 ```
 
-A missing value is an error too, and names the place: ``template error: field `greeting`: undefined value``.
+A missing value is also an error that names the place: ``template error: field `greeting`: undefined value``.
 
 ## Flatten
 
-`flatten=true` draws the filled values into the page, and removes the fields, so they can no longer be changed.
+`flatten=true` draws the filled values into the page and removes the fields, so the values can no longer be changed.
 
 ```bash test
 curl -F files=@form.pdf -F 'data={"name":"Ada","agree":true}' -F flatten=true \
@@ -125,28 +122,29 @@ jq -e 'length == 0' fields.json
 
 ## Text in any script
 
-Text the service draws itself, meaning field appearances and annotation values, is drawn one of two ways:
+Field appearances and annotation values are text the service draws itself, and how it draws them depends on the script.
 
-- **Windows Latin text**, which covers Western European languages and symbols such as `€` and `“”`, is drawn in Helvetica. Every viewer has Helvetica built in, so nothing is embedded.
-- **Any other text**, such as Arabic, Hebrew, Greek, Cyrillic, Chinese, Japanese or Korean, is shaped and drawn with the service's own fonts. Arabic letters join, right-to-left text runs right to left, and a value that mixes scripts gets a font for each. Only the glyphs used are embedded, so a Chinese name adds kilobytes, not the 16 MB of the font. Copying or extracting the text gives the value back. Poppler's `pdftotext` is the one exception seen: it swaps the two letters of an Arabic lam-alef ligature, which the file maps in order.
+Windows Latin text, which covers Western European languages and symbols like `€` and `“”`, is drawn in Helvetica. Every viewer has Helvetica built in, so nothing is embedded.
 
-| Value | Drawn with, in the image | Added to the file |
+Anything else, like Arabic, Hebrew, Greek, Cyrillic, Chinese, Japanese or Korean, is shaped and drawn with the service's own fonts. Arabic letters join, right-to-left text runs right to left, and a value that mixes scripts gets a font for each. Only the glyphs used are embedded, so a Chinese name adds kilobytes rather than the font's 16 MB. Copying or extracting the text gives the value back. The one known exception is Poppler's `pdftotext`, which swaps the two letters of an Arabic lam-alef ligature even though the file maps them in order.
+
+| Value | Drawn with (in the image) | Added to the file |
 |---|---|---|
 | `é € ok` | Helvetica, built into viewers | Nothing |
 | `مرحبا بالعالم` | DejaVu Sans, which fontconfig picks for Arabic | About 13 KB |
 | `你好，世界` | Noto Sans CJK SC | About 4 KB |
 
-The fonts are those [conversions use](/docs/guides/fonts/): the image's, the mounted fonts directory and uploaded fonts. Latin letters in such a value use Liberation Sans, Serif or Mono, whichever matches the field's font, and so do Greek, Cyrillic and Hebrew, which those fonts cover. Other scripts take the font fontconfig picks for them. Chinese characters use Noto Sans CJK in its Japanese form when the value has kana, its Korean form when it has Hangul, and its Simplified Chinese form otherwise. A character no font has draws as an empty box.
+The fonts are the same ones [conversions use](/docs/guides/fonts/): the image's, the mounted fonts directory and uploaded fonts. Latin letters in a value like this use Liberation Sans, Serif or Mono, whichever matches the field's font, and so do Greek, Cyrillic and Hebrew, because those fonts cover them. Other scripts get the font fontconfig picks for them. Chinese characters use Noto Sans CJK, in its Japanese form when the value has kana, its Korean form when it has Hangul, and its Simplified Chinese form otherwise. A character that no font has is drawn as an empty box.
 
-Either way, the field's font size (`0` picks the largest that fits), its alignment and its multiline setting apply, and the text is cut at the edge of the box. An annotation value is drawn from the start of its rectangle: the left for left-to-right text, the right for right-to-left text.
+Either way, the field's font size (`0` picks the largest that fits), alignment and multiline setting apply, and the text is cut off at the edge of the box. An annotation value is drawn from the start of its rectangle, which is the left for left-to-right text and the right for right-to-left text.
 
-A filled form normally asks viewers to redraw its fields. One with text outside Latin does not, because viewers that redraw fields, such as Poppler's, draw it as blanks or `?`. The appearances drawn here stand, editable or flattened.
+A filled form normally asks viewers to redraw its fields. A form with text outside Latin doesn't, because viewers that redraw fields, like Poppler's, show that text as blanks or `?`. The appearances the service drew are kept, whether the form is editable or flattened.
 
-To keep the work of one form bounded, the first 4,096 characters of a value are drawn, though the field stores all of it. A form may draw at most 2,000 boxes and 100,000 characters of such text, and more is a `400`.
+To keep the work for one form bounded, only the first 4,096 characters of a value are drawn, though the field still stores all of it. A form can draw at most 2,000 boxes and 100,000 characters of this kind of text, and anything more fails with a `400`.
 
 ## Overlay
 
-`POST /v1/pdf/overlay` takes exactly two PDFs in `files`: the base, then the overlay. Each overlay page is drawn over the matching base page. Extra base pages stay as they are, and extra overlay pages are added at the end. The result is named after the base, unless you send `outputFilename`.
+`POST /v1/pdf/overlay` takes exactly two PDFs in `files`, the base first and then the overlay, and draws each overlay page over the matching base page. Extra base pages stay as they are, and extra overlay pages are added at the end. The result is named after the base unless you send `outputFilename`.
 
 This puts a rendered letter over a letterhead:
 
@@ -159,17 +157,17 @@ curl -F files=@a.pdf -F files=@letter.pdf -F outputFilename=on-letterhead \
 test "$(head -c 4 on-letterhead.pdf)" = "%PDF"
 ```
 
-Anything other than two PDFs is a `400`.
+Anything other than two PDFs gets a `400`.
 
-To do both in one request, render and convert the template on `/v1/render` with the [`underlay` step](/docs/guides/pipeline/#underlay), which lays it over a base PDF the same way.
+To do both in one request, render and convert the template on `/v1/render` with the [`underlay` step](/docs/guides/pipeline/#underlay), which lays the result over a base PDF in the same way.
 
-## What is not supported
+## What isn't supported
 
-- `/v1/templates/validate` does not read PDFs. It answers `ok: false` with `'.pdf' is not a template format`.
-- `/v1/render/batch` does not take a PDF template. It answers `501`.
-- Encrypted PDF forms answer `501`.
-- Rich text, comb fields, date formats and JavaScript actions in a form are not interpreted.
-- Filled forms, editable and flattened, show their values in Chrome and in Preview. They have not been opened in Acrobat. See [known limits](/docs/project/known-limits/).
+- `/v1/templates/validate` doesn't read PDFs. It returns `ok: false` with `'.pdf' is not a template format`.
+- `/v1/render/batch` doesn't take a PDF template, and returns `501`.
+- Encrypted PDF forms fail with `501`.
+- Rich text, comb fields, date formats and JavaScript actions in a form aren't interpreted.
+- Filled forms, both editable and flattened, show their values in Chrome and in Preview. They aren't tested in Acrobat yet (see [known limits](/docs/project/known-limits/)).
 
 ## On the command line
 

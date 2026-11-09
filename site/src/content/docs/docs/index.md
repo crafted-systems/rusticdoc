@@ -4,15 +4,15 @@ description: Where to find how to install, use and run rusticdoc.
 template: doc
 ---
 
-rusticdoc is a Rust document engine that fills Office and PDF templates from JSON, converts them with LibreOffice and runs PDF operations. It ships as one hardened container image, which you call over HTTP or run as a command-line tool.
+rusticdoc fills Office and PDF templates from JSON, converts them with LibreOffice and runs PDF operations on the result. It's written in Rust and ships as one hardened container image. You can call it over HTTP or run it as a command-line tool.
 
-This release is 0.1.0. Read the [known limits](/docs/project/known-limits/) before you depend on it.
+This release is 0.1.0, so read the [known limits](/docs/project/known-limits/) before you depend on it.
 
 ## Start here
 
-- [Quickstart](/docs/start/quickstart/): go from nothing to a filled invoice PDF.
-- [Install](/docs/start/install/): the image, Compose, building from source, the CLI and system requirements.
-- [Concepts](/docs/start/concepts/): how a request flows through templates, steps and engines.
+- [Quickstart](/docs/start/quickstart/) takes you from nothing to a filled invoice PDF.
+- [Install](/docs/start/install/) covers the image, Compose, building from source, the CLI and system requirements.
+- [Concepts](/docs/start/concepts/) explains how a request moves through templates, steps and engines.
 
 ## Write templates
 

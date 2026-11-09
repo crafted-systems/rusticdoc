@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-This page lists every filter, test and function, so you can format numbers, money and dates, translate labels, sum or sort lists, shorten and pad text, and calculate with dates from inside a template. A filter follows a value with `|` and may take arguments: `{{ total | currency("KES") }}`. Filters chain from left to right.
+Filters format numbers, money and dates, translate labels, sum or sort lists, shorten and pad text, and calculate with dates, all from inside a template. A filter follows a value with `|` and can take arguments, as in `{{ total | currency("KES") }}`, and filters chain from left to right. Every filter, test and function is listed below.
 
 ## Where each filter works
 
@@ -18,7 +18,7 @@ This page lists every filter, test and function, so you can format numbers, mone
 
 `currency`, `number`, `date` and `t` read the same settings everywhere: the request's `lang`, `timezone`, `currency` and `translations` fields, then the template's `{% settings %}` and document properties. See [Translations and settings](/docs/templates/translations/).
 
-Using a filter where it does not exist is a `422`:
+The Office-only filters are the [rich content filters](/docs/templates/rich-content/), which have their own page. Use a filter where it doesn't exist and you get a `422`:
 
 ```bash test=fail
 printf '{{ logo | image }}\n' > logo.txt
@@ -26,11 +26,9 @@ curl -F template=@logo.txt -F 'data={"logo":"x"}' \
   http://localhost:9027/v1/render
 ```
 
-The [rich content filters](/docs/templates/rich-content/) have their own page.
-
 ## Language
 
-Without a language, `number`, `currency` and `date` print as they always have: `,` between thousands, `.` before decimals, the currency code in front, and English names. With one, from the request's `lang` field or the template's `lang` setting, they follow that language's [CLDR](https://cldr.unicode.org/) data:
+With no language set, `number`, `currency` and `date` print as they always have, with `,` between thousands, `.` before decimals, the currency code in front, and English names. Set one, in the request's `lang` field or the template's `lang` setting, and they follow that language's [CLDR](https://cldr.unicode.org/) data:
 
 | `lang` | `1234.5 \| number(2)` | `1500 \| currency("EUR")` | `"2026-01-05" \| date("%A %d %B")` |
 |---|---|---|---|
@@ -42,9 +40,9 @@ Without a language, `number`, `currency` and `date` print as they always have: `
 | `es` | `1234,50` | `1500,00 €` | `lunes 05 enero` |
 | `ja` | `1,234.50` | `€1,500.00` | `月曜日 05 1月` |
 
-The spaces are the ones CLDR uses: a narrow no-break space (U+202F) between thousands in French, and a no-break space (U+00A0) before `€`. Spanish and Polish group only from five digits, so `1234` stays together.
+The spaces are the ones CLDR uses: a narrow no-break space (U+202F) between thousands in French, and a no-break space (U+00A0) before `€`. Spanish and Polish only group from five digits, so `1234` stays together.
 
-Languages with data: `ar`, `bg`, `ca`, `cs`, `da`, `de` (and `de-at`, `de-ch`, `de-li`), `el`, `en` (and `en-au`, `en-ca`, `en-gb`, `en-ie`, `en-in`, `en-nz`, `en-us`, `en-za`), `es` (and `es-419`, `es-mx`, `es-us`), `et`, `eu`, `fi`, `fr` (and `fr-be`, `fr-ca`, `fr-ch`), `gl`, `he`, `hi`, `hr`, `hu`, `id`, `is`, `it` (and `it-ch`), `ja`, `ko`, `lt`, `lv`, `ms`, `nb`, `nl` (and `nl-be`), `nn`, `no`, `pl`, `pt` (and `pt-br`, `pt-pt`), `ro`, `ru`, `sk`, `sl`, `sr`, `sv` (and `sv-fi`), `th`, `tr`, `uk`, `vi`, `zh` (and `zh-hk`, `zh-tw`). Another region falls back to its language, so `fr-lu` formats as `fr`. A language with no data at all formats as if none were set, though `t` still uses it.
+The languages with data are `ar`, `bg`, `ca`, `cs`, `da`, `de` (and `de-at`, `de-ch`, `de-li`), `el`, `en` (and `en-au`, `en-ca`, `en-gb`, `en-ie`, `en-in`, `en-nz`, `en-us`, `en-za`), `es` (and `es-419`, `es-mx`, `es-us`), `et`, `eu`, `fi`, `fr` (and `fr-be`, `fr-ca`, `fr-ch`), `gl`, `he`, `hi`, `hr`, `hu`, `id`, `is`, `it` (and `it-ch`), `ja`, `ko`, `lt`, `lv`, `ms`, `nb`, `nl` (and `nl-be`), `nn`, `no`, `pl`, `pt` (and `pt-br`, `pt-pt`), `ro`, `ru`, `sk`, `sl`, `sr`, `sv` (and `sv-fi`), `th`, `tr`, `uk`, `vi` and `zh` (and `zh-hk`, `zh-tw`). Any other region falls back to its language, so `fr-lu` formats as `fr`. A language with no data at all formats as if none were set, though `t` still uses it.
 
 ## currency
 
@@ -53,7 +51,7 @@ Languages with data: `ar`, `bg`, `ca`, `cs`, `da`, `de` (and `de-at`, `de-ch`, `
 {{ value | currency("KES") }}
 ```
 
-Without a language, it prints a number with two decimals, commas between thousands, and the code in front.
+Without a language, `currency` prints a number with two decimals, commas between thousands, and the code in front.
 
 | Value | Tag | Prints |
 |---|---|---|
@@ -72,7 +70,7 @@ curl -F template=@money.txt -F 'data={"a":1234.5,"b":0.5,"c":999.999}' \
 test "$(cat out.txt)" = 'USD 1,234.50|0.50|EUR 1,000.00'
 ```
 
-With a language, the symbol goes where the language puts it, and the amount has the currency's own decimals: none for JPY, three for KWD, two for most.
+With a language, the symbol goes where that language puts it, and the amount has the currency's own decimals: none for JPY, three for KWD, two for most.
 
 | `lang` | Tag | Prints |
 |---|---|---|
@@ -90,10 +88,9 @@ curl -F template=@money.txt -F lang=de \
 test "$(perl -CSD -pe 's/\x{a0}/_/g' out.txt)" = '1.500,00_€|1.500_¥'
 ```
 
-- The code is any text you pass. A code CLDR does not know prints as written, with two decimals.
-- The code can come from data, as in `{{ total | currency(currency) }}`.
-- With no argument, the request's `currency` field applies, then the template's [`currency` setting](/docs/templates/translations/). `currency("")` prints no code even when one is set.
-- The value must be a number. A string such as `"12"` is an error: `cannot convert string to f64`. So is `null`.
+The code is any text you pass, and it can come from data, as in `{{ total | currency(currency) }}`. A code CLDR doesn't know prints as written, with two decimals. With no argument, the request's `currency` field applies, then the template's [`currency` setting](/docs/templates/translations/), and `currency("")` prints no code even when one is set.
+
+The value must be a number. A string like `"12"` is an error (`cannot convert string to f64`), and so is `null`.
 
 ## number
 
@@ -102,7 +99,7 @@ test "$(perl -CSD -pe 's/\x{a0}/_/g' out.txt)" = '1.500,00_€|1.500_¥'
 {{ value | number(2) }}
 ```
 
-Prints a number with separators between thousands: up to three decimals with trailing zeros dropped, or exactly as many as the argument says, from 0 to 20. Halves round away from zero.
+`number` prints a number with separators between thousands and up to three decimals, with trailing zeros dropped. Pass an argument, from 0 to 20, to print exactly that many decimals instead. Halves round away from zero.
 
 | Value | Tag | No language | `fr` | `de-ch` |
 |---|---|---|---|---|
@@ -127,7 +124,7 @@ The value must be a number, as for `currency`.
 {{ issued | date("%d %B %Y") }}
 ```
 
-The one argument is a format. Without it the format is `%Y-%m-%d`. A second argument is an error (`too many arguments`): the time zone comes from the request's `timezone` field or the template's [`timezone` setting](/docs/templates/translations/#the-four-settings).
+The only argument is a format, which defaults to `%Y-%m-%d`. A second argument is an error (`too many arguments`), because the time zone comes from the request's `timezone` field or the template's [`timezone` setting](/docs/templates/translations/#the-four-settings).
 
 ### What it accepts
 
@@ -140,11 +137,11 @@ The one argument is a format. Without it the format is `%Y-%m-%d`. A second argu
 | `2026-11-06 10:20:30+0300` | A moment, shown in the time zone |
 | `1793980800`, `1793980800.5` | Unix seconds, shown in the time zone |
 
-Anything else, such as `06/11/2026`, is refused: `date: cannot parse "06/11/2026"; use ISO 8601 or unix seconds`.
+Anything else, like `06/11/2026`, fails with `date: cannot parse "06/11/2026"; use ISO 8601 or unix seconds`.
 
 ### Format strings
 
-Formats follow [chrono's `strftime` syntax](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). An unknown specifier is an error: `date: invalid format "%Q"`.
+Formats follow [chrono's `strftime` syntax](https://docs.rs/chrono/latest/chrono/format/strftime/index.html), and an unknown specifier is an error: `date: invalid format "%Q"`.
 
 | Specifier | Prints, for 6 November 2026 at 10:20:30 |
 |---|---|
@@ -156,7 +153,7 @@ Formats follow [chrono's `strftime` syntax](https://docs.rs/chrono/latest/chrono
 | `%H`, `%M`, `%S` | `10`, `20`, `30` |
 | `%j` | `310`, the day of the year |
 
-With a language, `%B`, `%b`, `%A`, `%a`, `%p` and `%P` print CLDR's names in it, and everything else stays as it is. In languages where a month changes form inside a date, `%B` takes the form for a date (`5 января` in Russian) when the format has a day of the month (`%d`, `%e`), and the form for a month alone (`январь 2026`) when it does not.
+With a language, `%B`, `%b`, `%A`, `%a`, `%p` and `%P` print CLDR's names in it, and everything else stays as it is. In languages where a month changes form inside a date, `%B` takes the form for a date (`5 января` in Russian) when the format has a day of the month (`%d`, `%e`), and the form for a month alone (`январь 2026`) when it doesn't.
 
 ```bash test
 printf '{{ d | date("%%A %%d %%B %%Y") }}|{{ d | date("%%B %%Y") }}' > dated.txt
@@ -167,7 +164,7 @@ test "$(cat out.txt)" = 'понедельник 05 января 2026|январ�
 
 ### Time zones
 
-The time zone is an offset such as `+02:00` or `-05:00`, or an IANA zone such as `Europe/Paris` or `America/New_York`, which follows daylight saving. The default is UTC. It changes only values that are a moment: those with a zone, and unix seconds. A value with no zone prints as written.
+The time zone is an offset like `+02:00` or `-05:00`, or an IANA zone like `Europe/Paris` or `America/New_York`, which follows daylight saving. The default is UTC. It only changes values that are a moment (those with a zone, and unix seconds), so a value with no zone prints as written.
 
 ```bash test
 cat > tz.txt <<'EOF'
@@ -179,7 +176,7 @@ curl -F template=@tz.txt -F timezone=Europe/Paris \
 test "$(cat out.txt)" = "$(printf '13:00\n14:00')"
 ```
 
-A zone that is neither is refused: `timezone "Mars/Olympus" is neither an offset like +02:00 nor an IANA zone like Europe/Paris`. As a request field that is a `400`; in a template setting, a `422` when `date` runs.
+A zone that's neither fails with `timezone "Mars/Olympus" is neither an offset like +02:00 nor an IANA zone like Europe/Paris`. In a request field that's a `400`, and in a template setting it's a `422` when `date` runs.
 
 The sample invoice uses `date` in its issue and payment lines:
 
@@ -192,18 +189,18 @@ unzip -p invoice-filled.docx word/document.xml |
 
 ## t
 
-It takes no arguments.
+`t` takes no arguments.
 
 ```text
 {{ "greeting" | t }}
 {{ label | t }}
 ```
 
-It looks the key up in the language, then in the language it falls back to (`fr` for `fr-ca`), then in the template's translations with no language, and prints the key itself when none has it. The request's `translations` come first, then the service's dictionaries, then the template's own. See [Translations and settings](/docs/templates/translations/).
+It looks the key up in the language, then in the language it falls back to (`fr` for `fr-ca`), then in the template's translations with no language, and prints the key itself when none of them has it. The request's `translations` come first, then the service's dictionaries, then the template's own. See [Translations and settings](/docs/templates/translations/).
 
 ## Built-in filters
 
-These come from minijinja and work in every template. Each example here ran as written.
+These come from minijinja and work in every template. Each example here was run as written.
 
 ### Text
 
@@ -251,7 +248,7 @@ These are the ones to use for totals. For `o` = `[{"a":1},{"a":0}]`:
 | `sort` | `{{ o \| sort(attribute="a") \| map(attribute="a") \| list }}` | `[0, 1]` |
 | `groupby` | `{% for g in o \| groupby("a") %}{{ g.grouper }}:{{ g.list \| length }} {% endfor %}` | `0:1 1:1 ` |
 
-`map` also applies a filter to each item: `{{ ["a"] | map("upper") | list }}`.
+`map` can also apply a filter to each item, as in `{{ ["a"] | map("upper") | list }}`.
 
 ### Numbers and conversion
 
@@ -275,7 +272,7 @@ These are the ones to use for totals. For `o` = `[{"a":1},{"a":0}]`:
 
 ### Missing values and escaping
 
-| Filter | Example | Does |
+| Filter | Example | What it does |
 |---|---|---|
 | `default`, `d` | `{{ nope \| default("x") }}` | Replaces an undefined value. `default("x", true)` also replaces anything false, including `null` |
 | `escape`, `e` | `{{ "<" \| escape }}` | Prints `&lt;`. See [escaping](/docs/templates/syntax/#escaping) |
@@ -301,13 +298,13 @@ curl -F template=@total.txt -F data=@items.json \
 grep -x 'Lamp, Plug: EUR 20.00' out.txt
 ```
 
-### Filters that do not exist
+### Filters that don't exist
 
-`urlencode`, `wordcount`, `striptags`, `center` and `nl2br` are not in this build. Each gives `unknown filter`.
+`urlencode`, `wordcount`, `striptags`, `center` and `nl2br` aren't in this build, and each one gives `unknown filter`.
 
 ## Text helpers
 
-These work in every template. They count characters, not bytes, so `é` is one character. A letter written as a base letter and a separate accent mark counts as two.
+These work in every template. They count characters, not bytes, so `é` is one character, but a letter written as a base letter and a separate accent mark counts as two.
 
 They take text or a number. `null` counts as empty text, and a list or an object is an error: `expected text or a number`.
 
@@ -319,9 +316,9 @@ They take text or a number. `null` counts as empty text, and a list or an object
 {{ title | truncate(40, words=true) }}
 ```
 
-Shortens text to at most `length` characters, `end` included. Text that fits is unchanged. `end` is `…` unless you pass another, as the second argument or as `end=`; `end=""` cuts with no mark.
+`truncate` shortens text to at most `length` characters, `end` included, and leaves text that fits unchanged. `end` is `…` unless you pass something else, as the second argument or as `end=`, and `end=""` cuts with no mark.
 
-With `words=true`, the cut never falls inside a word: the text stops at the last space that fits. If the first word alone is too long, only `end` remains.
+With `words=true`, the cut never falls inside a word, because the text stops at the last space that fits. If the first word alone is too long, only `end` remains.
 
 | Value | Tag | Prints |
 |---|---|---|
@@ -338,9 +335,9 @@ A negative length is an error.
 {{ name | unaccent }}
 ```
 
-Removes accents and other marks above and below letters: `crème brûlée` gives `creme brulee`, and `Łódź` gives `Lodz`. Letters that are not a base letter plus a mark are spelled with plain letters: `ß` gives `ss`, `æ` gives `ae`, `ø` gives `o`. Scripts whose marks change the letter, such as Devanagari vowel signs or Japanese kana, are left as they are.
+`unaccent` removes accents and other marks above and below letters, so `crème brûlée` gives `creme brulee` and `Łódź` gives `Lodz`. Letters that aren't a base letter plus a mark are spelled with plain letters: `ß` gives `ss`, `æ` gives `ae` and `ø` gives `o`. Scripts whose marks change the letter, like Devanagari vowel signs or Japanese kana, are left as they are.
 
-Use it for file names, identifiers and systems that accept only ASCII, and chain it: `{{ name | unaccent | lower | replace(" ", "-") }}`.
+Use it for file names, identifiers and systems that only accept ASCII, and chain it with other filters: `{{ name | unaccent | lower | replace(" ", "-") }}`.
 
 ### pad_left and pad_right
 
@@ -350,7 +347,7 @@ Use it for file names, identifiers and systems that accept only ASCII, and chain
 {{ name | pad_right(20, char=".") }}
 ```
 
-Fill text out to `width` characters, with spaces or the one character you pass. `pad_left` adds the fill in front, which right-aligns; `pad_right` adds it after. Text already that long is unchanged, never cut: chain `truncate` first for a fixed width.
+These fill text out to `width` characters, with spaces or the one character you pass. `pad_left` adds the fill in front, which right-aligns the text, and `pad_right` adds it after. Text that's already that long is left as it is, never cut, so chain `truncate` first for a fixed width.
 
 | Value | Tag | Prints |
 |---|---|---|
@@ -358,7 +355,7 @@ Fill text out to `width` characters, with spaces or the one character you pass. 
 | `"é"` | `pad_right(3, ".")` | `é..` |
 | `"abcdef"` | `pad_left(3)` | `abcdef` |
 
-The width must be between 0 and 10,000, and the fill exactly one character. Anything else is an error, such as `pad_left: the width must be between 0 and 10000, got 100000`.
+The width must be between 0 and 10,000, and the fill must be exactly one character. Anything else is an error, like `pad_left: the width must be between 0 and 10000, got 100000`.
 
 ```bash test
 cat > text.txt <<'EOF'
@@ -382,7 +379,7 @@ test "$(cat out.txt)" = "$(cat expected.txt)"
 
 ## Number helpers
 
-These work in every template. [Calculations](/docs/templates/calculations/) shows them alongside the built-in arithmetic.
+These work in every template, and [Calculations](/docs/templates/calculations/) shows them alongside the built-in arithmetic.
 
 ### avg
 
@@ -391,9 +388,9 @@ These work in every template. [Calculations](/docs/templates/calculations/) show
 {{ lines | avg(attribute="price") }}
 ```
 
-The mean of a list of numbers, or of one attribute of a list of objects. The attribute can be a path such as `"totals.net"`. Items whose value is missing or `null` are left out of the count. An empty list, or one with no values, gives `null`; add `| default(0, true)` to print `0` instead. A value that is not a number is an error: `avg: can only average numbers, got string`.
+`avg` gives the mean of a list of numbers, or of one attribute of a list of objects. The attribute can be a path like `"totals.net"`. Items whose value is missing or `null` are left out of the count. An empty list, or one with no values, gives `null`, so add `| default(0, true)` to print `0` instead. A value that isn't a number is an error: `avg: can only average numbers, got string`.
 
-A whole result prints without decimals: `{{ [1, 2, 6] | avg }}` prints `3`, and `{{ [1, 2] | avg }}` prints `1.5`.
+A whole result prints without decimals: `{{ [1, 2, 6] | avg }}` prints `3`, while `{{ [1, 2] | avg }}` prints `1.5`.
 
 ### ceil and floor
 
@@ -402,7 +399,7 @@ A whole result prints without decimals: `{{ [1, 2, 6] | avg }}` prints `3`, and 
 {{ 2.9 | floor }}
 ```
 
-The next whole number up or down, as a whole number: `3` and `2`, not `3.0`. For negative numbers, up is toward zero: `{{ -2.1 | ceil }}` is `-2`. A value that is not a number is an error. To round to decimals instead, use `round(2, "ceil")`.
+These give the next whole number up or down, as a whole number, so you get `3` and `2` rather than `3.0`. For negative numbers, up is towards zero, so `{{ -2.1 | ceil }}` is `-2`. A value that isn't a number is an error. To round to decimals instead, use `round(2, "ceil")`.
 
 ### words
 
@@ -413,7 +410,7 @@ The next whole number up or down, as a whole number: `3` and `2`, not `3.0`. For
 {{ 1234 | words(lang="fr") }}
 ```
 
-Spells a number out.
+`words` spells a number out.
 
 | Value | Tag | Prints |
 |---|---|---|
@@ -426,10 +423,13 @@ Spells a number out.
 | `81` | `words(lang="fr")` | `quatre-vingt-un` |
 | `70` | `words(lang="fr-BE")` | `septante` |
 
-- **Languages.** English (`en`), French (`fr`, with `fr-BE` and `fr-CH` for Belgian and Swiss numbers) and Ukrainian (`uk`). Without `lang=`, the template's [`lang` setting](/docs/templates/translations/) applies, and a language with no words, or no setting, gives English. `lang=` with a language that has no words is an error: `words: no words for language "de"; use en, fr or uk`.
-- **Currencies.** `currency=` takes an ISO 4217 code, in any case. The codes with words are AED, ARS, AUD, BRL, CAD, CHF, CLP, CNY, COP, CRC, DZD, EUR, GBP, HKD, IDR, ILS, INR, JPY, KRW, KWD, KZT, MXN, MYR, NOK, NZD, PEN, PHP, PLN, QAR, RUB, SAR, SGD, THB, TRY, TWD, UAH, USD, UYU, VND and ZAR, plus the generic `DOLLAR`, `DINAR`, `PESO` and `RIYAL`. The amount is rounded to cents first. Another code is an error; for a currency with no words, use `DOLLAR` and `replace`, as the [worked invoice](/docs/templates/calculations/#worked-example-an-invoice) does.
-- **Limits.** Numbers up to 999,999,999,999,999 either side of zero. A larger one is refused: `words: 1e15 is too large`. An ordinal must be a whole number of 0 or more, and `ordinal` and `currency` cannot be combined.
-- The value must be a number; text such as `"12"` is an error. Convert it with `| int` or `| float`.
+The languages are English (`en`), French (`fr`, with `fr-BE` and `fr-CH` for Belgian and Swiss numbers) and Ukrainian (`uk`). Without `lang=`, the template's [`lang` setting](/docs/templates/translations/) applies, and you get English if that language has no words or there's no setting. If you pass `lang=` a language that has no words, though, it's an error: `words: no words for language "de"; use en, fr or uk`.
+
+`currency=` takes an ISO 4217 code, in any case. The codes with words are AED, ARS, AUD, BRL, CAD, CHF, CLP, CNY, COP, CRC, DZD, EUR, GBP, HKD, IDR, ILS, INR, JPY, KRW, KWD, KZT, MXN, MYR, NOK, NZD, PEN, PHP, PLN, QAR, RUB, SAR, SGD, THB, TRY, TWD, UAH, USD, UYU, VND and ZAR, plus the generic `DOLLAR`, `DINAR`, `PESO` and `RIYAL`. The amount is rounded to cents first. Any other code is an error, so for a currency with no words, use `DOLLAR` and `replace`, as the [worked invoice](/docs/templates/calculations/#worked-example-an-invoice) does.
+
+Numbers can go up to 999,999,999,999,999 either side of zero, and a larger one fails with `words: 1e15 is too large`. An ordinal must be a whole number of 0 or more, and you can't combine `ordinal` and `currency`.
+
+The value must be a number, so text like `"12"` is an error. Convert it with `| int` or `| float`.
 
 ```bash test
 cat > words.txt <<'EOF'
@@ -451,9 +451,9 @@ test "$(cat out.txt)" = "$(cat expected.txt)"
 
 ## Date helpers
 
-These work in every template. They read dates as [`date`](#what-it-accepts) does, ISO 8601 text or unix seconds, and return ISO 8601 text, which `date` can print in any format. [Calculations](/docs/templates/calculations/#dates) explains each rule with examples.
+These work in every template. They read dates the way [`date`](#what-it-accepts) does, as ISO 8601 text or unix seconds, and return ISO 8601 text, which `date` can print in any format. [Calculations](/docs/templates/calculations/#dates) explains each rule with examples.
 
-| Filter | Does | Example | Gives |
+| Filter | What it does | Example | Result |
 |---|---|---|---|
 | `date_add(amount, unit)` | Adds whole units | `"2028-01-31" \| date_add(1, "month")` | `2028-02-29` |
 | `date_sub(amount, unit)` | Subtracts whole units | `"2028-03-31" \| date_sub(1, "month")` | `2028-02-29` |
@@ -462,7 +462,7 @@ These work in every template. They read dates as [`date`](#what-it-accepts) does
 | `date_diff(other, unit)` | Whole units from `other` to the value | `"2026-12-25" \| date_diff("2026-11-06", "weeks")` | `7` |
 | `duration(unit)` | An interval in words or in a unit | `5400000 \| duration` | `2 hours` |
 
-- The units are `year`, `quarter`, `month`, `week`, `day`, `hour`, `minute` and `second`, singular or plural. `date_add`, `date_sub` and `date_diff` count days when the unit is left out.
+- The units are `year`, `quarter`, `month`, `week`, `day`, `hour`, `minute` and `second`, singular or plural. `date_add`, `date_sub` and `date_diff` count days when you leave the unit out.
 - Adding months keeps the day of the month, or uses the month's last day when the target month is shorter.
 - A date stays a date, a time with no zone stays one, and a time with a zone keeps its offset. Unix seconds come back as UTC.
 - A week starts on Monday.
@@ -489,21 +489,21 @@ test "$(cat out.txt)" = "$(printf '2028-02-29\n2028-01-31\n7\n2 hours')"
 {{ "P1DT12H" | duration("hours") }}
 ```
 
-Takes milliseconds, or an ISO 8601 duration such as `P1Y2M3DT4H5M6S` or `PT1H30M`. With no argument, or `"human"`, it prints words: `a few seconds`, `a minute`, `5 minutes`, `an hour`, `3 hours`, `a day`, `12 days`, `a month`, `4 months`, `a year`, `2 years`. The words are in English and ignore the sign.
+`duration` takes milliseconds, or an ISO 8601 duration like `P1Y2M3DT4H5M6S` or `PT1H30M`. With no argument, or with `"human"`, it prints words: `a few seconds`, `a minute`, `5 minutes`, `an hour`, `3 hours`, `a day`, `12 days`, `a month`, `4 months`, `a year`, `2 years`. The words are in English and ignore the sign.
 
-With a unit, `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` or `milliseconds` (`ms`), it prints a number, with decimals when needed: `5400000 | duration("hours")` is `1.5`. A month counts 30 days and a year 365. Text that is not an ISO duration, such as `"2 hours"`, is an error.
+With a unit, which is one of `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` or `milliseconds` (`ms`), it prints a number, with decimals when needed, so `5400000 | duration("hours")` is `1.5`. A month counts as 30 days and a year as 365. Text that isn't an ISO duration, like `"2 hours"`, is an error.
 
 ## Tests
 
-`is` asks a question about a value: `{% if qty is odd %}`. The tests available are `defined`, `undefined`, `none`, `empty`, `boolean`, `number`, `integer` (or `int`), `float`, `string`, `sequence`, `iterable`, `mapping`, `odd`, `even`, `divisibleby`, `startingwith`, `endingwith`, `lower`, `upper`, `in`, `true`, `false`, `safe`, `sameas`, `eq`, `ne`, `lt`, `le`, `gt` and `ge`.
+`is` asks a question about a value, as in `{% if qty is odd %}`. The tests available are `defined`, `undefined`, `none`, `empty`, `boolean`, `number`, `integer` (or `int`), `float`, `string`, `sequence`, `iterable`, `mapping`, `odd`, `even`, `divisibleby`, `startingwith`, `endingwith`, `lower`, `upper`, `in`, `true`, `false`, `safe`, `sameas`, `eq`, `ne`, `lt`, `le`, `gt` and `ge`.
 
-`empty` works in every template. It is true for `null`, a missing value, `""`, `[]` and `{}`, and false for `0` and `false`: `{% if notes is not empty %}`. [Conditions](/docs/templates/conditions/#tests) explains each test.
+`empty` works in every template. It's true for `null`, a missing value, `""`, `[]` and `{}`, and false for `0` and `false`, so you can write `{% if notes is not empty %}`. [Conditions](/docs/templates/conditions/#tests) explains each test.
 
 ## Functions
 
 `range(3)` gives `[0, 1, 2]`, `dict(a=1)` gives an object, and `namespace(x=1)` gives an object a loop can change with `{% set ns.x = ... %}`.
 
-`now()` gives the time of the render in UTC, to the second, such as `2026-11-06T10:20:00Z`, in every template. Send `ctx={"now":"2026-11-06T10:20:00Z"}` with the request to fix it, so the output is the same on every run:
+`now()` works in every template and gives the time of the render in UTC, to the second, like `2026-11-06T10:20:00Z`. To pin it, send `ctx={"now":"2026-11-06T10:20:00Z"}` with the request, so the output is the same on every run:
 
 ```bash test
 printf '{{ now() }}|{{ now() | date_add(30) }}' > now.txt

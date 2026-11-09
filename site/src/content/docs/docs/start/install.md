@@ -5,17 +5,17 @@ sidebar:
   order: 2
 ---
 
-This page shows you how to run the service with the right container flags, with Compose, and from source, and how to run the CLI. It ends with what the machine needs.
+You can run rusticdoc from the published image, with Compose, or from a source build. The same binary is also the CLI.
 
 ## The image
 
-The image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, for amd64 and arm64. While the repository is private, so is the image: sign in with `docker login ghcr.io` and a GitHub token that can read packages before you pull it. You can also build it from a checkout of the repository:
+The image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, built for amd64 and arm64. The image stays private for as long as the repository does, so sign in with `docker login ghcr.io` and a GitHub token that can read packages before you pull it. You can also build it from a checkout of the repository:
 
 ```bash
 docker build -t rusticdoc .
 ```
 
-The build pins its base images by digest. The result is one Rust binary on Debian 13 with LibreOffice, its Python bridge, qpdf and pdfcpu. It has no Node, Java or Chromium. It runs as user 1001 and listens on port 9027.
+The build pins its base images by digest. What you get is one Rust binary on Debian 13 with LibreOffice, its Python bridge, qpdf and pdfcpu. There's no Node, Java or Chromium in it. It runs as user 1001 and listens on port 9027.
 
 ## Run it hardened
 
@@ -28,16 +28,16 @@ docker run -d --name rusticdoc \
 
 | Flag | Why |
 |---|---|
-| `--read-only` | A compromised engine cannot change the image's files |
-| `--cap-drop ALL` | The service binds an unprivileged port and needs no Linux capabilities |
+| `--read-only` | A compromised engine can't change the image's files |
+| `--cap-drop ALL` | The service binds an unprivileged port, so it needs no Linux capabilities |
 | `--security-opt no-new-privileges` | Nothing inside can gain privileges through a setuid binary |
-| `--tmpfs /tmp` | Scratch space for conversions. With `--read-only` and no `/tmp`, a conversion answers `500` |
-| `--tmpfs /home/rusticdoc:uid=1001,gid=1001` | A writable home directory for the engines. A DOCX conversion also worked without it, but Compose and the Kubernetes manifest both provide one, so that is the setup to copy |
+| `--tmpfs /tmp` | Scratch space for conversions. With `--read-only` and no `/tmp`, a conversion returns `500` |
+| `--tmpfs /home/rusticdoc:uid=1001,gid=1001` | A writable home directory for the engines. A DOCX conversion works without one, but Compose and the Kubernetes manifest both provide it, so that's the setup to copy |
 | `-p 127.0.0.1:9027:9027` | Publishes the port on this machine only |
 
-Do not add `--init`. The service runs as PID 1 so that it can close its `/proc/1/environ` to the user LibreOffice runs as. With `--init`, PID 1 is `docker-init`, and its environment, which holds your keys, is readable from inside the container.
+Don't add `--init`. The service runs as PID 1 so that it can close its `/proc/1/environ` to the user LibreOffice runs as. With `--init`, PID 1 is `docker-init` instead, and its environment, which holds your keys, can be read from inside the container.
 
-With no credentials, the service answers anyone and warns at every start. Set `RUSTICDOC_API_KEYS` before you publish the port more widely. [Docker](/docs/operate/docker/) has more, including limits on memory and processes.
+With no credentials set, the service accepts requests from anyone and logs a warning every time it starts. Set `RUSTICDOC_API_KEYS` before you publish the port more widely. [Docker](/docs/operate/docker/) goes further, including limits on memory and processes.
 
 ## Compose
 
@@ -58,22 +58,22 @@ RUSTICDOC_IMAGE=ghcr.io/vmosoti/rusticdoc:0.1.0 \
 
 ## Build from source
 
-You need the Rust toolchain that `rust-toolchain.toml` pins, which is 1.99.1. `rustup` installs it for you.
+You need the Rust toolchain pinned in `rust-toolchain.toml`, which is 1.99.1. `rustup` installs it for you.
 
 ```bash
 cargo build --release -p rusticdoc
 ./target/release/rusticdoc serve --bind 127.0.0.1:9027
 ```
 
-The binary looks for its engines at fixed paths, not on your `PATH`. Set `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN` and `RUSTICDOC_PDFCPU_BIN` if yours are elsewhere. LibreOffice also needs its Python UNO bridge, which is the `python3-uno` package on Debian. The [configuration reference](/docs/reference/configuration/) lists the paths it tries.
+The binary looks for its engines at fixed paths, not on your `PATH`. If yours are somewhere else, set `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN` and `RUSTICDOC_PDFCPU_BIN`. LibreOffice also needs its Python UNO bridge, which is the `python3-uno` package on Debian. The [configuration reference](/docs/reference/configuration/) lists the paths it tries.
 
-`rusticdoc engines` shows what it found. An engine that is missing fails only the steps that need it, with `503`. On a Mac with no engines installed, text templates rendered and a `convert` step answered `503`. The render memory limit relies on Linux and has not been shown to hold on macOS, so do not serve untrusted templates from a Mac.
+`rusticdoc engines` shows what it found. A missing engine only fails the steps that need it, with `503`. On a Mac with no engines installed, for example, text templates render and a `convert` step returns `503`. The memory limit on rendering relies on Linux and isn't known to hold on macOS, so don't serve untrusted templates from a Mac.
 
 ## The CLI
 
 ### Download it
 
-Each release attaches the CLI for Linux and macOS to its [GitHub release](https://github.com/vmosoti/rusticdoc/releases), with a `SHA256SUMS` file:
+Every [GitHub release](https://github.com/vmosoti/rusticdoc/releases) has the CLI for Linux and macOS attached, along with a `SHA256SUMS` file:
 
 | System | Archive |
 |---|---|
@@ -82,7 +82,7 @@ Each release attaches the CLI for Linux and macOS to its [GitHub release](https:
 | macOS, Apple silicon | `rusticdoc-0.1.0-aarch64-apple-darwin.tar.gz` |
 | macOS, Intel | `rusticdoc-0.1.0-x86_64-apple-darwin.tar.gz` |
 
-While the repository is private, download with the GitHub CLI, which uses your sign-in. This fetches the Apple silicon build, checks it and puts it on your `PATH`:
+While the repository is private, download with the GitHub CLI, which uses your sign-in. These commands fetch the Apple silicon build, check it and put it on your `PATH`:
 
 ```bash
 gh release download v0.1.0 --repo vmosoti/rusticdoc \
@@ -95,21 +95,21 @@ rusticdoc --version
 
 On Linux, `sha256sum --check --ignore-missing SHA256SUMS` does the check.
 
-- **macOS** marks a downloaded binary as quarantined, and the builds are not notarised. If it refuses to open, run `xattr -d com.apple.quarantine /usr/local/bin/rusticdoc`.
-- **Linux** builds need glibc 2.35 or newer, as on Ubuntu 22.04 and Debian 12, and fontconfig for HTML layout to find fonts.
-- **Windows** has no build: the CLI's process handling is Unix-only. Run the Linux build under WSL, or use the image as below.
+- macOS quarantines a downloaded binary, and the builds aren't notarised. If it refuses to open, run `xattr -d com.apple.quarantine /usr/local/bin/rusticdoc`.
+- The Linux builds need glibc 2.35 or newer, which Ubuntu 22.04 and Debian 12 have. They also need fontconfig so that HTML layout can find fonts.
+- There's no Windows build, because the CLI's process handling is Unix-only. Run the Linux build under WSL, or use the image as shown below.
 
-The downloaded CLI renders, validates and runs the PDF operations its own engine covers. `convert` steps need LibreOffice installed, and some PDF operations need qpdf or pdfcpu, as [build from source](#build-from-source) describes. `rusticdoc engines` shows what it found.
+By itself, the downloaded CLI can render, validate and run the PDF operations that its built-in engine covers. A `convert` step needs LibreOffice installed, and some PDF operations need qpdf or pdfcpu. [Build from source](#build-from-source) explains how the binary finds them, and `rusticdoc engines` shows what it found.
 
 ### From the image
 
-The service and the CLI are the same binary, so the image has the CLI in it:
+The service and the CLI are the same binary, so the image already has the CLI in it:
 
 ```bash
 docker run --rm --entrypoint rusticdoc ghcr.io/vmosoti/rusticdoc:0.1.0 engines
 ```
 
-To work on files in your current directory, mount it. The container's user has to be able to write there, so on Linux pass your own user ID. Group 0 owns the home directory, so keep that group:
+To work on files in your current directory, mount it. The container's user has to be able to write there, so on Linux pass your own user ID. Keep group 0, because that group owns the home directory:
 
 ```bash
 docker run --rm -v "$PWD:/work" -w /work --user "$(id -u):0" \
@@ -121,18 +121,18 @@ From a source build, `cargo build --release -p rusticdoc` gives you the same com
 
 The CLI reads `--data` from a file.
 
-The CLI renders templates in its own process, with no separate worker and no memory limit, because it assumes the template is yours. `serve` isolates them. Run untrusted templates through the service. The [CLI reference](/docs/reference/cli/) lists the commands.
+It renders templates in its own process, with no separate worker and no memory limit, because it assumes the template is yours. `serve` isolates them, so run untrusted templates through the service. The [CLI reference](/docs/reference/cli/) lists the commands.
 
 ## System requirements
 
-| | What is known |
+| | Notes |
 |---|---|
-| Container runtime | Docker. CI builds and smoke-tests the image on `ubuntu-latest`. The examples in these docs ran on an arm64 build |
-| Disk | About 300 MB to download, unpacking to about 810 MB, measured on the arm64 build. Docker Desktop keeps both copies and shows about 1.1 GB |
-| Memory at rest | 150 to 270 MiB in `docker stats`, measured after a first conversion with two LibreOffice workers. This grows with what you ask of it |
-| Memory under load | Compose limits the container to 6 GiB, which leaves room for four render workers at 1 GiB each, the service and two LibreOffice workers. [Sizing](/docs/operate/sizing/) has the arithmetic and a failure seen at less |
+| Container runtime | Docker. CI builds and smoke-tests the image on `ubuntu-latest`, and the examples in these docs ran on an arm64 build |
+| Disk | About 300 MB to download and about 810 MB unpacked, measured on the arm64 build. Docker Desktop keeps both copies, so it shows about 1.1 GB |
+| Memory at rest | 150 to 270 MiB in `docker stats`, measured after a first conversion with two LibreOffice workers. It grows with the work you give it |
+| Memory under load | Compose limits the container to 6 GiB. That leaves room for four render workers at 1 GiB each, the service and two LibreOffice workers. [Sizing](/docs/operate/sizing/) has the arithmetic, and a failure seen with less |
 | CPU | The Kubernetes manifest requests one CPU per pod. No minimum has been measured |
-| Operating system for the service | Linux, for the memory limit on render workers. The image is Linux |
+| Operating system for the service | Linux, because the memory limit on render workers needs it. The image is Linux |
 | Rust, from source | 1.99.1, pinned in `rust-toolchain.toml` |
 
-There are no load test figures yet. Size for your own documents and measure them.
+There are no load test figures yet, so size for your own documents and measure.

@@ -4,7 +4,7 @@ description: Fill a template from JSON and run conversion and PDF steps in one r
 sidebar: { order: 1 }
 ---
 
-`POST /v1/render` fills a template from JSON and runs a list of steps on the result. After this page you can build one request that fills an invoice, converts it, sets its metadata and encrypts it, and you will know what comes back.
+`POST /v1/render` fills a template from JSON and runs a list of steps on the result. This request fills an invoice, converts it, sets its metadata and encrypts it:
 
 ```bash test
 curl -F template=@invoice.docx -F "data=<invoice.json" \
@@ -15,11 +15,11 @@ curl -F template=@invoice.docx -F "data=<invoice.json" \
 head -c4 invoice.pdf | grep -q %PDF
 ```
 
-The body is a `multipart/form-data` form. Tag syntax is in [template syntax](/docs/templates/syntax/).
+The body is a `multipart/form-data` form. For the tags themselves, see [template syntax](/docs/templates/syntax/).
 
 ## Send data as text or as a file
 
-These two do the same thing:
+These two requests do the same thing:
 
 ```bash test
 # As a text field. The quotes stop your shell reading the <.
@@ -35,16 +35,13 @@ curl -F data=@invoice.json -F template=@invoice.docx \
 grep -q "Amani" filled.html
 ```
 
-`ctx` works the same way. What the service does with these parts:
+`ctx` works the same way. A `data` or `ctx` part that isn't valid JSON gets a `400` that names the file. Sending the same field twice, for example as text and as a file, is also a `400`.
 
-- A `data` or `ctx` part that is not valid JSON is a `400` that names the file.
-- Sending the same field twice, such as text and a file, is a `400`.
-- A file named exactly `data.json` or `ctx.json` is read as that field, whichever field it arrives in.
-- Once those are set aside, the first file part in the form is the template, whatever its field name.
+A file named exactly `data.json` or `ctx.json` is read as that field, whichever field it arrives in. Once those are set aside, the first file part in the form is the template, whatever its field name.
 
-## With no data and no steps, a document returns as it came in
+## With no data and no steps, a document comes back unchanged
 
-A form with an Office file or PDF, no `data` and no `steps` is a no-op. The response is the same bytes you sent, with a `200`.
+A form with an Office file or PDF, no `data` and no `steps` is a no-op. You get a `200` with the same bytes you sent.
 
 ```bash test
 curl -F template=@report.docx \
@@ -53,72 +50,72 @@ head -c2 same.docx | grep -q PK
 grep -qi "report.docx" headers.txt
 ```
 
-Tags in an Office file are filled only when `data` is a non-empty object. So `steps=convert` with no `data` converts the file with its tags as written. Text templates (`.txt`, `.md`, `.html`, `.htm`, `.csv`, `.xml`, `.json`, `.svg`) always render, so one with tags and no data gets `422`.
+Tags in an Office file are only filled when `data` is a non-empty object, so `steps=convert` with no `data` converts the file with its tags as written. Text templates (`.txt`, `.md`, `.html`, `.htm`, `.csv`, `.xml`, `.json`, `.svg`) always render, so one with tags and no data gets a `422`.
 
-A file in any other format with `data` gets `501 not_supported`. With no `data` it passes through.
+A file in any other format gets `501 not_supported` if you send `data` with it, and passes through if you don't.
 
 ## Form fields
 
 | Field | Kind | What it does |
 |---|---|---|
 | `template` | File | The template. The first file part in the form takes this role, whatever its field name |
-| `templateId` | Text | The id of a [stored template](/docs/guides/stored-templates/). Sending it with a `template` file part is a `400` |
+| `templateId` | Text | The id of a [stored template](/docs/guides/stored-templates/). Sending it along with a `template` file part gets a `400` |
 | `templateHash` | Text | The hex SHA-256 of a template this caller sent recently. See [sending a hash](#sending-a-hash) |
-| `data` | Text, JSON object | What the template sees as its root. Anything other than an object is a `400` |
-| `ctx` | Text, JSON | Visible in the template as `ctx`. `data` wins if it has its own `ctx` key |
+| `data` | Text, JSON object | What the template sees as its root. Anything other than an object gets a `400` |
+| `ctx` | Text, JSON | Available in the template as `ctx`. If `data` has its own `ctx` key, `data` wins |
 | `steps` | Text | Comma-separated step names, in order |
 | `outputFilename` | Text | The result's file name, without an extension |
-| `files` | Files | Further PDFs for the `merge` step. Every file part after the template lands here, except those under the fields below |
-| `fonts` | Files | Fonts for this request alone. See [fonts](/docs/guides/fonts/) |
+| `files` | Files | Extra PDFs for the `merge` step. Every file part after the template lands here, except the ones under the fields below |
+| `fonts` | Files | Fonts for this request only. See [fonts](/docs/guides/fonts/) |
 | `watermark`, `stamp` | Files | Image or PDF marks for those steps |
-| `underlay` | File | The PDF the `underlay` step lays the document over |
+| `underlay` | File | The PDF that the `underlay` step lays the document over |
 | `embeds` | Files | Attachments for the `embed` step |
 | `facturxXml` | File | The invoice XML for the `factur-x` step |
-| `flatten` | Text | With a PDF template and data: fix the filled values into the page |
-| `stripAnnotations` | Text | With a PDF template and data: `false` keeps the annotations that held tags. Default is to remove them |
+| `flatten` | Text | With a PDF template and data, fixes the filled values into the page |
+| `stripAnnotations` | Text | With a PDF template and data, `false` keeps the annotations that held tags. They're removed by default |
 | `downloadFrom` | Text, JSON array | Fetches files from URLs instead of uploading them, as `[{"url": "..."}]`. At most 10 entries. Private addresses are refused unless `RUSTICDOC_DOWNLOAD_FROM_ALLOW_PRIVATE=true` |
 
-The conversion options in [Convert documents](/docs/guides/convert/#conversion-options), such as `landscape` and `nativePageRanges`, apply to every LibreOffice step.
+The conversion options in [Convert documents](/docs/guides/convert/#conversion-options), like `landscape` and `nativePageRanges`, apply to every LibreOffice step.
 
-A PDF sent with data is a form to fill. See [PDF templates](/docs/templates/pdf-templates/).
+A PDF sent with data is a form to fill (see [PDF templates](/docs/templates/pdf-templates/)).
 
 ## Steps
 
-Each step works on the document or documents in flight, in the order `steps` lists them. Names are not case-sensitive.
+Steps run in the order `steps` lists them, each on the document or documents in flight. Step names aren't case-sensitive.
 
 | Step | Fields | What it does |
 |---|---|---|
 | `convert` | `to`, default `pdf`: `pdf`, `docx`, `xlsx`, `pptx`, `odt`, `ods`, `odp`, `html`, `txt` | Converts with LibreOffice |
 | `pdfa` | `pdfa`, default `PDF/A-2b`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`, `PDF/A-4` | Exports as PDF/A with LibreOffice |
 | `pdfua` | None | Exports as PDF/UA with LibreOffice |
-| `merge` | `files` | Appends the further PDFs, in the order sent. After a `split`, merges the parts again |
+| `merge` | `files` | Appends the extra PDFs, in the order sent. After a `split`, it joins the parts back together |
 | `split` | `splitMode` (`pages` or `intervals`) and `splitSpan`, both required; `splitUnify` | Splits into several documents |
 | `watermark` | `watermarkSource`, `watermarkExpression`, `watermarkOptions`, `watermarkPages`, `watermark` | Draws text, an image or a PDF under the page content |
 | `stamp` | `stampSource`, `stampExpression`, `stampOptions`, `stampPages`, `stamp` | Draws text, an image or a PDF over the page content |
-| `underlay` | `underlay`, one PDF | Lays each page over the matching page of the `underlay` PDF, such as letterhead or a pre-printed form. See [below](#underlay) |
+| `underlay` | `underlay`, one PDF | Lays each page over the matching page of the `underlay` PDF, like letterhead or a pre-printed form. See [below](#underlay) |
 | `rotate` | `rotateAngle`, default `90`: `90`, `180`, `270`, `-90`; `rotatePages`, default all | Rotates pages |
 | `flatten` | None | Fixes forms and annotations into the page content |
 | `optimize` | None | Recompresses streams and drops unused objects |
 | `bookmarks` | `bookmarks`, a JSON array of `{"title", "page", "children"}` | Replaces the outline |
-| `metadata` | `metadata`, a JSON object such as `{"Title": "Invoice"}` | Writes metadata keys and keeps the others |
+| `metadata` | `metadata`, a JSON object like `{"Title": "Invoice"}` | Writes the metadata keys you send and keeps the others |
 | `embed` | `embeds`; `embedsMetadata`, a JSON object mapping a file name to `{"mimeType": "..."}` | Attaches files |
 | `factur-x` | `facturxXml`; `facturxConformanceLevel`, default `EN16931`: `MINIMUM`, `BASIC_WL`, `BASIC`, `EN16931`, `EXTENDED` | Embeds Factur-X invoice XML |
-| `encrypt` | `userPassword`, `ownerPassword`; at least one. A missing owner password takes the user password | Encrypts the PDF |
-| `sign` | `reason`, `location`, `contactInfo`, `signerName`, `level`, `certify`, `signingKey`, and for a visible signature `page`, `x`, `y`, `width` and an image under `signatureImage`, all optional | Signs the PDF cryptographically, as `/v1/pdf/sign` with `signature=certificate` does: invisibly, or with the image or a box of text at `x` and `y`. See [signing with a certificate](/docs/guides/pdf-operations/#with-a-certificate) |
+| `encrypt` | `userPassword`, `ownerPassword`, at least one of them. A missing owner password takes the user password | Encrypts the PDF |
+| `sign` | `reason`, `location`, `contactInfo`, `signerName`, `level`, `certify`, `signingKey`, and for a visible signature `page`, `x`, `y`, `width` and an image under `signatureImage`, all optional | Signs the PDF cryptographically, the way `/v1/pdf/sign` does with `signature=certificate`. The signature is invisible, or shown as the image or a box of text at `x` and `y`. See [signing with a certificate](/docs/guides/pdf-operations/#with-a-certificate) |
 
-Every step from `merge` down needs a PDF, so one of `convert`, `pdfa` or `pdfua` comes first when the template is not a PDF. Otherwise the response is a `400` that says `'letter.txt' is not a PDF`.
+Every step from `merge` down needs a PDF, so if the template isn't one, put `convert`, `pdfa` or `pdfua` first. Otherwise you get a `400` that says `'letter.txt' is not a PDF`.
 
-`pdfa` and `pdfua` run LibreOffice on whatever is in flight. `steps=pdfa` on an Office file converts it directly. `steps=convert,pdfa` converts to PDF, then opens that PDF in LibreOffice and exports it again, so prefer `steps=pdfa`.
+`pdfa` and `pdfua` run LibreOffice on whatever is in flight. On an Office file, `steps=pdfa` converts it directly, while `steps=convert,pdfa` converts to PDF, then opens that PDF in LibreOffice and exports it again. Prefer `steps=pdfa`.
 
 ### Watermark and stamp fields
 
-`watermarkSource` is `text`, `image` or `pdf`. `text` takes its text from `watermarkExpression`. `image` and `pdf` take a file uploaded under the `watermark` field. A stamp has the same fields with the `stamp` prefix.
+`watermarkSource` is `text`, `image` or `pdf`. With `text`, the text comes from `watermarkExpression`. With `image` or `pdf`, the mark is a file uploaded under the `watermark` field. A stamp has the same fields with the `stamp` prefix.
 
-`watermarkPages` is a page selection such as `1-3,5,7-`. `watermarkOptions` is a JSON object whose values are all strings. `{"op": 0.5}` is a `400`, and `{"op": "0.5"}` works.
+`watermarkPages` is a page selection like `1-3,5,7-`. `watermarkOptions` is a JSON object whose values are all strings, so `{"op": "0.5"}` works and `{"op": 0.5}` gets a `400`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `pos` | `c` | `tl`, `tc`, `tr`, `c`, `bl`, `bc`, `br`. `t` is `tc` and `b` is `bc` |
+| `pos` | `c` | `tl`, `tc`, `tr`, `c`, `bl`, `bc`, `br`. `t` means `tc` and `b` means `bc` |
 | `op` | `1` | Opacity, 0 to 1 |
 | `rot` | `0` | Rotation in degrees |
 | `sc` | `0.5` | Scale relative to the page, 0.01 to 1 |
@@ -133,11 +130,11 @@ curl -F template=@report.docx -F steps=convert,stamp \
 head -c4 paid.pdf | grep -q %PDF
 ```
 
-Repeat the `Source`, `Expression`, `Options` and `Pages` fields for several marks, up to 5 of each kind. Name the step once: each name in `steps` applies every mark of that kind, so `steps=watermark,watermark` with two sources draws four.
+For several marks, repeat the `Source`, `Expression`, `Options` and `Pages` fields, up to 5 of each kind. Name the step only once. Each name in `steps` applies every mark of that kind, so `steps=watermark,watermark` with two sources draws four.
 
 ### Underlay
 
-`underlay` puts a base PDF under the document in flight, page by page, as [`/v1/pdf/overlay`](/docs/templates/pdf-templates/#overlay) does with the base sent first. So one request can fill an Office template, convert it and lay it on your letterhead:
+`underlay` puts a base PDF under the document in flight, page by page, the way [`/v1/pdf/overlay`](/docs/templates/pdf-templates/#overlay) does when the base is sent first. That lets one request fill an Office template, convert it and lay it on your letterhead:
 
 ```bash test
 curl -F template=@letter.txt -F "data=<letter.json" -F underlay=@a.pdf \
@@ -145,27 +142,26 @@ curl -F template=@letter.txt -F "data=<letter.json" -F underlay=@a.pdf \
 head -c4 on-letterhead.pdf | grep -q %PDF
 ```
 
-- Page 1 of the document is drawn over page 1 of the base, page 2 over page 2, and so on. The result has the base's page sizes.
-- Base pages past the end of the document stay as they are. Document pages past the end of the base are added at the end, with nothing under them. For letterhead on every page, send a base with at least as many pages.
-- The `underlay` file part is never taken as the template or as a file to merge, wherever it comes in the form.
-- The step needs exactly one `underlay` PDF, and a PDF in flight, so `convert` comes first for an Office or text template. Otherwise the response is a `400`.
+Page 1 of the document is drawn over page 1 of the base, page 2 over page 2, and so on, and the result has the base's page sizes. Base pages past the end of the document stay as they are. Document pages past the end of the base are added at the end with nothing under them, so for letterhead on every page, send a base with at least as many pages.
+
+The `underlay` file part is never taken as the template or as a file to merge, wherever it comes in the form. The step needs exactly one `underlay` PDF and a PDF in flight, so `convert` comes first for an Office or text template. Otherwise you get a `400`.
 
 ### How the fields are read
 
-- Fields of a step you did not name have no effect, but they are still checked. `-F rotateAngle=45` is a `400` even without `rotate` in `steps`.
-- The order of `steps` decides the order of work. The fields only give each step its options.
-- `encrypt` goes last. A later PDF step gets a `400` that says the file is encrypted.
-- `sign` must be the last step, because any later step would change the signed bytes, and it cannot be combined with `encrypt` in either order. Both are refused with a `400` before any work starts. Without a signing key configured, a request with `sign` gets a `503`, as does a `level` that needs a timestamp authority the service does not have; a caller not allowed the key gets `403`. After a `split`, each part is signed.
+The order of `steps` decides the order of work, and the fields only give each step its options. Fields for a step you didn't name have no effect, but they're still checked, so `-F rotateAngle=45` gets a `400` even without `rotate` in `steps`. A request runs at most 50 steps.
+
+`encrypt` goes last, because any later PDF step gets a `400` that says the file is encrypted.
+
+`sign` must be the last step, because any later step would change the signed bytes, and it can't be combined with `encrypt` in either order. Either mistake is refused with a `400` before any work starts. If no signing key is configured, a request with `sign` gets a `503`, and so does a `level` that needs a timestamp authority the service doesn't have. A caller who isn't allowed the key gets a `403`. After a `split`, each part is signed.
 
 ```bash
 curl -F template=@invoice.docx -F data=@data.json -F steps=convert,sign \
   -F reason=Issued http://localhost:9027/v1/render -o invoice.pdf
 ```
-- A request runs at most 50 steps.
 
 ## Several documents in flight
 
-`split` turns one document into several, and every later step runs on each. `merge` joins them again. If several remain at the end, the response is a ZIP.
+`split` turns one document into several, and every later step runs on each of them until a `merge` joins them again. If several remain at the end, the response is a ZIP.
 
 ```bash test
 curl -F template=@a.pdf -F files=@b.pdf \
@@ -177,9 +173,9 @@ head -c2 parts.zip | grep -q PK
 grep -qi 'filename="parts.zip"' headers.txt
 ```
 
-Here the ZIP holds `parts_1.pdf` and `parts_2.pdf`, numbered from 1. One request may have at most 1,000 documents in flight.
+Here the ZIP holds `parts_1.pdf` and `parts_2.pdf`, numbered from 1. A request can have at most 1,000 documents in flight.
 
-`merge` takes PDFs only. It does not convert the further files, so convert them first with [`/v1/convert`](/docs/guides/convert/) or list them already as PDFs.
+`merge` only takes PDFs and doesn't convert the extra files, so convert them first with [`/v1/convert`](/docs/guides/convert/) or send them as PDFs to begin with.
 
 To render one template once per element of an array, use [batch rendering](/docs/templates/batch/).
 
@@ -187,20 +183,20 @@ To render one template once per element of an array, use [batch rendering](/docs
 
 | Status | Body |
 |---|---|
-| `200` | The file. `content-type` follows its extension. Several documents come as `application/zip` |
+| `200` | The file, with a `content-type` that follows its extension. Several documents come back as `application/zip` |
 | `204` | Nothing, because the request named a [webhook](/docs/guides/webhooks/) and the result goes there |
-| `4xx`, `5xx` | JSON, as in [errors](/docs/reference/errors/) |
+| `4xx`, `5xx` | JSON, as described in [errors](/docs/reference/errors/) |
 
-The file is named after `outputFilename`, or else after the template, with the extension of what came out. `invoice.docx` through `convert` is `invoice.pdf`.
+The file is named after `outputFilename`, or after the template if you didn't send one, with the extension of what came out. `invoice.docx` put through `convert` comes back as `invoice.pdf`.
 
 ## Response headers
 
-| Header | On | Meaning |
+| Header | Sent on | Meaning |
 |---|---|---|
-| `x-request-id` | Every response | The id of this request, also in the logs and on webhook deliveries. Send your own `X-Request-Id` to set it |
+| `x-request-id` | Every response | The id of this request, which also appears in the logs and on webhook deliveries. Send your own `X-Request-Id` to set it |
 | `content-disposition` | Files | `attachment; filename="..."` |
-| `x-fonts-used` | PDF results of up to 32 MB | The fonts named in the PDF, such as `LiberationSans, LiberationSans-Bold`. Check it to catch a font that fell back. See [fonts](/docs/guides/fonts/) |
-| `server-timing` | Files | Milliseconds per stage, such as `template;dur=18, convert;dur=67` |
+| `x-fonts-used` | PDF results of up to 32 MB | The fonts named in the PDF, like `LiberationSans, LiberationSans-Bold`. Check it to catch a font that fell back. See [fonts](/docs/guides/fonts/) |
+| `server-timing` | Files | Milliseconds per stage, like `template;dur=18, convert;dur=67` |
 | `x-rusticdoc-version` | Authenticated routes, and every route when no credentials are configured | The service version |
 | `x-content-type-options` | Every response | `nosniff` |
 
@@ -214,6 +210,6 @@ grep -qi "^x-fonts-used:" headers.txt
 
 ## Sending a hash
 
-Each template sent as a file is kept in this replica's memory for a while, under the caller's identity. A later request from the same caller can send `templateHash` in place of the file. The hash is the hex SHA-256 of the file, which [`/v1/templates/validate`](/docs/templates/validate/) returns as `template_hash`.
+Each template you send as a file is kept in that replica's memory for a while, under the caller's identity, so a later request from the same caller can send `templateHash` in place of the file. The hash is the hex SHA-256 of the file, which [`/v1/templates/validate`](/docs/templates/validate/) returns as `template_hash`.
 
-A miss answers `404 template_not_cached`, and the client sends the file again. Nothing guarantees a hit: the cache is per replica, holds templates up to 16 MB and empties on restart. To keep a template, [store it](/docs/guides/stored-templates/).
+On a miss you get `404 template_not_cached` and send the file again. A hit is never guaranteed, because the cache is per replica, only holds templates up to 16 MB and empties on restart. To keep a template, [store it](/docs/guides/stored-templates/).

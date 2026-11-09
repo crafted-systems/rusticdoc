@@ -1,17 +1,17 @@
 ---
 title: Validate a template
-description: List every problem in a template against sample data, with where each one sits, without producing a file.
+description: Check a template against sample data and get a list of every problem and where it is, without producing a file.
 sidebar:
   order: 7
 ---
 
-This page shows how to check a template before anyone relies on it. Validation finds syntax errors, misplaced loops, values missing from your sample data and bad arguments to filters, and tells you where each one sits. It converts nothing and writes no file.
+Validation checks a template before anyone relies on it. It finds syntax errors, misplaced loops, values missing from your sample data and bad arguments to filters, and tells you where each one is. Nothing is converted and no file is written.
 
-Run it when you change a template, and in your CI against a realistic sample of your data.
+Run it whenever you change a template, and in CI against a realistic sample of your data.
 
 ## Over HTTP
 
-`POST /v1/templates/validate` takes a template as a file part or a stored `templateId`, plus `data` and `ctx`.
+`POST /v1/templates/validate` takes a template, as a file part or a stored `templateId`, plus `data` and `ctx`.
 
 ```bash test
 curl -F template=@invoice.docx -F "data=<invoice.json" \
@@ -31,31 +31,31 @@ jq -e '.ok == true and .diagnostics == []' result.json
 }
 ```
 
-The status is `200` whatever it finds, so read `ok`. A `400` means the request itself is wrong, such as having no template.
+The status is `200` whatever it finds, so check `ok` instead. A `400` means the request itself is wrong, for example because there's no template.
 
 ## The result
 
-| Field | Holds |
+| Field | Contains |
 |---|---|
-| `ok` | `true` when there are no errors. Warnings do not change it |
-| `template_hash` | The hex SHA-256 of the template |
+| `ok` | `true` when there are no errors. Warnings don't change it |
+| `template_hash` | The template's SHA-256, in hex |
 | `format` | The file's extension |
 | `engine` | `office`, `text` or `none` |
-| `error` | The first error as one line, or `null` |
+| `error` | The first error on one line, or `null` |
 | `diagnostics` | Every finding |
-| `missing_fonts` | Fonts the template names that the service lacks, as in [fonts](/docs/guides/fonts/#find-fonts-a-template-needs) |
+| `missing_fonts` | Fonts the template names that the service doesn't have, as in [fonts](/docs/guides/fonts/#find-fonts-a-template-needs) |
 
 Each finding has these fields:
 
-| Field | Holds |
+| Field | Contains |
 |---|---|
 | `severity` | `error` or `warning` |
-| `message` | What is wrong |
-| `location` | `part`, `place` and `snippet`, or `null` when there is no place to name |
+| `message` | What's wrong |
+| `location` | `part`, `place` and `snippet`, or `null` when there's no place to name |
 
-`part` is the file inside the package. `place` says where in plain words, and `snippet` is the tag:
+`part` is the file inside the package, `snippet` is the tag, and `place` describes the position in plain words:
 
-| Format | A `place` looks like |
+| Format | Example `place` |
 |---|---|
 | DOCX | `paragraph 12`, `table 1 row 1 paragraph 4` |
 | XLSX | `sheet "Sheet1" row 1 (cell A1)` |
@@ -65,7 +65,7 @@ Each finding has these fields:
 
 ## A template with problems
 
-Sample data that lacks most of what the invoice needs gives one finding per missing value:
+If your sample data is missing most of what the invoice needs, you get one finding for each missing value:
 
 ```bash test
 curl -F template=@invoice.docx -F 'data={"number":"INV-1"}' \
@@ -74,7 +74,7 @@ jq -e '.ok == false and (.diagnostics | length) == 9' result.json
 jq -e '.diagnostics[0].location.snippet == "{{ seller.name }}"' result.json
 ```
 
-Shortened, that result reads:
+Here's that result, shortened:
 
 ```json
 {
@@ -111,22 +111,22 @@ In an Office template:
 
 | Problem | Message |
 |---|---|
-| A tag that cannot parse | `cannot parse tag: syntax error: ...` |
+| A tag that can't be parsed | `cannot parse tag: syntax error: ...` |
 | A block that never closes | `'{% for a in b %}' is never closed; add '{% endfor %}'` |
 | A closing tag with no opener | `'{% endfor %}' has no matching '{% for %}'` |
 | Tags where no rule applies | `'{% else %}' ... needs its own paragraph between ...`, with both positions named |
-| A filter that does not exist | `unknown filter: filter nosuch is unknown` |
+| A filter that doesn't exist | `unknown filter: filter nosuch is unknown` |
 | A missing value | `undefined value`, or `value is undefined: {{ w }}` |
 | A bad argument to a rich filter | `image: too many arguments: unknown keyword argument 'foo'` |
-| A loop over something that is not a list | A warning: `loop over a number rather than an array: {% for i in n %}` |
+| A loop over something that isn't a list | A warning: `loop over a number rather than an array: {% for i in n %}` |
 | Text that looks like a broken tag | A warning: `text looks like an unterminated tag` |
 | A font the service has neither loaded nor mapped to a substitute | A warning: `the template uses the font 'Aptos', which the service does not have; ...` |
 
-Syntax problems stop the check before the test render, so missing values show up after they are fixed. In the same way, a value that reaches a built-in filter such as `upper` may be reported only after the errors before it are gone. **Fix what it lists and run it again until `ok` is `true`.**
+Syntax problems stop the check before the test render, so missing values only show up once the syntax is fixed. Likewise, a value that reaches a built-in filter like `upper` might not be reported until the errors before it are gone. Fix what it lists and run it again until `ok` is `true`.
 
 ## Text and PDF templates
 
-A text template reports only its first error, with no location. The message holds the line number.
+A text template reports only its first error. There's no location, but the message includes the line number.
 
 ```bash test
 printf 'line one\n{{ nobody }}\n' > missing.txt
@@ -137,7 +137,7 @@ jq -e '.ok == false and .engine == "text"
 jq -e '.error | contains("line 2")' result.json
 ```
 
-Without its hash, the result reads:
+The result, without its hash:
 
 ```json
 {
@@ -155,7 +155,7 @@ Without its hash, the result reads:
 }
 ```
 
-PDF templates are not read. A PDF, or any other format, gives `"engine": "none"` and `ok: false`:
+PDF templates aren't read. A PDF, or a file in any other format, gives `"engine": "none"` and `ok: false`:
 
 ```bash test
 curl -F template=@form.pdf -F 'data={"name":"Ada"}' \
@@ -167,21 +167,21 @@ To check a PDF form, list its fields with [`/v1/pdf/forms/fields`](/docs/templat
 
 ## Validation and rendering differ on empty data
 
-Validation always reads the tags. A render with `data` absent or `{}` returns an Office template as it is, so a template with errors can come back with a `200`. Run validation to find them.
+Validation always reads the tags. A render with `data` absent or `{}` returns an Office template unchanged, so a template with errors can still come back with a `200`, and you need validation to find them.
 
-Validation also renders a template only against the data you send. A branch your sample does not take, or a loop over an empty list, is not evaluated, so values used only there are not reported. Give it a sample that reaches everything.
+Validation only renders the template against the data you send, though. A branch your sample doesn't take, or a loop over an empty list, isn't evaluated, so values used only there aren't reported. Give it a sample that reaches everything.
 
-Storing a template with `POST /v1/templates` checks only its syntax, since the data comes later. See [stored templates](/docs/guides/stored-templates/).
+Storing a template with `POST /v1/templates` only checks its syntax, since the data comes later (see [stored templates](/docs/guides/stored-templates/)).
 
 ## On the command line
 
-The same check runs without the service, on the machine with the file:
+You can run the same check without the service, on the machine that has the file:
 
 ```text
 rusticdoc validate invoice.docx --data sample.json
 ```
 
-`--data`, or `-d`, is optional. It prints the list of findings as JSON, with none of the other fields:
+`--data` (or `-d`) is optional. The command prints only the list of findings as JSON, without the other fields:
 
 ```json
 [
@@ -197,4 +197,4 @@ rusticdoc validate invoice.docx --data sample.json
 ]
 ```
 
-A clean template prints `[]`. The exit code is `1` when there is an error and `0` otherwise, including when there are only warnings, so it fits a CI step.
+A clean template prints `[]`. The exit code is `1` when there's an error and `0` otherwise, including when there are only warnings, so it works as a CI step.

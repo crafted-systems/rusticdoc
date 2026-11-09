@@ -5,15 +5,13 @@ sidebar:
   order: 5
 ---
 
-This page tells you what licence covers rusticdoc and what else is in the image.
-
 ## rusticdoc
 
-rusticdoc is licensed under the [Apache License 2.0](https://github.com/vmosoti/rusticdoc/blob/main/LICENSE). The image carries a copy at `/usr/share/doc/rusticdoc/LICENSE`.
+rusticdoc is licensed under the [Apache License 2.0](https://github.com/vmosoti/rusticdoc/blob/main/LICENSE), and the image carries a copy at `/usr/share/doc/rusticdoc/LICENSE`.
 
 ## Third-party software
 
-Rust dependencies use permissive licences such as MIT, Apache-2.0, BSD, ISC, Zlib and Unicode-3.0.
+The Rust dependencies use permissive licences like MIT, Apache-2.0, BSD, ISC, Zlib and Unicode-3.0.
 
 The image also carries these, which run as separate processes:
 

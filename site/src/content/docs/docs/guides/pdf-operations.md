@@ -4,19 +4,17 @@ description: Merge, split, rotate, mark, sign with an image or a certificate, se
 sidebar: { order: 3 }
 ---
 
-The `/v1/pdf/*` routes each do one job on PDFs you already have. After this page you can pick the route for a job and send it the right fields.
+Each `/v1/pdf/*` route does one job on PDFs you already have. If you want several of them on one document, a single [`/v1/render`](/docs/guides/pipeline/) request runs them in order.
 
-Every route takes `multipart/form-data`. Files go in `files`, in the order the route expects. Each input must have a `.pdf` name and start with `%PDF`, or the response is a `400` that says `is not a PDF`.
+Every route takes `multipart/form-data`, with the files in `files`, in the order the route expects. Each input needs a `.pdf` name and must start with `%PDF`, or you get a `400` that says `is not a PDF`.
 
-Routes that return a PDF also take `outputFilename`, without an extension. Without it the result keeps the first input's name. They accept the [webhook headers](/docs/guides/webhooks/), except the routes that answer in JSON, which ignore them and answer at once.
-
-If you want several of these on one document, a single [`/v1/render`](/docs/guides/pipeline/) request runs them in order.
+Routes that return a PDF also take `outputFilename`, without an extension. Without it, the result keeps the first input's name. All routes accept the [webhook headers](/docs/guides/webhooks/) except the ones that return JSON, which ignore them and respond straight away.
 
 ## Combine and divide
 
 ### `POST /v1/pdf/merge`
 
-Joins PDFs in the order sent.
+Joins PDFs in the order you send them.
 
 | Field | Required | Meaning |
 |---|---|---|
@@ -28,18 +26,18 @@ curl -F files=@a.pdf -F files=@b.pdf -F outputFilename=both \
 head -c4 both.pdf | grep -q %PDF
 ```
 
-This route also runs the finishing fields listed in [Convert documents](/docs/guides/convert/#finish-the-result-in-one-request) after merging, in the same fixed order.
+After merging, this route also runs the finishing fields listed in [Convert documents](/docs/guides/convert/#finish-the-result-in-one-request), in the same fixed order.
 
 ### `POST /v1/pdf/split`
 
 | Field | Required | Meaning |
 |---|---|---|
 | `files` | Yes | One PDF |
-| `splitSpan` | Yes | With `pages`, ranges such as `1-3,5`. With `intervals`, the pages per output |
-| `splitMode` | No | `pages`, the default, or `intervals` |
-| `splitUnify` | No | With `pages`: `true` puts every range in one file |
+| `splitSpan` | Yes | With `pages`, ranges like `1-3,5`. With `intervals`, the number of pages per output |
+| `splitMode` | No | `pages` (default) or `intervals` |
+| `splitUnify` | No | With `pages`, `true` puts every range in one file |
 
-One output comes back as a PDF. Several come back as a ZIP of `<name>_1.pdf`, `<name>_2.pdf` and so on.
+A single output comes back as a PDF. Several come back as a ZIP of `<name>_1.pdf`, `<name>_2.pdf` and so on.
 
 ```bash test
 curl -F files=@a.pdf -F files=@b.pdf \
@@ -49,7 +47,7 @@ curl -F files=@two.pdf -F splitMode=intervals -F splitSpan=1 \
 head -c2 parts.zip | grep -q PK
 ```
 
-A page outside the document is a `400`. One split may make at most 1,000 parts.
+A page outside the document gets a `400`, and one split can make at most 1,000 parts.
 
 ### `POST /v1/pdf/overlay`
 
@@ -57,7 +55,7 @@ Lays the second PDF over the first, page by page.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `files` | Yes | Exactly two PDFs: the base, then the overlay |
+| `files` | Yes | Exactly two PDFs, the base first and then the overlay |
 
 ```bash test
 curl -F files=@a.pdf -F files=@b.pdf \
@@ -72,10 +70,10 @@ head -c4 laid.pdf | grep -q %PDF
 | Field | Required | Meaning |
 |---|---|---|
 | `files` | Yes | One PDF |
-| `rotation` | No | `90`, the default, `180`, `270` or `-90` |
-| `pages` | No | A page selection such as `1-3,5,7-`. All pages when absent |
+| `rotation` | No | `90` (default), `180`, `270` or `-90` |
+| `pages` | No | A page selection like `1-3,5,7-`. All pages by default |
 
-This route reads `rotation` and `pages`. `rotateAngle` and `rotatePages` are the names on `/v1/render`, and here they have no effect.
+The fields here are `rotation` and `pages`. The `/v1/render` names for them, `rotateAngle` and `rotatePages`, have no effect on this route.
 
 ```bash test
 curl -F files=@a.pdf -F rotation=180 \
@@ -85,19 +83,19 @@ head -c4 turned.pdf | grep -q %PDF
 
 ### `POST /v1/pdf/watermark` and `POST /v1/pdf/stamp`
 
-`watermark` draws a mark under the page content, and `stamp` draws it over. The fields are the same.
+`watermark` draws a mark under the page content and `stamp` draws it over. Both take the same fields.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `files` | Yes | The PDF first. Without `text`, then a PNG, a JPEG or a PDF as the mark |
-| `text` | No | The text of a text mark, up to 64 KB. If present, it is the mark |
+| `files` | Yes | The PDF first. Without `text`, a PNG, JPEG or PDF follows as the mark |
+| `text` | No | The text of a text mark, up to 64 KB. If it's present, it's the mark |
 | `position` | No | `top-left`, `top-center`, `top-right`, `center` (default), `bottom-left`, `bottom-center`, `bottom-right`. `top` and `bottom` also work |
 | `opacity` | No | 0 to 1, default 1 |
 | `rotation` | No | Degrees, default 0 |
 | `scale` | No | Relative to the page width, 0.01 to 1, default 0.5 |
-| `fontSize` | No | Text marks, default 24 |
-| `colour` or `color` | No | Text marks, `#rrggbb`, default `#808080` |
-| `pages` | No | A page selection. All pages when absent |
+| `fontSize` | No | For text marks, default 24 |
+| `colour` or `color` | No | For text marks, `#rrggbb`, default `#808080` |
+| `pages` | No | A page selection. All pages by default |
 
 ```bash test
 curl -F files=@a.pdf -F text=DRAFT -F opacity=0.3 -F rotation=45 \
@@ -109,28 +107,28 @@ head -c4 draft.pdf | grep -q %PDF
 head -c4 branded.pdf | grep -q %PDF
 ```
 
-Text a mark draws uses Helvetica. See [known limits](/docs/project/known-limits/).
+Text marks are drawn in Helvetica (see [known limits](/docs/project/known-limits/)).
 
 ### `POST /v1/pdf/sign`
 
-Signs a PDF in one of two ways, chosen by the `signature` field:
+The `signature` field chooses between two ways of signing:
 
-- `signature=image`, the default, places images of signatures at exact coordinates. It draws a picture on the page and is **not** a cryptographic signature.
+- `signature=image`, the default, places images of signatures at exact coordinates. This is **not** a cryptographic signature.
 - `signature=certificate` signs cryptographically with the deployment's key. A PDF reader that validates signatures shows the document as signed, and any later change to the signed bytes breaks the signature.
 
 #### With an image
 
 :::caution
-This draws a picture on the page. It adds no certificate, no timestamp and no protection against later changes, and a PDF reader will not show the document as signed.
+This draws a picture on the page. It adds no certificate, no timestamp and no protection against later changes, and a PDF reader won't show the document as signed.
 :::
 
 | Field | Required | Meaning |
 |---|---|---|
 | `files` | Yes | The PDF first, then 1 to 50 PNG or JPEG images |
-| `page` | Yes, per image | Page number, from 1 |
+| `page` | Yes, per image | Page number, counting from 1 |
 | `x` | Yes, per image | Points from the page's left edge to the image's left edge |
 | `y` | Yes, per image | Points from the page's bottom edge to the image's bottom edge |
-| `width` | No, per image | Width in points. Default is the image's natural size |
+| `width` | No, per image | Width in points. Defaults to the image's natural size |
 
 Repeat `page`, `x`, `y` and `width` for each image, in the same order.
 
@@ -142,16 +140,16 @@ head -c4 signed.pdf | grep -q %PDF
 
 #### With a certificate
 
-The service signs with the key and certificate in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or with a named key the request chooses (see [configuration](/docs/reference/configuration/#pdf-signing)). A request never carries a key. Without one configured, this answers `503` and says so.
+The service signs with the key and certificate in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or with a named key the request picks (see [configuration](/docs/reference/configuration/#pdf-signing)). A request never carries a key. If none is configured, you get a `503` that says so.
 
 | Field | Required | Meaning |
 |---|---|---|
 | `files` | Yes | The PDF first, then at most one PNG or JPEG to show the signature with |
 | `signature` | Yes | `certificate` |
-| `page`, `x`, `y`, `width` | No | Where the signature is shown. With an image, the image goes there, as above. With no image, a box of text goes there: who signed (`signerName`, or the certificate's common name), the date and time, and the reason and location when given; `width` defaults to 200 points. `page` defaults to 1. Leave them all out for an invisible signature |
-| `level` | No | `b-b`, `b-t`, `b-lt` or `b-lta`; see [levels](#levels). Default `RUSTICDOC_SIGNING_LEVEL`, which is `b-b` unless set |
-| `certify` | No | Certify the document instead of approving it, with a DocMDP permission: `1` no changes at all, `2` filling forms and signing, `3` that and annotations. Only a document's first signature can certify |
-| `signingKey` | No | A named key from `RUSTICDOC_SIGNING_KEYS` instead of the default one. A caller not on its allow list gets `403` |
+| `page`, `x`, `y`, `width` | No | Where the signature is shown. If you sent an image, it goes there, as above. Otherwise a box of text goes there with who signed (`signerName`, or the certificate's common name), the date and time, and the reason and location if given, and `width` defaults to 200 points. `page` defaults to 1. Leave all four out for an invisible signature |
+| `level` | No | `b-b`, `b-t`, `b-lt` or `b-lta` (see [levels](#levels)). Defaults to `RUSTICDOC_SIGNING_LEVEL`, which is `b-b` unless you set it |
+| `certify` | No | Certifies the document instead of approving it, with a DocMDP permission: `1` for no changes at all, `2` for filling forms and signing, `3` for those plus annotations. Only a document's first signature can certify |
+| `signingKey` | No | A named key from `RUSTICDOC_SIGNING_KEYS` instead of the default one. A caller who isn't on its allow list gets a `403` |
 | `reason` | No | Why the document was signed |
 | `location` | No | Where it was signed |
 | `contactInfo` | No | How to reach the signer |
@@ -167,36 +165,38 @@ curl -F files=@contract.pdf -F signature=certificate \
 pdfsig signed.pdf
 ```
 
-What the service writes:
+The service writes:
 
-- An incremental update. The original bytes stay as they are, at the start of the file, and the signature follows them, so an earlier signature in the file stays valid for its revision.
-- A signature field in the AcroForm, with its widget on the page, and a `/Sig` dictionary with `/Filter /Adobe.PPKLite`, `/SubFilter /ETSI.CAdES.detached`, `/ByteRange` covering the whole file but the signature, and the signing time in `/M`.
-- In `/Contents`, a detached CMS signature over the SHA-256 of those byte ranges. Its signed attributes are content-type, message-digest and ESS signing-certificate-v2. It carries no signing-time attribute, because PAdES puts the time in `/M`. The signer's certificate and any chain certificates are included.
-- With an image or text, that as the widget's appearance, so it is part of the signature rather than of the page.
-- When certifying, a `/Reference` to the DocMDP transform with the permission in its parameters, and the catalog's `/Perms /DocMDP` pointing at the signature. A document certified with permission 1 refuses later approval signatures with `400`.
+- An incremental update. The original bytes stay untouched at the start of the file and the signature follows them, so an earlier signature in the file stays valid for its revision.
+- A signature field in the AcroForm, with its widget on the page, and a `/Sig` dictionary with `/Filter /Adobe.PPKLite`, `/SubFilter /ETSI.CAdES.detached`, a `/ByteRange` that covers the whole file except the signature, and the signing time in `/M`.
+- In `/Contents`, a detached CMS signature over the SHA-256 of those byte ranges. Its signed attributes are content-type, message-digest and ESS signing-certificate-v2. There's no signing-time attribute, because PAdES puts the time in `/M`. The signer's certificate and any chain certificates are included.
+- The image or box of text, if there is one, as the widget's appearance, so it belongs to the signature and not to the page.
+- When certifying, a `/Reference` to the DocMDP transform with the permission in its parameters, and the catalog's `/Perms /DocMDP` pointing at the signature. A document certified with permission 1 refuses later approval signatures with a `400`.
 
 ##### Levels
 
-| `level` | Adds | Needs |
+| `level` | What it adds | What it needs |
 |---|---|---|
-| `b-b` | The signature alone. A validator knows when it was made only from the signer's claim | A key |
-| `b-t` | An RFC 3161 timestamp over the signature value, from the timestamp authority, in the `id-aa-signatureTimeStampToken` unsigned attribute. The signing time is now attested by a third party | `RUSTICDOC_SIGNING_TSA_URL`, and `RUSTICDOC_SIGNING_TSA_CERT` to trust its tokens through |
-| `b-lt` | A second incremental update with a `/DSS`: every certificate of the signer's and the authority's chains, an OCSP response for each that names a responder and a CRL for each that names only a distribution point, and a `/VRI` entry for the signature keyed by the SHA-1 of its `/Contents`. The signature can be validated from the file alone, after the certificates expire or the responders go away | Responders and distribution points the service can reach |
-| `b-lta` | A third update: a document timestamp (`/Type /DocTimeStamp`, `/SubFilter /ETSI.RFC3161`) over the whole file, DSS included, which can be renewed later to keep the evidence alive | The same |
+| `b-b` | The signature alone. The only evidence of when it was made is the signer's own claim | A key |
+| `b-t` | An RFC 3161 timestamp over the signature value, from the timestamp authority, stored in the `id-aa-signatureTimeStampToken` unsigned attribute. A third party now attests the signing time | `RUSTICDOC_SIGNING_TSA_URL`, plus `RUSTICDOC_SIGNING_TSA_CERT` to trust its tokens |
+| `b-lt` | A second incremental update with a `/DSS`. It holds every certificate in the signer's and the authority's chains, an OCSP response for each one that names a responder, a CRL for each one that names only a distribution point, and a `/VRI` entry for the signature keyed by the SHA-1 of its `/Contents`. The signature can then be validated from the file alone, even after the certificates expire or the responders go away | Responders and distribution points the service can reach |
+| `b-lta` | A third update with a document timestamp (`/Type /DocTimeStamp`, `/SubFilter /ETSI.RFC3161`) over the whole file, DSS included. It can be renewed later to keep the evidence alive | The same as `b-lt` |
 
-The timestamp authority, OCSP responders, CRL distribution points and certificate issuers are reached under the [outbound rules](/docs/reference/configuration/#timestamps-and-validation-data) for signing: allow and deny lists, private addresses refused unless allowed, no redirects, and time and size limits. Nothing they send is taken on trust: a timestamp token must chain to `RUSTICDOC_SIGNING_TSA_CERT` with the timestamping usage, and OCSP responses and CRLs must be signed by the certificate's issuer (or a responder it authorised) and be current; see [configuration](/docs/reference/configuration/#timestamps-and-validation-data). If any of them fails, the request fails with `502` and names it; there is no file at a lower level than asked for. A certificate an OCSP responder or CRL reports revoked fails the request with `503`.
+The service reaches the timestamp authority, OCSP responders, CRL distribution points and certificate issuers under the [outbound rules](/docs/reference/configuration/#timestamps-and-validation-data) for signing, which means allow and deny lists, private addresses refused unless allowed, no redirects, and time and size limits. Nothing they send is trusted unchecked. A timestamp token must chain to `RUSTICDOC_SIGNING_TSA_CERT` with the timestamping usage, and OCSP responses and CRLs must be current and signed by the certificate's issuer or a responder it authorised (see [configuration](/docs/reference/configuration/#timestamps-and-validation-data)).
 
-Each level has been checked with poppler's `pdfsig`, which reports the signature valid (covering the total document for B-B and B-T, and its revision for B-LT and B-LTA, whose later updates it does not check), and with pyHanko 0.38, which reports it `VALID`. With the timestamp authority and revocation servers stopped, pyHanko validates the B-LT and B-LTA files with revocation checking on from what they hold, the B-LTA document timestamp included. `make sign-check` repeats this against a local timestamp authority, OCSP responder and CRL. Nothing has been opened in Adobe Acrobat.
+If any of these fails, the request fails with a `502` that names it, and you never get a file at a lower level than you asked for. A certificate that an OCSP responder or CRL reports as revoked fails the request with a `503`.
+
+Every level validates in poppler's `pdfsig` and in pyHanko 0.38, which reports `VALID`. `pdfsig` reports the signature as valid over the total document for B-B and B-T, and over its revision for B-LT and B-LTA, because it doesn't check their later updates. With the timestamp authority and revocation servers stopped, pyHanko still validates the B-LT and B-LTA files with revocation checking on, from what they hold, the B-LTA document timestamp included. `make sign-check` repeats these checks against a local timestamp authority, OCSP responder and CRL. Adobe Acrobat isn't tested yet.
 
 :::note[Limits]
-- RSA (PKCS#1 v1.5, SHA-256) or ECDSA P-256 keys, from PEM files or a PKCS#11 token. Everyone who can call this route signs with the default key unless `RUSTICDOC_SIGNING_ALLOW` restricts it, so put it behind [authentication](/docs/guides/authentication/).
-- One signature per request. To sign again, send the signed file back.
-- A self-signed certificate gives a signature that validates as intact, with the signer reported as untrusted, and has nothing to put in a DSS.
+- Keys are RSA (PKCS#1 v1.5, SHA-256) or ECDSA P-256, from PEM files or a PKCS#11 token. Anyone who can call this route signs with the default key unless `RUSTICDOC_SIGNING_ALLOW` restricts it, so put the route behind [authentication](/docs/guides/authentication/).
+- Each request adds one signature. To sign again, send the signed file back.
+- With a self-signed certificate the signature validates as intact, but the signer is reported as untrusted and there's nothing to put in a DSS.
 - Text appearances use Helvetica, so characters outside Windows-1252 show as `?`.
-- The document timestamp of B-LTA is not renewed by the service; renew it with a tool such as pyHanko's `ltaupdate` before the authority's certificate expires.
+- The service doesn't renew the B-LTA document timestamp. Renew it with a tool like pyHanko's `ltaupdate` before the authority's certificate expires.
 :::
 
-`sign` is also a [pipeline step](/docs/guides/pipeline/) with the same options, and `rusticdoc pdf sign --key key.pem --cert cert.pem` signs from the command line with local files or a `pkcs11:` key, with `--level`, `--certify` and `--tsa-url`.
+`sign` is also a [pipeline step](/docs/guides/pipeline/) with the same options. From the command line, `rusticdoc pdf sign --key key.pem --cert cert.pem` signs with local files or a `pkcs11:` key, and takes `--level`, `--certify` and `--tsa-url`.
 
 ## Finish and secure
 
@@ -241,7 +241,7 @@ head -c4 locked.pdf | grep -q %PDF
 
 ### `POST /v1/pdf/convert`
 
-Exports existing PDFs as PDF/A or PDF/UA through LibreOffice. LibreOffice re-imports the page content, so fonts can change. Compare `x-fonts-used` before and after.
+Exports existing PDFs as PDF/A or PDF/UA through LibreOffice, which re-imports the page content. Fonts can change as a result, so compare `x-fonts-used` before and after.
 
 | Field | Required | Meaning |
 |---|---|---|
@@ -257,7 +257,7 @@ grep -aq pdfaid archive.pdf
 
 ### `POST /v1/pdf/factur-x`
 
-Embeds Factur-X invoice XML and marks the PDF for it. The service does not check the XML against a Factur-X schema.
+Embeds Factur-X invoice XML and marks the PDF for it. The XML isn't checked against a Factur-X schema.
 
 | Field | Required | Meaning |
 |---|---|---|
@@ -276,7 +276,7 @@ grep -aq factur-x.xml invoice.pdf
 
 ### `POST /v1/pdf/embed`
 
-Attaches files.
+Attaches files to a PDF.
 
 | Field | Required | Meaning |
 |---|---|---|
@@ -296,14 +296,14 @@ grep -aq invoice.json attached.pdf
 |---|---|---|
 | `files` | Yes | One or more PDFs |
 
-Answers JSON, keyed by file name.
+Returns JSON, keyed by file name.
 
 ### `POST /v1/pdf/metadata/write`
 
 | Field | Required | Meaning |
 |---|---|---|
 | `files` | Yes | One PDF |
-| `metadata` | Yes | A non-empty JSON object of keys such as `Title`, `Author`, `Subject`, `Keywords`, plus your own. Keys you do not name are kept |
+| `metadata` | Yes | A non-empty JSON object with keys like `Title`, `Author`, `Subject` and `Keywords`, plus your own. Keys you don't name are kept |
 
 ```bash test
 curl -F files=@a.pdf -F 'metadata={"Title":"Invoice","Author":"Ada"}' \
@@ -319,7 +319,7 @@ jq -e '."titled.pdf".Title == "Invoice"' meta.json
 |---|---|---|
 | `files` | Yes | One or more PDFs |
 
-Answers JSON: each file name maps to an array of `{"title", "page", "children"}`.
+Returns JSON in which each file name maps to an array of `{"title", "page", "children"}`.
 
 ### `POST /v1/pdf/bookmarks/write`
 
@@ -343,7 +343,7 @@ curl -F files=@marked.pdf \
 jq -e '."marked.pdf"[0].children[0].title == "Detail"' outline.json
 ```
 
-A `page` past the end of the document is not refused. In a one-page PDF, a bookmark to page 99 reads back as page 1, so check your page numbers before you send them.
+A `page` past the end of the document isn't refused. In a one-page PDF, a bookmark to page 99 reads back as page 1, so check your page numbers before you send them.
 
 ## Forms
 
@@ -355,7 +355,7 @@ Lists a PDF's form fields.
 |---|---|---|
 | `files` | Yes | One PDF |
 
-Each entry has `name`, `kind` (`text`, `checkbox`, `radio`, `choice`, `signature` or `button`), `page`, `value`, and `options` where the field has them.
+Each entry has `name`, `kind` (`text`, `checkbox`, `radio`, `choice`, `signature` or `button`), `page`, `value`, and `options` if the field has any.
 
 ```bash test
 curl -F files=@form.pdf http://localhost:9027/v1/pdf/forms/fields -o fields.json
@@ -369,10 +369,10 @@ Fills form fields from JSON, and applies any tags in annotations.
 | Field | Required | Meaning |
 |---|---|---|
 | `files` | Yes | One PDF |
-| `data` | No | A JSON object. A field named `customer.name` takes that path |
-| `ctx` | No | JSON visible to tags as `ctx` |
+| `data` | No | A JSON object. A field named `customer.name` takes the value at that path |
+| `ctx` | No | JSON that tags can read as `ctx` |
 | `flatten` | No | `true` fixes the values into the page content, so no fields remain |
-| `stripAnnotations` | No | `false` keeps the annotations that held tags. Default is to remove them |
+| `stripAnnotations` | No | `false` keeps the annotations that held tags. They're removed by default |
 
 ```bash test
 curl -F files=@form.pdf \
@@ -383,4 +383,4 @@ curl -F files=@filled.pdf \
 jq -e '.[0].value == "Ada" and .[2].value == "Yes"' fields.json
 ```
 
-More on form templates is in [PDF templates](/docs/templates/pdf-templates/).
+See [PDF templates](/docs/templates/pdf-templates/) for more on form templates.

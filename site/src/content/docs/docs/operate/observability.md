@@ -5,24 +5,22 @@ sidebar:
   order: 6
 ---
 
-This page shows you how to follow one request from its response to its log lines, what the metrics are called, and what `/health` and `/ready` mean.
-
 ## Follow a request by its id
 
-Every response carries `x-request-id`. Send your own and the service uses it:
+Every response carries `x-request-id`. If you send your own, the service uses it:
 
 ```bash test
 curl -D - -o /dev/null -H 'x-request-id: order-2041' \
   http://localhost:9027/v1/version
 ```
 
-The response has `x-request-id: order-2041`. If you send none, the service makes one. A client's id is kept to printable ASCII and 128 bytes. The same id appears in the logs and on webhook deliveries.
+The response comes back with `x-request-id: order-2041`. If you don't send one, the service generates it. An id you send is limited to printable ASCII and 128 bytes. The same id shows up in the logs and on webhook deliveries.
 
-An error from an engine reads only as the status's name in the response, such as `Service Unavailable`. The detail is in the log, under the request id.
+When an engine fails, the response only gives the name of the status, like `Service Unavailable`. The detail is in the log, under the request id.
 
 ## Logs
 
-Logs are JSON lines on standard output. `RUSTICDOC_LOG_FORMAT=pretty` switches to text for a terminal. `RUSTICDOC_LOG_LEVEL` takes a `tracing` filter such as `info` or `rusticdoc=debug`.
+Logs are JSON lines on standard output. Set `RUSTICDOC_LOG_FORMAT=pretty` to get text for a terminal instead. `RUSTICDOC_LOG_LEVEL` takes a `tracing` filter like `info` or `rusticdoc=debug`.
 
 ```bash
 docker logs rusticdoc
@@ -30,7 +28,7 @@ docker logs rusticdoc
 
 ### Access log
 
-There is one line per request with `log_type` set to `access`, shown here spread over several lines to fit. Lines for status 500 and above have level `ERROR`, and the rest `INFO`.
+Each request logs one line with `log_type` set to `access`. A status of 500 or above is logged at level `ERROR`, and everything else at `INFO`. Here's one, spread over several lines to fit:
 
 ```json
 {
@@ -59,22 +57,22 @@ There is one line per request with `log_type` set to `access`, shown here spread
 }
 ```
 
-| Field | Holds |
+| Field | Contains |
 |---|---|
 | `correlation_id` | The request id |
-| `remote_addr` | The peer's address. Behind a proxy, this is the proxy |
-| `caller` | A short form of the credential, such as `key:024a24260d62`. It is `none` on a request refused for no credentials, and `-` when the service has none configured. The key itself is never logged |
-| `host`, `method`, `path`, `referer`, `user_agent` | From the request |
+| `remote_addr` | The peer's address. Behind a proxy, that's the proxy |
+| `caller` | A short form of the credential, like `key:024a24260d62`. It's `none` when a request was refused for having no credentials, and `-` when the service has none configured. The key itself is never logged |
+| `host`, `method`, `path`, `referer`, `user_agent` | Taken from the request |
 | `status` | The HTTP status |
 | `latency`, `latency_human`, `latency_ms` | Time taken, in nanoseconds, as text, and in milliseconds |
 | `bytes_in` | The request's `Content-Length` |
-| `bytes_out` | Meant to be the response's `Content-Length`. It showed `0` on all 1,002 access lines checked, including responses that had a length, so do not rely on it |
+| `bytes_out` | Meant to be the response's `Content-Length`, but it was `0` on all 1,002 access lines checked, including responses that had a length. Don't rely on it |
 
-`/health` and `/ready` are left out of the access log. Every other route is logged, `/metrics` included.
+`/health` and `/ready` are left out of the access log. Every other route is logged, including `/metrics`.
 
 ### Audit log
 
-Changes to stored objects log a line with `log_type` set to `audit`:
+A change to a stored object logs a line with `log_type` set to `audit`:
 
 ```json
 {
@@ -104,35 +102,35 @@ Changes to stored objects log a line with `log_type` set to `audit`:
 
 ### Other lines
 
-Each document job logs `pipeline finished` with `output`, `total_ms` and `timings`. A failed request logs `request failed`, with the error and its detail. Webhook attempts log `webhook delivered`, `webhook rejected`, `webhook failed` and `webhook gave up`.
+Each document job logs `pipeline finished` with `output`, `total_ms` and `timings`, and a failed request logs `request failed` with the error and its detail. Webhook attempts log `webhook delivered`, `webhook rejected`, `webhook failed` and `webhook gave up`.
 
 ## Metrics
 
-`GET /metrics` serves the Prometheus text format. With no credentials configured it is open. With credentials configured it needs them too, unless you set `RUSTICDOC_METRICS_PUBLIC=true`.
+`GET /metrics` serves the Prometheus text format. It's open when no credentials are configured. Once they are, it needs them too, unless you set `RUSTICDOC_METRICS_PUBLIC=true`.
 
 ```bash test
 curl http://localhost:9027/metrics | grep '^# TYPE'
 ```
 
-| Metric | Type | Labels | Measures |
+| Metric | Type | Labels | What it measures |
 |---|---|---|---|
 | `rusticdoc_requests_total` | Counter | `route`, `status` | HTTP requests, by matched route and status |
-| `rusticdoc_request_seconds` | Histogram | `stage` | Request latency. The label is named `stage`, and holds the route |
-| `rusticdoc_stage_seconds` | Histogram | `stage` | Pipeline stage duration, such as `template` or `convert` |
+| `rusticdoc_request_seconds` | Histogram | `stage` | Request latency. The label is called `stage` but holds the route |
+| `rusticdoc_stage_seconds` | Histogram | `stage` | How long a pipeline stage took, like `template` or `convert` |
 | `rusticdoc_inflight` | Gauge | `stage` | Work in progress. `stage` is `pipeline` |
 | `rusticdoc_webhook_deliveries_total` | Counter | `outcome` | Webhook delivery attempts: `delivered`, `failed`, `gave_up` |
 | `rusticdoc_store_font_syncs_total` | Counter | `outcome` | Runs of the stored-font sync: `ok`, `changed`, `failed` |
 
-Both histograms have buckets that double from 0.01 to about 82 seconds. A family has no series until something has been counted in it, so `rusticdoc_webhook_deliveries_total` is absent until the first delivery.
+Both histograms have buckets that double from 0.01 to about 82 seconds. A family has no series until something has been counted in it, so `rusticdoc_webhook_deliveries_total` doesn't appear until the first delivery.
 
-Some questions these answer:
+A few queries to start from:
 
-| Question | Query |
+| What you want to know | Query |
 |---|---|
 | Rate of server errors | `sum(rate(rusticdoc_requests_total{status=~"5.."}[5m]))` |
 | 95th percentile of conversion time | `histogram_quantile(0.95, sum by (le) (rate(rusticdoc_stage_seconds_bucket{stage="convert"}[5m])))` |
 | Webhooks that were given up on | `rate(rusticdoc_webhook_deliveries_total{outcome="gave_up"}[1h])` |
-| A replica that cannot sync fonts | `rate(rusticdoc_store_font_syncs_total{outcome="failed"}[5m]) > 0` |
+| A replica that can't sync fonts | `rate(rusticdoc_store_font_syncs_total{outcome="failed"}[5m]) > 0` |
 
 ## Health and readiness
 
@@ -141,24 +139,24 @@ curl http://localhost:9027/health
 curl http://localhost:9027/ready
 ```
 
-| Route | Answers | Use it for |
+| Route | Returns | Use it for |
 |---|---|---|
-| `/health` | `200` whenever the service answers | Liveness |
-| `/ready` | The same, or `503` with `{"status":"syncing"}` while a replica with a store has not yet synced its fonts | Readiness |
+| `/health` | `200` whenever the service is responding | Liveness |
+| `/ready` | The same, or `503` with `{"status":"syncing"}` while a replica with a store hasn't synced its fonts yet | Readiness |
 
 A caller the service knows gets the detail, and so does anyone when no credentials are configured:
 
-| Field | Holds |
+| Field | Contains |
 |---|---|
 | `status` | `up` |
-| `uptime_seconds` | Since the service started |
+| `uptime_seconds` | Time since the service started |
 | `engines.libreoffice`, `engines.qpdf` | Whether each engine is configured |
-| `details.libreoffice.status` | `up` or `down`, by whether it is configured |
+| `details.libreoffice.status` | `up` or `down`, depending on whether it's configured |
 | `details.libreoffice.pool` | `workers`, `busy`, `idle`, `started`, `restarts` and `max_jobs` |
 | `details.store` | Only with a store: `location` and `fontsSynced` |
 
-With credentials configured, a caller without them sees only `{"status":"up"}`.
+When credentials are configured, a caller without them only sees `{"status":"up"}`.
 
-`engines.libreoffice` says that LibreOffice is configured, not that a conversion would work. To test that, send one.
+`engines.libreoffice` tells you LibreOffice is configured. It doesn't tell you a conversion would work, and the way to test that is to send one.
 
 `/v1/version` needs credentials and lists the version and the engines in use.

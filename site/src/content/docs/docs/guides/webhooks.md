@@ -4,7 +4,7 @@ description: Get results by HTTP callback instead of holding a request open, and
 sidebar: { order: 6 }
 ---
 
-A webhook request answers `204` at once and posts the result to a URL you name. After this page you can send one, handle failures and retries, and verify the signature in Node or Python. If you cannot host a receiver, run the request as a [background job](/docs/guides/background-jobs/) and fetch the result instead.
+Add a webhook header to a request and the service returns `204` straight away, then posts the result to your URL when it's ready. If you can't host a receiver, run the request as a [background job](/docs/guides/background-jobs/) and fetch the result instead.
 
 ```bash
 curl -H "X-Rusticdoc-Webhook-Url: https://receiver.example.com/documents" \
@@ -20,17 +20,15 @@ curl -H "X-Rusticdoc-Webhook-Url: https://receiver.example.com/documents" \
 | `X-Rusticdoc-Webhook-Url` | Yes | Where the result goes |
 | `X-Rusticdoc-Webhook-Error-Url` | No | Where failures go. Without it, they go to the result URL |
 | `X-Rusticdoc-Webhook-Method` | No | `POST` (default), `PUT` or `PATCH`, for both URLs |
-| `X-Rusticdoc-Webhook-Extra-Headers` | No | A JSON object of headers to add to deliveries, such as `{"Authorization":"Bearer abc"}` |
+| `X-Rusticdoc-Webhook-Extra-Headers` | No | A JSON object of headers to add to deliveries, like `{"Authorization":"Bearer abc"}` |
 
-Extra headers cannot set `host`, `content-length`, `content-type`, `transfer-encoding`, `connection`, `x-request-id` or anything starting with `x-rusticdoc-`. Those are a `400`.
+Extra headers can't set `host`, `content-length`, `content-type`, `transfer-encoding`, `connection`, `x-request-id` or anything starting with `x-rusticdoc-`. If you try, you get a `400`.
 
 ### Routes that take a webhook
 
-Every route that produces a file: `/v1/render`, `/v1/render/batch`, `/v1/convert` and `/v1/pdf/*`.
+Webhooks work on every route that produces a file: `/v1/render`, `/v1/render/batch`, `/v1/convert` and `/v1/pdf/*`. Routes that return JSON, like `/v1/pdf/metadata/read`, `/v1/pdf/bookmarks/read` and `/v1/pdf/forms/fields`, ignore the headers and respond straight away.
 
-Routes that answer in JSON, such as `/v1/pdf/metadata/read`, `/v1/pdf/bookmarks/read` and `/v1/pdf/forms/fields`, ignore the headers and answer at once.
-
-## What comes back at once
+## The immediate response
 
 | Status | When |
 |---|---|
@@ -39,7 +37,7 @@ Routes that answer in JSON, such as `/v1/pdf/metadata/read`, `/v1/pdf/bookmarks/
 | `403` | The URL fails the allow or deny list (`url_not_allowed`) |
 | `429` | Too many jobs are running (`too_many_jobs`) |
 
-A mistake in the form is reported here, not by webhook. A failure while the job runs, such as a template error, goes by webhook after the `204`.
+A mistake in the form is reported here, not by webhook. A failure while the job runs, like a template error, goes by webhook after the `204`.
 
 ## What a delivery looks like
 
@@ -66,7 +64,7 @@ user-agent: rusticdoc/0.1.0
 | `x-rusticdoc-signature` | Present when `RUSTICDOC_WEBHOOK_SECRET` is set |
 | `content-disposition` | The file's name. Absent on failures |
 
-A failure arrives as JSON, at the error URL if you named one:
+A failure arrives as JSON, at the error URL if you gave one:
 
 ```json
 {
@@ -77,41 +75,39 @@ A failure arrives as JSON, at the error URL if you named one:
 }
 ```
 
-`error` and `status` are the same as on a synchronous response. See [errors](/docs/reference/errors/). An engine's failure reads as the status's name, here too, with the detail in the log under the request id.
+`error` and `status` are the same as on a synchronous response (see [errors](/docs/reference/errors/)). Here too, an engine failure is reported by the name of its status, with the detail in the log under the request id.
 
 ## Retries
 
-The service makes up to 3 attempts in all. A `2xx` answer ends them. Anything else, or a connection failure, leads to the next attempt: the second comes 1 second after the first, and the third 3 seconds after the second. After the third, the job is dropped and the log says `webhook gave up`. The result is not kept anywhere.
+The service makes up to 3 attempts in total and stops at the first `2xx`. Any other response, or a connection failure, leads to the next attempt. The second comes 1 second after the first, and the third 3 seconds after the second. If the third fails too, the job is dropped, the log says `webhook gave up`, and the result isn't kept anywhere.
 
-`RUSTICDOC_WEBHOOK_ATTEMPTS` changes the number of attempts. Each attempt has `RUSTICDOC_API_TIMEOUT` to finish.
+`RUSTICDOC_WEBHOOK_ATTEMPTS` changes the number of attempts, and each attempt has `RUSTICDOC_API_TIMEOUT` to finish. Redirects aren't followed, so a `3xx` counts as a failure.
 
-Redirects are not followed, so a `3xx` counts as a failure.
-
-A delivery can arrive twice, if the receiver processed it and its answer was lost. Use `x-request-id` to spot a repeat.
+A delivery can arrive twice if your receiver processed it but its response was lost. Use `x-request-id` to spot a repeat.
 
 ## Limits
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook and background jobs running at once, in all |
+| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Total webhook and background jobs running at the same time |
 | `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | The same, for one caller |
 
-Past either, the request gets `429 too_many_jobs` before its body is read. A job holds its place through its delivery attempts, so a slow or failing receiver uses up places.
+Past either limit, a request gets `429 too_many_jobs` before its body is read. A job holds its slot through its delivery attempts, so a slow or failing receiver uses up slots.
 
-A job has the same time limit as a synchronous request. Nothing is queued on disk, so a job does not survive a restart of the service. If you need a result, treat a missing callback as a failure and send the request again.
+A job has the same time limit as a synchronous request. Nothing is queued on disk, so a job doesn't survive a restart of the service. If you need a result, treat a missing callback as a failure and send the request again.
 
 ## Which URLs are allowed
 
-- `http` or `https` only, with no user or password in the URL. Use extra headers for credentials.
-- Private addresses are refused with a `400`: loopback, private ranges, link-local, and names such as `localhost` or `*.internal`. `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true` allows them.
-- The address is checked when the request arrives, then the delivery is pinned to it, so a DNS change cannot redirect it.
-- `RUSTICDOC_WEBHOOK_ALLOW_LIST` and `RUSTICDOC_WEBHOOK_DENY_LIST` (and `RUSTICDOC_WEBHOOK_ERROR_ALLOW_LIST`, `RUSTICDOC_WEBHOOK_ERROR_DENY_LIST`) are comma-separated regular expressions. A refusal is a `403`.
+- Only `http` and `https` URLs are accepted, with no user or password in them. Use extra headers for credentials.
+- Private addresses are refused with a `400`: loopback, private ranges, link-local, and names like `localhost` or `*.internal`. `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true` allows them.
+- The address is checked when the request arrives and the delivery is pinned to it, so a DNS change can't redirect it.
+- `RUSTICDOC_WEBHOOK_ALLOW_LIST` and `RUSTICDOC_WEBHOOK_DENY_LIST` (and `RUSTICDOC_WEBHOOK_ERROR_ALLOW_LIST`, `RUSTICDOC_WEBHOOK_ERROR_DENY_LIST`) are comma-separated regular expressions. A URL they refuse gets a `403`.
 
-`RUSTICDOC_WEBHOOK_DISABLED=true` makes the service ignore the headers, on every route, so the request runs synchronously.
+`RUSTICDOC_WEBHOOK_DISABLED=true` makes the service ignore the headers on every route, so the request runs synchronously.
 
 ## Signatures
 
-Set `RUSTICDOC_WEBHOOK_SECRET` to sign deliveries. Without it, deliveries are not signed, and the service warns at start.
+Set `RUSTICDOC_WEBHOOK_SECRET` to sign deliveries. Without it they aren't signed, and the service warns at start.
 
 The signature is `v1=` followed by the hex HMAC-SHA256 of this string, over the raw body bytes:
 
@@ -121,14 +117,14 @@ The signature is `v1=` followed by the hex HMAC-SHA256 of this string, over the 
 
 ### The signing key
 
-Each caller signs with its own key, so one tenant cannot send another's receiver something that verifies. Every key of a tenant in `RUSTICDOC_TENANT_KEYS` signs with the tenant's key, so replacing a key leaves receivers as they are.
+Each caller signs with its own key, so one tenant can't send another's receiver something that verifies. Every key of a tenant in `RUSTICDOC_TENANT_KEYS` signs with the tenant's key, so receivers don't need to change when you replace a key.
 
 | Service | Principal | Key |
 |---|---|---|
 | With credentials | `key:<hex SHA-256 of the API key>`, `tenant:<name>` for a [tenant key](/docs/guides/authentication/#tenant-keys), `basic:<hex SHA-256 of the user>` or `oidc:<hex SHA-256 of the token's subject>` | `HMAC-SHA256(secret, principal)` |
 | No credentials | `public` | The secret's bytes |
 
-Do not derive this by hand. Run the command with the service's secret set, and give the receiver the hex it prints:
+Don't derive the key by hand. Run the command with the service's secret set, and give the receiver the hex it prints:
 
 ```bash
 # In a container with RUSTICDOC_WEBHOOK_SECRET set
@@ -142,7 +138,7 @@ rusticdoc webhook-secret
 
 ### Verify in Node
 
-No dependencies. Run with Node 26. Read the raw body: verifying a parsed or re-encoded body fails.
+This needs no dependencies and runs with Node 26. Read the raw body, because verifying a parsed or re-encoded body fails.
 
 ```js title="receiver.mjs"
 import { createServer } from 'node:http';
@@ -193,7 +189,7 @@ createServer((req, res) => {
 
 ### Verify in Python
 
-Standard library only. Run with Python 3.13.
+This uses only the standard library and runs with Python 3.13.
 
 ```python title="receiver.py"
 import hashlib
@@ -241,7 +237,7 @@ ThreadingHTTPServer(("0.0.0.0", port), Receiver).serve_forever()
 
 ### Try them
 
-Both receivers above were run against real deliveries, signed for an API-key caller, a basic-auth user and a service with no credentials, for both `render.completed` and `render.failed`. They accepted those. They rejected a changed body, a changed event or request id, a stale timestamp and another caller's key. To repeat this locally:
+Both receivers are tested against real deliveries, signed for an API-key caller, a basic-auth user and a service with no credentials, for both `render.completed` and `render.failed`. They accept those, and they reject a changed body, a changed event or request id, a stale timestamp and another caller's key. To try it yourself:
 
 ```bash
 docker run -d --name rd-webhooks -p 127.0.0.1:9028:9027 \

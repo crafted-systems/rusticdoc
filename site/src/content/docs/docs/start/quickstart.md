@@ -1,11 +1,11 @@
 ---
 title: Quickstart
-description: Go from nothing to a filled invoice PDF in a few commands.
+description: Start the service, send it a Word template and some JSON, and get a filled invoice back as a PDF.
 sidebar:
   order: 1
 ---
 
-On this page you start the service, send it a Word template and some JSON, and get back a filled invoice as a PDF. You need Docker and `curl`.
+You'll start the service, send it a Word template with some JSON, and get a filled invoice back as a PDF. All you need is Docker and `curl`.
 
 ## Start the service
 
@@ -17,22 +17,22 @@ docker run -d --name rusticdoc \
 ```
 
 :::note[Pulling the image needs access for now]
-`ghcr.io/vmosoti/rusticdoc:0.1.0` is private while the repository is. Sign in first with `docker login ghcr.io`, using a GitHub token that can read packages, or build the image from a checkout of the repository with `docker build -t rusticdoc .` and use `rusticdoc` as the image name in the command above.
+`ghcr.io/vmosoti/rusticdoc:0.1.0` is private for as long as the repository is. Either sign in with `docker login ghcr.io` and a GitHub token that can read packages, or build the image yourself from a checkout with `docker build -t rusticdoc .` and use `rusticdoc` as the image name above.
 :::
 
-With no credentials configured, the service answers anyone who can reach it. The `-p 127.0.0.1:` part keeps it on your machine. [Install](/docs/start/install/) explains the other flags.
+There's no authentication set up yet, so anyone who can reach the port can use the service. That's why the command publishes it with `-p 127.0.0.1:`, which keeps it on your machine. [Install](/docs/start/install/) explains the other flags.
 
-Check that it is up:
+Check that it's running:
 
 ```bash test
 curl http://localhost:9027/ready
 ```
 
-The answer is JSON that starts with `{"status":"up"`.
+You should get JSON back that starts with `{"status":"up"`.
 
 ## Get the sample
 
-The sample is a Word file with tags such as `{{ customer.name }}` in it, and a JSON file with the values:
+The sample is a Word file with tags like `{{ customer.name }}` typed into it, plus a JSON file with the values to fill them:
 
 ```bash
 curl -o invoice.docx https://rusticdoc.com/samples/invoice-template.docx
@@ -47,17 +47,17 @@ curl -F template=@invoice.docx -F "data=<invoice.json" -F steps=convert \
 head -c 5 invoice.pdf
 ```
 
-The last line prints `%PDF-`. Open `invoice.pdf` and you will see invoice INV-2041 for Amani Otieno, with a row for each item and a total of KES 36,300.00.
+The last line should print `%PDF-`. Open `invoice.pdf` and you'll find invoice INV-2041 for Amani Otieno, with a row for each item and a total of KES 36,300.00.
 
-The request has three parts:
+Here's what each part of that request does:
 
 | Part | What it does |
 |---|---|
 | `template=@invoice.docx` | Uploads the file as the template |
-| `data=<invoice.json` | Sends the contents of the file as the text of the `data` field |
-| `steps=convert` | Runs one step after filling the template: convert to PDF |
+| `data=<invoice.json` | Sends the file's contents as the text of the `data` field |
+| `steps=convert` | Converts the filled template to PDF |
 
-Leave out `steps` to get the filled Word file back:
+If you leave out `steps`, you get the filled Word file back instead:
 
 ```bash test
 curl -F template=@invoice.docx -F "data=<invoice.json" \
@@ -65,7 +65,7 @@ curl -F template=@invoice.docx -F "data=<invoice.json" \
 unzip -p filled.docx word/document.xml | grep -c 'Amani Otieno'
 ```
 
-`-F "data=<invoice.json"` sends the file's contents as a text field, and needs the quotes so that your shell does not read the `<`. Uploading it as a file does the same thing:
+Keep the quotes around `-F "data=<invoice.json"`, or your shell will try to read the `<` as a redirect. You can also upload the JSON as a file, which does the same thing:
 
 ```bash test
 curl -F template=@invoice.docx -F data=@invoice.json \
@@ -81,7 +81,7 @@ docker rm -f rusticdoc
 
 ## Next
 
-- [Concepts](/docs/start/concepts/) explains what happened in that request.
-- [Template syntax](/docs/templates/syntax/) shows how to write your own template.
+- [Concepts](/docs/start/concepts/) walks through what happened in that request.
+- [Template syntax](/docs/templates/syntax/) shows you how to write your own template.
 - [Install](/docs/start/install/) covers Compose, building from source and the CLI.
 - [Security](/docs/operate/security/) lists what to set before anyone else can reach the service.

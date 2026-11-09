@@ -1,34 +1,29 @@
 ---
 title: Office formats
-description: Place loops and conditions in DOCX, ODT, XLSX, ODS, PPTX and ODP templates, and see what each format supports.
+description: Where to put loops and conditions in DOCX, ODT, XLSX, ODS, PPTX and ODP templates, and what each format supports.
 sidebar:
   order: 4
 ---
 
-This page shows where to put tags in Word, LibreOffice, Excel and PowerPoint files, so that a loop repeats the row, paragraph or slide you meant. It ends with what each format supports and what it does not.
-
-A template is an ordinary file with tags typed into its text. You need no add-in, field or special style.
+A template is an ordinary Word, LibreOffice, Excel or PowerPoint file with tags typed into its text. You don't need an add-in, a field or a special style. What matters is where you put them, so that a loop repeats the row, paragraph or slide you meant.
 
 :::note
-Templates typed in Word, Excel and PowerPoint 16.114 for Mac have been filled, and the results open in those apps without a repair prompt. Office for Windows has not been tried. See [known limits](/docs/project/known-limits/).
+Filling has been tested with templates typed in Word, Excel and PowerPoint 16.114 for Mac, and the results open in those apps without a repair prompt. Office for Windows isn't tested yet. See [known limits](/docs/project/known-limits/).
 :::
 
 ## Typing tags in a word processor
 
-Word and other editors do things to text as you type. The service undoes the ones that matter:
+Word and other editors change text as you type, and the service undoes the changes that matter.
 
-- **Split runs.** Word often splits text into several runs because of spell-check marks, edits or formatting. A tag split this way still works, because the runs of a paragraph are joined before tags are read. The joined text takes the formatting of the run it starts in, so format the whole tag or its first character.
-- **Curly quotes.** `{{ “x” | default(‘y’) }}` is read with straight quotes.
-- **Non-breaking spaces** in a tag are read as spaces.
-- **Entities** such as `&quot;` in the file's XML are decoded.
+Word often splits text into several runs because of spell-check marks, edits or formatting. A tag split this way still works, because the runs of a paragraph are joined before tags are read. The joined text takes the formatting of the run it starts in, so format the whole tag or its first character.
 
-A line break typed inside a tag is read as whitespace too.
+Curly quotes are read as straight ones, so `{{ “x” | default(‘y’) }}` works. A non-breaking space in a tag counts as a normal space, and a line break typed inside one as whitespace. Entities like `&quot;` in the file's XML are decoded.
 
 ## What a block repeats
 
-Apart from the sheet loop, there are no special loop tags. The positions of a block's opening and closing tags decide what repeats, for `{% for %}` and `{% if %}` alike.
+There are no special loop tags, apart from the sheet loop. What repeats depends on where a block's opening and closing tags sit, for `{% for %}` and `{% if %}` alike.
 
-| Opening and closing tag sit | Repeats |
+| Where the opening and closing tags sit | What repeats |
 |---|---|
 | In the same paragraph | The text between them |
 | In the same table row, in any cells | That row |
@@ -38,13 +33,13 @@ Apart from the sheet loop, there are no special loop tags. The positions of a bl
 | In different shapes of one slide (PPTX) | That slide |
 | On one slide, with `\| shift(…)` (PPTX) | Those shapes, each copy moved by a step |
 | In rows of a sheet (XLSX, ODS) | Those rows |
-| `{% sheet for s in sites %}` in any cell of a sheet (XLSX, ODS) | That sheet, once per item: see [repeating a sheet](#repeating-a-sheet) |
+| `{% sheet for s in sites %}` in any cell of a sheet (XLSX, ODS) | That sheet, once per item. See [repeating a sheet](#repeating-a-sheet) |
 
-Tags in different parts of a package cannot form a block, such as a `{% for %}` in the body and its `{% endfor %}` in a header, or tags on two sheets of an XLSX: `a block cannot span parts`. PPTX slides are the exception, as the table says.
+Tags in different parts of a package can't form a block, like a `{% for %}` in the body with its `{% endfor %}` in a header, or tags on two sheets of an XLSX. That fails with `a block cannot span parts`. PPTX slides are the exception, as the table shows.
 
 ### Table rows
 
-Put the opening tag in the row's first cell and the closing tag in its last. The sample invoice does this, and the middle cells hold no block tags:
+Put the opening tag in the row's first cell and the closing tag in its last. That's what the sample invoice does, and its middle cells hold no block tags:
 
 | Item | Qty | Unit price | Amount |
 |---|---|---|---|
@@ -59,11 +54,11 @@ grep -o 'Delivery to Mombasa' out.xml
 grep -o 'KES 28,800.00' out.xml
 ```
 
-An empty list removes the row. Tags in two rows repeat both rows as a group, for a line with a description under it.
+An empty list removes the row. Tags in two rows repeat both rows as a group, which suits a line with a description under it.
 
 ### Paragraphs
 
-Put the opening tag in the first paragraph to repeat, and the closing tag in the last.
+Put the opening tag in the first paragraph you want repeated, and the closing tag in the last.
 
 ```text
 {% for i in items %}Item {{ i.name }}
@@ -71,17 +66,17 @@ Some text about it.
 Last line{% endfor %}
 ```
 
-This gives all three paragraphs once per item. To start each item on a new page in a DOCX or ODT, add a paragraph holding `{{ "" | pagebreak }}` before the closing tag.
+You get all three paragraphs once per item. To start each item on a new page in a DOCX or ODT, add a paragraph holding `{{ "" | pagebreak }}` before the closing tag.
 
-A paragraph holding only a block tag stays, and is empty, in each copy. To avoid blank lines, write the tags in paragraphs that hold text, as above.
+A paragraph that holds only a block tag stays in each copy as an empty paragraph. To avoid the blank lines, write the tags in paragraphs that also hold text, as above.
 
 ### A loop around a table
 
-Tags in paragraphs before and after a table repeat the whole table with those two paragraphs. Since each holds only a tag, each copy gets two empty paragraphs.
+Tags in the paragraphs before and after a table repeat the whole table along with those two paragraphs. Each of them holds only a tag, so every copy gets two empty paragraphs.
 
 ### Text in one paragraph
 
-Tags in one paragraph repeat only the text between them, and the paragraph stays one paragraph:
+With both tags in one paragraph, only the text between them repeats, and it stays one paragraph:
 
 ```text
 {% for t in tags %}{{ t }}{% if not loop.last %}, {% endif %}{% endfor %}
@@ -89,7 +84,7 @@ Tags in one paragraph repeat only the text between them, and the paragraph stays
 
 ### else and elif
 
-`{% else %}` and `{% elif %}` follow the same rule. When a block spans rows or paragraphs, each needs a row or paragraph of its own, starting that branch. The closing tag's row or paragraph belongs to the last branch.
+`{% else %}` and `{% elif %}` follow the same rule. When a block spans rows or paragraphs, each of them needs a row or paragraph of its own, and its branch starts there. The closing tag's row or paragraph belongs to the last branch.
 
 ```text
 {% if vip %}Thank you for being a member.
@@ -97,17 +92,17 @@ Tags in one paragraph repeat only the text between them, and the paragraph stays
 Terms apply.{% endif %}
 ```
 
-Putting `{% else %}` in the same paragraph as the block's opening or closing tag, when the block spans paragraphs, is refused:
+If the block spans paragraphs and you put `{% else %}` in the same paragraph as its opening or closing tag, the template is refused:
 
 ```text
 '{% else %}' (word/document.xml paragraph 1) needs its own paragraph between '{% if a %}' (word/document.xml paragraph 1) and '{% endif %}' (word/document.xml paragraph 2)
 ```
 
-Nesting works: a row loop in a paragraph loop, a row loop in another row loop, or an inline loop in a row.
+You can nest a row loop in a paragraph loop, a row loop in another row loop, or an inline loop in a row.
 
 ## Remove an element
 
-A block needs two tags and repeats rows, paragraphs and slides only. To take out one thing on a condition, such as a table column, a whole table from inside it, a picture or a sheet, use `drop`. It prints nothing and removes the element that holds the tag:
+A block needs two tags, and it only repeats rows, paragraphs and slides. To take out one thing on a condition, like a table column, a whole table from inside it, a picture or a sheet, use `drop`. It prints nothing and removes the element that holds the tag:
 
 ```text
 {{ drop("column") if not show_discount }}
@@ -115,7 +110,7 @@ A block needs two tags and repeats rows, paragraphs and slides only. To take out
 {{ drop("paragraph", 3) if not terms }}
 ```
 
-`drop` is an ordinary expression, so a condition goes in the same tag with `if`, or around it in a block. When the condition is false, nothing is removed.
+`drop` is an ordinary expression, so you can put the condition in the same tag with `if`, or around it in a block. When the condition is false, nothing is removed.
 
 The first argument names the element, and the tag's position says which one:
 
@@ -131,9 +126,9 @@ The first argument names the element, and the tag's position says which one:
 | `slide` | Anywhere on the slide | Refused | Refused | Refused | Refused | Yes | Yes |
 | `sheet` | In any cell of the sheet | Refused | Refused | Yes | Yes | Refused | Refused |
 
-A shape is any drawn object: a text box, a rectangle, a group, and also a picture, chart or table frame, so `drop("shape")` removes whichever object holds the tag.
+A shape is any drawn object. That covers a text box, a rectangle or a group, and also a picture, chart or table frame, so `drop("shape")` removes whichever object holds the tag.
 
-The sample document `drop.docx` holds a tag for each element, on a condition its data sets. Its items table has a discount column whose header cell holds `Discount{{ drop("column") if not discount }}`:
+The sample document `drop.docx` has a tag for each element, each on a condition that its data sets. Its items table has a discount column whose header cell holds `Discount{{ drop("column") if not discount }}`:
 
 ```bash test
 jq '.discount = false' drop.json > data.json
@@ -146,9 +141,9 @@ grep -o 'Amount' out.xml
 
 ### Paragraphs and rows
 
-`drop("paragraph", n)` removes the tag's paragraph and the `n - 1` after it, and `drop("row", n)` the tag's row and the `n - 1` below it. Without a count it is one. The other elements take no count.
+`drop("paragraph", n)` removes the tag's paragraph and the `n - 1` after it, and `drop("row", n)` removes the tag's row and the `n - 1` below it. Without a count it's one. The other elements take no count.
 
-Inside a loop, each copy has its own tag, so a drop removes that copy only:
+Inside a loop each copy has its own tag, so a drop removes only that copy:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -163,18 +158,18 @@ grep -o 'Paper filters, box of 100' out.xml
 ! grep -q 'Delivery to Mombasa' out.xml
 ```
 
-What stays valid:
+The file is kept valid after a drop:
 
-- A table cell, text box, header or slide text left without a paragraph gets an empty one, as Word, PowerPoint and LibreOffice need.
-- A Word paragraph that ends a section keeps its section settings, and loses its text.
-- A table left with no rows goes, and so does a list item left empty in an ODT.
-- A row that holds part of a cell merged down across rows that stay is refused: `cannot remove a row that holds part of a cell merged down across rows that stay`.
+- A table cell, text box, header or slide text left without a paragraph gets an empty one, because Word, PowerPoint and LibreOffice need it.
+- A Word paragraph that ends a section loses its text but keeps its section settings.
+- A table left with no rows is removed, and so is a list item left empty in an ODT.
+- A row that holds part of a cell merged down across rows that stay can't be removed: `cannot remove a row that holds part of a cell merged down across rows that stay`.
 
 ### Columns
 
-`drop("column")` removes the cell in that column from every row, and the column from the table's grid. A Word table with a fixed width, a PowerPoint table and an ODP table frame get narrower by the column's width. Elsewhere the other columns share the width.
+`drop("column")` removes that column's cell from every row, and the column from the table's grid. A Word table with a fixed width, a PowerPoint table and an ODP table frame get narrower by the column's width. Everywhere else, the other columns share the width.
 
-A column that a merged cell spans is refused: `drop("column") cannot remove column 3: a cell merged across columns spans it`. Unmerge the cells, or put the merged cell's text in a column that stays. The sample invoice's total row spans its first three columns, so its unit price column cannot go:
+A column that a merged cell spans can't be removed, and you get `drop("column") cannot remove column 3: a cell merged across columns spans it`. Either unmerge the cells or put the merged cell's text in a column that stays. The sample invoice's total row spans its first three columns, so its unit price column can't go:
 
 ```bash test=fail
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -187,19 +182,19 @@ curl -F template=@tagged.docx -F "data=<invoice.json" \
 
 ### Pictures, charts and shapes
 
-Type the tag in the object's alt text. In Word, Excel and PowerPoint, right-click the object and choose View Alt Text; in LibreOffice, choose Description, which has a title and a description. Either field works.
+Type the tag in the object's alt text. In Word, Excel and PowerPoint, right-click the object and choose View Alt Text. In LibreOffice, choose Description, which has a title and a description, and either field works.
 
 ```text
 {{ drop("picture") if not show_logo }}
 ```
 
-Alt text can hold other tags too, such as `Logo of {{ company }}`. They print into the alt text, and the `drop` prints nothing. A block in alt text must open and close there: `a block in alt text must open and close in the same alt text`.
+Alt text can hold other tags too, like `Logo of {{ company }}`. Those print into the alt text, while the `drop` prints nothing. A block in alt text has to open and close there, or you get `a block in alt text must open and close in the same alt text`.
 
-A shape's tag can also go in the text it holds, such as `Stamp{{ drop("shape") if paid }}` in a text box. In an XLSX, text in a drawing is not read, so use the shape's alt text there.
+A shape's tag can also go in the text it holds, like `Stamp{{ drop("shape") if paid }}` in a text box. Text in a drawing isn't read in an XLSX, so use the shape's alt text there.
 
-When LibreOffice saves a PPTX or an XLSX, it leaves out a chart's alt text. Type the tag in PowerPoint or Excel, or keep the template in ODP or ODS.
+LibreOffice leaves out a chart's alt text when it saves a PPTX or an XLSX, so type the tag in PowerPoint or Excel, or keep the template in ODP or ODS.
 
-The sample deck holds a tag for each element. This leaves out its picture and its appendix slide:
+The sample deck has a tag for each element. This request leaves out its picture and its appendix slide:
 
 ```bash test
 jq '.logo = false | .appendix = false' drop.json > data.json
@@ -212,15 +207,15 @@ test "$(unzip -Z1 out.pptx | grep -c '^ppt/slides/slide[0-9]*\.xml$')" = 2
 
 ### In sheets
 
-Rows and columns are removed after loops have numbered the rows, and the cells below or to the right move up or left. Every reference to a moved cell follows it: formulas on the sheet and on other sheets, defined names such as the print area, charts, conditional formats, data validations, hyperlinks, merged cells, column widths, tables and the anchors of pictures. In an ODS, formulas, print ranges and named ranges follow.
+Rows and columns are removed after loops have numbered the rows, and the cells below or to the right move up or left. Every reference to a moved cell follows it. That covers formulas on the sheet and on other sheets, defined names like the print area, charts, conditional formats, data validations, hyperlinks, merged cells, column widths, tables and the anchors of pictures. In an ODS, formulas, print ranges and named ranges follow.
 
-A range loses the rows and columns that went, so `=SUM(D2:D5)` becomes `=SUM(D2:D4)` when one of its rows goes. A range whose rows all went becomes the row before them, as a loop over an empty list leaves it. A reference that would point at a removed cell is refused rather than left broken:
+A range loses the rows and columns that went, so `=SUM(D2:D5)` becomes `=SUM(D2:D4)` when one of its rows goes. If all of a range's rows went, it becomes the row before them, as it does after a loop over an empty list. A reference that would point at a removed cell is refused instead of being left broken:
 
 ```text
 drop("column") in sheet "Summary" removes cell C4, which the formula in D6 (C4*2) points at; remove that reference or keep the cells
 ```
 
-A whole-column reference such as `=SUM(C:C)` is refused when a column goes, and a whole-row one such as `=SUM(3:3)` when a row goes; write the range with rows. Merged cells that span a removed column are refused, and merged cells over removed rows shrink. A column of an Excel table goes from the table too; the table's header row, or all of its rows, cannot go.
+A whole-column reference like `=SUM(C:C)` is refused when a column goes, and so is a whole-row one like `=SUM(3:3)` when a row goes. Write the range with rows instead. Merged cells that span a removed column are refused, while merged cells over removed rows shrink. A column of an Excel table is removed from the table too, but the table's header row, or all of its rows, can't go.
 
 The sample workbook drops its discount column and the row of each item marked hidden, and the totals follow:
 
@@ -234,19 +229,19 @@ grep -o '<f[^>]*>SUM(C2:C4)</f>' sheet.xml
 grep -o '<f[^>]*>C5\*2</f>' sheet.xml
 ```
 
-`drop("sheet")` removes the sheet with its drawings, charts, tables and comments, and with a [sheet loop](#repeating-a-sheet) only the copy that holds it. These are refused:
+`drop("sheet")` removes the sheet with its drawings, charts, tables and comments. In a [sheet loop](#repeating-a-sheet) it removes only the copy that holds it. These are refused:
 
 - Removing every sheet: `drop("sheet") removes every sheet, and a workbook needs one`.
 - Removing a sheet that a formula or a defined name on another sheet points at.
-- In an XLSX, a tag in the alt text of a picture on a sheet that a sheet loop repeats, since a drawing is read once for all copies.
+- In an XLSX, a tag in the alt text of a picture on a sheet that a sheet loop repeats, because a drawing is read once for all copies.
 
 ### Slides
 
-`drop("slide")` removes the slide with its speaker notes and what only it used, as a slide loop over an empty list does. Removing every slide is refused: `drop("slide") removes every slide, and a presentation needs one`.
+`drop("slide")` removes the slide with its speaker notes and anything only it used, the same as a slide loop over an empty list. You can't remove every slide: `drop("slide") removes every slide, and a presentation needs one`.
 
 ### What goes with an element
 
-Pictures, chart parts, embedded objects, relationships, content types and ODF manifest entries that only the removed element used go too, so the file opens without a repair. What another element still uses stays.
+Pictures, chart parts, embedded objects, relationships, content types and ODF manifest entries that only the removed element used go with it, so the file opens without a repair. Anything another element still uses stays.
 
 ### Mistakes
 
@@ -254,7 +249,7 @@ An element written in the tag is checked when the template is compiled, and [val
 
 | Mistake | Error |
 |---|---|
-| An element the format lacks | `a DOCX has no slides; drop("slide") works in PPTX and ODP` |
+| An element the format doesn't have | `a DOCX has no slides; drop("slide") works in PPTX and ODP` |
 | `row` or `column` outside a table | `drop("row") must sit in a table cell` |
 | `picture` in body text | `drop("picture") must sit in the alt text (title or description) of a picture` |
 | `picture` in a chart's alt text | `sits in a chart, not a picture` |
@@ -274,17 +269,15 @@ curl -F template=@tagged.docx -F "data=<invoice.json" \
 
 ## DOCX
 
-Tags are read in the body, headers, footers, footnotes and endnotes, and in text boxes. A block cannot span a text box and the body.
-
-They are not read in document properties, field codes, comments or attributes such as a hyperlink's address.
+Tags are read in the body, headers, footers, footnotes and endnotes, and in text boxes, but a block can't span a text box and the body. They aren't read in document properties, field codes, comments or attributes like a hyperlink's address.
 
 A newline in a value becomes a line break.
 
 ## ODT
 
-Tags are read in `content.xml` and `styles.xml`, which holds headers and footers. Everything under [what a block repeats](#what-a-block-repeats) applies, and a newline in a value becomes a line break.
+Tags are read in `content.xml` and in `styles.xml`, which holds headers and footers. Everything under [what a block repeats](#what-a-block-repeats) applies, and a newline in a value becomes a line break.
 
-To try it from a DOCX, convert one. The tags survive the conversion:
+To try it with a DOCX, convert one first. The tags survive the conversion:
 
 ```bash test
 curl -F files=@invoice.docx -F to=odt \
@@ -298,11 +291,11 @@ Charts are refused in ODT.
 
 ## XLSX
 
-Tags are read in the cells of every sheet, in shared strings or inline text. A sheet's name can hold `{{ }}` expressions, as [repeating a sheet](#repeating-a-sheet) shows. Tags are not read in headers and footers, comments, charts or drawings.
+Tags are read in the cells of every sheet, in shared strings or inline text. A sheet's name can hold `{{ }}` expressions too, as [repeating a sheet](#repeating-a-sheet) shows. Tags aren't read in headers and footers, comments, charts or drawings.
 
-A cell holding only `{{ expr }}` becomes a real number or boolean when the value is one, so totals and formats work. A `null` gives an empty cell. A cell with other text around the tag stays text. A newline in a value stays a newline character, and the cell needs wrap text to show it.
+A cell that holds only `{{ expr }}` becomes a real number or boolean when the value is one, so totals and formats work, and a `null` gives an empty cell. If there's other text around the tag, the cell stays text. A newline in a value stays a newline character, and the cell needs wrap text to show it.
 
-Tags in rows repeat those rows. Copied rows are renumbered, references in formulas move with them, and a range such as `SUM(D3:D3)` grows over every copy. The service also sets the workbook to recalculate when opened, and merged cells follow their rows.
+Tags in rows repeat those rows. Copied rows are renumbered, references in formulas move with them, and a range like `SUM(D3:D3)` grows over every copy. Merged cells follow their rows, and the workbook is set to recalculate when it's opened.
 
 | Before | After three items |
 |---|---|
@@ -337,7 +330,7 @@ The print area and other defined names move with the rows too, so a printed or c
 
 ### Rows inside rows
 
-A row loop can sit inside another row block, such as items inside groups. Put the inner loop's opening and closing tags in different cells of its row; in one cell they repeat text in that cell.
+A row loop can sit inside another row block, like items inside groups. Put the inner loop's opening and closing tags in different cells of its row, because in one cell they repeat text in that cell.
 
 | Row | Cells |
 |---|---|
@@ -346,15 +339,15 @@ A row loop can sit inside another row block, such as items inside groups. Put th
 | 5 | `Subtotal`, `=SUBTOTAL(9,D3:D4)`, `{% endfor %}` |
 | 6 | `Total`, `=SUBTOTAL(9,D3:D5)` |
 
-Each group gets its header, its items and its subtotal. A formula's reference into the loop it sits in stays in its own copy, so each subtotal covers its own group, and an empty group's subtotal covers only its header row. From outside a loop, a range runs from the first copy to the last, so the total covers every group. `SUBTOTAL` skips the other `SUBTOTAL` cells in its range, so the total does not count the subtotals twice, where `SUM` would.
+Each group gets its header, its items and its subtotal. A formula's reference into the loop it sits in stays in its own copy, so each subtotal covers its own group, and an empty group's subtotal covers only its header row. From outside a loop, a range runs from the first copy to the last, so the total covers every group. `SUBTOTAL` skips the other `SUBTOTAL` cells in its range, which is why the total doesn't count the subtotals twice the way `SUM` would.
 
-Start a range on the group's header row, as in `D3:D4`, rather than `D4:D4`. LibreOffice may save a one-cell range such as `D4:D4` as `D4`, which then names one row.
+Start a range on the group's header row, as in `D3:D4`, rather than writing `D4:D4`, because LibreOffice may save a one-cell range like that as `D4`, which then names one row.
 
 ### Repeating a sheet
 
-Put `{% sheet for s in sites %}` in any cell of a sheet, and give the sheet a name with an expression, such as `{{ s.name }}`. The sheet is copied once per item with `s` set, and each copy takes its name from the data. There is no closing tag: the loop ends with the sheet.
+Put `{% sheet for s in sites %}` in any cell of a sheet, and give the sheet a name with an expression, like `{{ s.name }}`. The sheet is copied once per item with `s` set, and each copy takes its name from the data. There's no closing tag, because the loop ends with the sheet.
 
-The loop sits in a cell because Excel caps a sheet name at 31 characters and refuses `: \ / ? * [ ]`, so `{% for s in sites %}{{ s.name }}` cannot be a name. To name the sheet, double-click its tab in Excel or LibreOffice and type `{{ s.name }}`, or text around it such as `Site {{ s.code }}`.
+The loop goes in a cell because Excel caps a sheet name at 31 characters and refuses `: \ / ? * [ ]`, so `{% for s in sites %}{{ s.name }}` can't be a name. To name the sheet, double-click its tab in Excel or LibreOffice and type `{{ s.name }}`, or text around it like `Site {{ s.code }}`.
 
 | Sheet name | Cell A1 | Data | Sheets |
 |---|---|---|---|
@@ -386,20 +379,20 @@ unzip -p out.xlsx xl/worksheets/sheet2.xml |
   grep -o '<c r="B2"[^>]*><v>120</v>'
 ```
 
-Names are made valid: a forbidden character becomes `_`, a name longer than 31 characters is cut, and a name another sheet or an earlier copy already has gets ` (2)`, ` (3)` and so on, as Excel does when it copies a sheet. Case does not count, so `paris` clashes with `Paris`. An empty name becomes `Sheet`. A looped sheet whose name holds no expression keeps its name for the first copy, and the others get ` (2)`, ` (3)` and so on.
+Names are made valid, so a forbidden character becomes `_`, a name longer than 31 characters is cut, and a name that another sheet or an earlier copy already has gets ` (2)`, ` (3)` and so on, as Excel does when it copies a sheet. Case doesn't count, so `paris` clashes with `Paris`, and an empty name becomes `Sheet`. If a looped sheet's name holds no expression, the first copy keeps the name and the others get ` (2)`, ` (3)` and so on.
 
-Each copy is a whole sheet: its rows, row loops, formulas and merged cells work as in any sheet. In an XLSX each copy also gets its own drawings, charts, tables and comments, and its own print area and other names that belong to the sheet. A chart or print area that names the sheet names the copy instead. Pictures are shared. A copied table is renamed, as in `Items_2`, since table names are unique in a workbook, and formulas in the copy follow the new name.
+Each copy is a whole sheet, so its rows, row loops, formulas and merged cells work as in any sheet. In an XLSX each copy also gets its own drawings, charts, tables and comments, and its own print area and other names that belong to the sheet. A chart or print area that names the sheet names the copy instead, while pictures are shared. A copied table is renamed, as in `Items_2`, because table names are unique in a workbook, and formulas in the copy follow the new name.
 
-A formula on another sheet that names the template sheet, such as `='{{ s.name }}'!B2`, points at the first copy.
+A formula on another sheet that names the template sheet, like `='{{ s.name }}'!B2`, points at the first copy.
 
-An empty list removes the sheet. A workbook needs a sheet, so a list that removes every sheet fails: `the sheet loops left the workbook with no sheets`.
+An empty list removes the sheet. A workbook needs a sheet, so a list that removes every sheet fails with `the sheet loops left the workbook with no sheets`.
 
-A sheet name can hold an expression without a loop, to name one sheet from the data, such as `{{ month }} sales`.
+A sheet name can also hold an expression without a loop, to name one sheet from the data, like `{{ month }} sales`.
 
-These are refused, with the place named:
+These are refused, and the error names the place:
 
 - A second sheet loop in one sheet: `a sheet takes one sheet loop`.
-- A sheet loop inside another block, such as a row loop: `a sheet loop repeats the whole sheet, so no other block can hold it`.
+- A sheet loop inside another block, like a row loop: `a sheet loop repeats the whole sheet, so no other block can hold it`.
 - A statement in a sheet name: `a sheet name can hold only {{ }} expressions`.
 - `{% sheet %}` in a DOCX, ODT, PPTX or ODP: `repeats a sheet, so it works in XLSX and ODS only`.
 
@@ -407,34 +400,33 @@ Copies count against the size limits of a render, so a loop over a very long lis
 
 ### Not supported
 
-- **Sheet hyperlinks, data validations, conditional formatting and charts** that point at looped rows do not move with them.
-- **A formula on one sheet that points at looped rows on another** is not re-based.
-- **Page breaks.** A sheet has none.
+Sheet hyperlinks, data validations, conditional formatting and charts that point at looped rows don't move with them, and a formula on one sheet that points at looped rows on another isn't re-based. Page breaks aren't supported either, because a sheet has none.
 
 ## ODS
 
-Tags are read in `content.xml`. Headers and footers are not read.
+Tags are read in `content.xml`, but not in headers and footers.
 
-Tags in rows repeat those rows, and [rows inside rows](#rows-inside-rows) and [repeating a sheet](#repeating-a-sheet) work as in XLSX. Formulas such as `of:=SUM([.D3:.D4])` and the sheet's print ranges are re-based the same way, and a formula's saved result is dropped so that LibreOffice computes it when it opens the file. A reference that names a sheet, such as `[$Other.B2]`, is left as written.
+Tags in rows repeat those rows, and [rows inside rows](#rows-inside-rows) and [repeating a sheet](#repeating-a-sheet) work as they do in XLSX. Formulas like `of:=SUM([.D3:.D4])` and the sheet's print ranges are re-based the same way, and a formula's saved result is dropped so that LibreOffice computes it when it opens the file. A reference that names a sheet, like `[$Other.B2]`, is left as written.
 
-ODS differs from XLSX in two ways:
+ODS differs from XLSX in two ways.
 
-- **Cells stay text.** A cell holding `{{ qty }}` stays a text cell, so a number arrives as text. Do your sums in the data, or in formulas: LibreOffice reads text that looks like a number as one in arithmetic, though `SUM` skips text cells.
-- **Embedded objects are not copied.** A chart or other object on a sheet that a sheet loop repeats gets no copy of its own, so keep such sheets free of them.
+Cells stay text. A cell holding `{{ qty }}` stays a text cell, so a number arrives as text. Do your sums in the data or in formulas, where LibreOffice reads text that looks like a number as one in arithmetic, though `SUM` skips text cells.
 
-A loop whose tags sit on two sheets is not refused in ODS, but it is not supported. To repeat a sheet, use `{% sheet for %}`.
+Embedded objects aren't copied either. A chart or other object on a sheet that a sheet loop repeats gets no copy of its own, so keep such sheets free of them.
+
+A loop whose tags sit on two sheets isn't refused in ODS, but it isn't supported either. To repeat a sheet, use `{% sheet for %}`.
 
 Charts and page breaks are refused in ODS. A newline in a value stays a newline character.
 
 ## PPTX
 
-Tags are read in every slide's shapes and tables. They are not read in layouts, masters or speaker notes.
+Tags are read in every slide's shapes and tables, but not in layouts, masters or speaker notes.
 
 ### Slide loops
 
 Put the opening tag on one slide and the closing tag on the same or a later slide:
 
-| Tags | Repeats |
+| Tags | What repeats |
 |---|---|
 | `{% for %}` on slide 2, `{% endfor %}` on slide 3 | Slides 2 and 3, once per item, in order |
 | Both in one shape, in the same paragraph | The text between them |
@@ -443,29 +435,29 @@ Put the opening tag on one slide and the closing tag on the same or a later slid
 | On one slide, with `\| shift(…)` on the list | Those shapes, once per item, each moved by the step. See [below](#shapes-that-move-down-or-across-a-slide) |
 | In rows of a table | Those rows |
 
-Each copy of a slide gets its own parts, relationships and ids, and the original's speaker notes are not shared with the copies. An empty list removes the slides, and slides with no tags stay where they are.
+Each copy of a slide gets its own parts, relationships and ids, and the original's speaker notes aren't shared with the copies. An empty list removes the slides, and slides with no tags stay where they are.
 
-For a condition across slides, the slide holding `{% else %}` starts the second branch, even if text sits before the tag on that slide. A block that repeats one slide cannot hold an `{% else %}` or `{% elif %}`: `cannot divide a slide`.
+For a condition across slides, the slide holding `{% else %}` starts the second branch, even if there's text before the tag on that slide. A block that repeats one slide can't hold an `{% else %}` or `{% elif %}`, and fails with `cannot divide a slide`.
 
 ### Shapes that move down or across a slide
 
-To lay a list out on one slide, such as a card per person, add `shift` to the loop's list with the distance from one copy to the next:
+To lay a list out on one slide, like a card per person, add `shift` to the loop's list with the distance from one copy to the next:
 
 ```text
 {% for person in team | shift(y="3cm") %}{{ person.name }}
 {{ person.role }}{% endfor %}
 ```
 
-The loop then repeats the shapes that hold its tags, not the slide, and moves each copy by the step: the first copy stays where the shapes are, the second sits 3 cm lower, the third 6 cm lower. The tags can sit in one text box, which repeats that box, or in several shapes, such as a filled rectangle holding `{% for … %}{{ person.name }}` and a text box beside it holding `{{ person.role }}{% endfor %}`, which repeats both as a pair. A group counts as one shape and moves as a whole.
+The loop then repeats the shapes that hold its tags instead of the slide, and moves each copy by the step. The first copy stays where the shapes are, the second sits 3 cm lower and the third 6 cm lower. The tags can sit in one text box, which repeats that box, or in several shapes, which repeat together. For example, a filled rectangle holding `{% for … %}{{ person.name }}` and a text box beside it holding `{{ person.role }}{% endfor %}` repeat as a pair. A group counts as one shape and moves as a whole.
 
 | Step | Moves each copy |
 |---|---|
 | `shift(y="3cm")` | Down |
 | `shift(x="6cm")` | Across, to the right |
-| `shift(x="6cm", y="1cm")` | Both ways at once |
+| `shift(x="6cm", y="1cm")` | Across and down |
 | `shift(y="-2cm")` | Up |
 
-A step is a quoted number and a unit: `cm`, `mm`, `in`, `pt` or `emu` (914,400 to the inch). PowerPoint's curly quotes work as well as straight ones. The step is read when the template is compiled, so it must be written in the tag and cannot come from data.
+A step is a quoted number and a unit, one of `cm`, `mm`, `in`, `pt` or `emu` (914,400 to the inch). PowerPoint's curly quotes work as well as straight ones. The step is read when the template is compiled, so it has to be written in the tag and can't come from data.
 
 Two shifted loops nest into a grid. Here each row moves down and each cell across, and every row starts again at the left:
 
@@ -473,14 +465,14 @@ Two shifted loops nest into a grid. Here each row moves down and each cell acros
 {% for row in rows | shift(y="2cm") %}{% for cell in row | shift(x="4cm") %}{{ cell }}{% endfor %}{% endfor %}
 ```
 
-Each copy gets a shape id of its own, and pictures and charts printed in a copy go at that copy's position. A placeholder that PowerPoint has not moved takes the position its layout gives it before it moves. Copies that run off the slide are not stopped: a long list needs a smaller step, or a slide loop.
+Each copy gets a shape id of its own, and pictures and charts printed in a copy go at that copy's position. A placeholder that PowerPoint hasn't moved takes the position its layout gives it before it moves. Nothing stops copies from running off the slide, so a long list needs a smaller step, or a slide loop.
 
-Refused, with the tag's slide named:
+These are refused, and the error names the tag's slide:
 
 | Mistake | Error |
 |---|---|
 | No unit | `y="4" has no unit` |
-| A step from data, such as `shift(y=gap)` | `the step is read when the template is compiled, so it cannot come from data` |
+| A step from data, like `shift(y=gap)` | `the step is read when the template is compiled, so it cannot come from data` |
 | An unknown argument | `shift takes x= and y=, not down=` |
 | A step longer than the largest slide | `is longer than the largest slide (56 in, 142.24 cm)` |
 | `{% else %}` in the loop | `cannot sit in a loop that moves shapes with shift` |
@@ -505,7 +497,7 @@ Page breaks are refused, `html` becomes plain text, and a newline in a value sta
 
 ## ODP
 
-Tags are read in `content.xml`, which holds the pages and their speaker notes. Masters are not read. Tags on different pages repeat that run of pages, and copies keep the page name the original had.
+Tags are read in `content.xml`, which holds the pages and their speaker notes, but not in masters. Tags on different pages repeat that run of pages, and the copies keep the page name the original had.
 
 Page breaks and `shift` are refused, `html` becomes plain text, and a newline in a value stays a newline character. A chart is an embedded chart object at the position of the shape that held the tag.
 
@@ -522,27 +514,36 @@ unzip -p out.odp content.xml | grep -o 'Q3 results'
 
 ## Not supported in any format
 
-- Tags in attributes, field codes or document properties, apart from sheet names and the alt text of pictures, charts and shapes. They stay as written. Custom document properties can hold [settings](/docs/templates/translations/#settings-in-document-properties).
-- `{% raw %}`. To print braces, see [printing literal braces](/docs/templates/syntax/#printing-literal-braces).
+Tags in attributes, field codes or document properties aren't read and stay as written. Sheet names and the alt text of pictures, charts and shapes are the exceptions, and custom document properties can hold [settings](/docs/templates/translations/#settings-in-document-properties).
+
+`{% raw %}` isn't supported either. To print braces, see [printing literal braces](/docs/templates/syntax/#printing-literal-braces).
 
 ## What rendering takes out
 
-A template comes from whoever sends it, and the document is read by someone else, so a render takes out of every output what could run or reach out when the document is opened:
+A template comes from whoever sends it and the document is read by someone else, so a render takes out of every output anything that could run or reach out when the document is opened:
 
-| What | Formats | What is left |
+| What's removed | Formats | What's left |
 |---|---|---|
 | Macro projects: `vbaProject.bin` with its data and signatures, and Basic or script libraries (`Basic/`, `Scripts/`, `Dialogs/`) | All | A macro-enabled DOCX, XLSX or PPTX gets the plain content type, so the output is an ordinary file. In ODF, the event bindings and links that call a macro go too, and a macro link keeps its text |
 | OLE objects, ActiveX controls, applets and plugins | All | The object's preview picture, where it has one. Charts and formulas are content and stay, once their own content shows they are what the manifest says |
-| External links: linked pictures, linked data and workbooks, attached templates, linked sections, DDE links, Word `INCLUDEPICTURE`, `INCLUDETEXT`, `LINK`, `DDE` and `DDEAUTO` fields, and formulas using `WEBSERVICE`, `RTD`, `CALL`, `REGISTER`, DDE or another file | All | A linked picture keeps its frame in DOCX and PPTX and goes in ODF. A field keeps its last result as text. A formula goes and its cell keeps the last value where the file holds one; rendering an XLSX drops cached formula values, so there the cell is left empty |
-| Hyperlinks to private or local networks: `localhost`, `*.local`, `*.internal`, `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.0.0/24`, `192.168/16`, `198.18/15`, multicast and reserved addresses, `::1`, `::`, `fc00::/7`, `fe80::/10`, `fec0::/10`, IPv6 forms of those IPv4 ranges, `file:`, drive and UNC paths. Hyperlinks written as fields, and `HYPERLINK` formulas whose target is not a plain text value | All | The link's text. Addresses are read as a browser reads them, so `http://2130706433/`, `http:\\10.0.0.1` and an address with a tab in it count too, and one a browser cannot read counts as private |
+| External links: linked pictures, linked data and workbooks, attached templates, linked sections, DDE links, Word `INCLUDEPICTURE`, `INCLUDETEXT`, `LINK`, `DDE` and `DDEAUTO` fields, and formulas using `WEBSERVICE`, `RTD`, `CALL`, `REGISTER`, DDE or another file | All | A linked picture keeps its frame in DOCX and PPTX and goes in ODF. A field keeps its last result as text. A formula goes and its cell keeps the last value where the file holds one. Rendering an XLSX drops cached formula values, so there the cell is left empty |
+| Hyperlinks to private or local networks: `localhost`, `*.local`, `*.internal`, `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.0.0/24`, `192.168/16`, `198.18/15`, multicast and reserved addresses, `::1`, `::`, `fc00::/7`, `fe80::/10`, `fec0::/10`, IPv6 forms of those IPv4 ranges, `file:`, drive and UNC paths. Hyperlinks written as fields, and `HYPERLINK` formulas whose target isn't a plain text value | All | The link's text. Addresses are read as a browser reads them, so `http://2130706433/`, `http:\\10.0.0.1` and an address with a tab in it count too, and one a browser can't read counts as private |
 
-This covers what the template held and what data put in, such as a `link` filter given an intranet address. Every relationship, content type and manifest entry that pointed at something removed goes with it, so the file opens without a repair. Public hyperlinks, embedded pictures and the template's own parts stay as they were.
+This covers what the template held and what the data put in, like a `link` filter given an intranet address. Every relationship, content type and manifest entry that pointed at something removed goes with it, so the file opens without a repair. Public hyperlinks, embedded pictures and the template's own parts stay as they were.
 
-What the sanitiser cannot read with certainty is refused with an error naming the part, rather than passed through: a part that is neither UTF-8 nor UTF-16 or declares an encoding its bytes are not, one that gives the standard namespaces prefixes Office and LibreOffice never write, two parts whose names differ only in case or percent-encoding, a content-type override that names no part, and a part that a relationship reads as XML but the package does not type as XML. Part names are compared as OPC compares them, percent-decoded and without case. An Excel 4.0 macro or dialog sheet is refused unless the request keeps macros, and a data connection or query table unless it keeps external links, since neither can be taken out without breaking the workbook.
+Anything the sanitiser can't read with certainty is refused, with an error naming the part, instead of being passed through:
+
+- A part that is neither UTF-8 nor UTF-16, or that declares an encoding its bytes aren't in.
+- A part that gives the standard namespaces prefixes Office and LibreOffice never write.
+- Two parts whose names differ only in case or percent-encoding. Part names are compared as OPC compares them, percent-decoded and without case.
+- A content-type override that names no part.
+- A part that a relationship reads as XML but the package doesn't type as XML.
+
+An Excel 4.0 macro or dialog sheet is refused unless the request keeps macros, and so is a data connection or query table unless it keeps external links, because neither can be taken out without breaking the workbook.
 
 ### Keep what a template needs
 
-When you trust a template and it needs one of these, send `keep` on `/v1/render` or `/v1/render/batch` with a comma-separated list: `macros`, `objects`, `externalLinks`, `privateLinks`, or `all`. Anything else is a `400`.
+If you trust a template and it needs one of these, send `keep` on `/v1/render` or `/v1/render/batch` with a comma-separated list of `macros`, `objects`, `externalLinks` and `privateLinks`, or with `all`. Anything else gets a `400`.
 
 ```bash test
 curl -F template=@invoice.docx -F "data=<invoice.json" -F keep=privateLinks \
@@ -550,8 +551,8 @@ curl -F template=@invoice.docx -F "data=<invoice.json" -F keep=privateLinks \
 unzip -tq out.docx
 ```
 
-`keep` changes only what the template stage takes out. LibreOffice still runs no macros and fetches nothing when it converts.
+`keep` only changes what the template stage takes out. LibreOffice still runs no macros and fetches nothing when it converts.
 
 ## Check a template
 
-Mistakes in where tags sit are reported with both positions named. [Validate a template](/docs/templates/validate/) lists them all at once, without rendering a file.
+When tags sit in the wrong place, the error names both positions. [Validate a template](/docs/templates/validate/) lists every mistake in one go, without rendering a file.

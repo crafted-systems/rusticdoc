@@ -5,22 +5,20 @@ sidebar:
   order: 3
 ---
 
-This page lists what each release contains, so that you can see what you get and what changed.
-
 ## Version numbers
 
-rusticdoc follows [ZeroVer](https://0ver.org/): its versions stay below 1.0. A new minor number, such as 0.2.0, may change behaviour you rely on, and this page says what changed. A new patch number, such as 0.1.1, fixes faults without changing what works. Pin the exact version, and read this page before you move to a new minor one.
+rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
 ## 0.1.0
 
-Released on 9 November 2026. This is the first release. The image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, for amd64 and arm64.
+Released on 9 November 2026. This is the first release, and the image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, for amd64 and arm64.
 
 ### Templates
 
 - `{{ }}` tags, `{% for %}`, `{% if %}` and filters in DOCX, ODT, XLSX, ODS, PPTX and ODP, in PDF form fields and annotations, and in text formats (`.txt`, `.md`, `.html`, `.csv`, `.xml`, `.json`, `.svg`).
 - Tags split across runs by Word still work, and a loop around a table row or a paragraph repeats it.
 - Templates typed in Word, Excel and PowerPoint for Mac open there without a repair prompt once filled. Filled workbooks drop Excel's calculation chain, a loop across two shapes on one slide repeats the slide, and charts and pictures in an unmoved placeholder take the position its layout gives it.
-- The same template and data give the same bytes on every run and on amd64 and arm64, except for PDFs from LibreOffice, which it dates and lays out to within hundredths of a point.
+- The same template and data give the same bytes on every run and on amd64 and arm64, except for PDFs from LibreOffice, which it dates itself and lays out to within hundredths of a point.
 - Filters for currency, dates and translations, and for images, barcodes, hyperlinks, colours, a safe subset of HTML, native charts and page breaks.
 - `POST /v1/templates/validate` and `rusticdoc validate`, which list every problem in a template against sample data.
 - Values escaped by file type in `.html`, `.htm`, `.xml`, `.svg` and `.json` templates.
@@ -36,7 +34,7 @@ Released on 9 November 2026. This is the first release. The image is `ghcr.io/vm
 - `drop()` removes the paragraph, row, column, table, picture, chart, shape, slide or sheet that holds it, on a condition, in every Office format where that element exists. See [remove an element](/docs/templates/office/#remove-an-element).
 - Placeholder pictures: a picture in the template whose alt text holds an `image` or `barcode` tag keeps its frame, position and effects, with `fit` set to `contain`, `cover`, `width` or `stretch`. Images may be PNG, JPEG, GIF, WebP or SVG, which is cleaned and given a PNG fallback.
 - Fifteen barcode symbologies, adding Data Matrix, PDF417, Aztec, Code 93, UPC-A, UPC-E, ITF, ITF-14, Codabar and GS1-128, with text under linear codes, colours, quiet zone, rotation, error correction and exact sizes.
-- `color` reaches a paragraph, table cell, table row or shape, as a text or background colour.
+- `color` can be set on a paragraph, table cell, table row or shape, as a text or background colour.
 
 ### Conversion and PDF
 
@@ -48,9 +46,9 @@ Released on 9 November 2026. This is the first release. The image is `ghcr.io/vm
 - `POST /v1/convert`, for one or more files.
 - PDF operations under `/v1/pdf/*`: merge, split, rotate, flatten, optimize, encrypt, convert, watermark, stamp, overlay, sign, embed, Factur-X, metadata, bookmarks, and form fields and filling.
 - `lopdf`, qpdf and pdfcpu as PDF engines.
-- Cryptographic PDF signatures from PAdES B-B to B-LTA: `signature=certificate` on `/v1/pdf/sign`, a `sign` step on `/v1/render` that can be visible, and `rusticdoc pdf sign`. Timestamps from a timestamp authority you trust, revocation data in a DSS and a document timestamp, certification with DocMDP, named keys each with its own callers, and keys in a PKCS#11 token. RSA or ECDSA P-256. Without a key, signing answers `503` and the image signature works as before.
+- Cryptographic PDF signatures from PAdES B-B to B-LTA: `signature=certificate` on `/v1/pdf/sign`, a `sign` step on `/v1/render` that can be visible, and `rusticdoc pdf sign`. Timestamps from a timestamp authority you trust, revocation data in a DSS and a document timestamp, certification with DocMDP, named keys each with its own callers, and keys in a PKCS#11 token. RSA or ECDSA P-256. Without a key, signing returns `503` and the image signature works as before.
 - Text in any script drawn into PDF form fields and annotations, shaped and in subset fonts.
-- An `underlay` step that lays a rendered document over a base PDF, such as letterhead.
+- An `underlay` step that lays a rendered document over a base PDF, like a letterhead.
 
 ### Service
 
@@ -68,7 +66,7 @@ Released on 9 November 2026. This is the first release. The image is `ghcr.io/vm
 - Client templates evaluated in a separate worker process with its own limits.
 - Limits on input before it expands, on connections, and on what one caller can hold.
 - Engines started with no secrets in their environment, and `/proc` entries closed to them.
-- Documents that cannot reach the network, checked by `make outbound`.
+- Documents that can't reach the network, checked by `make outbound`.
 - A limit on what one conversion may write to disk, checked by `make disk`.
 - A hardened image, `deploy/compose.yaml` and `deploy/kubernetes.yaml`.
 

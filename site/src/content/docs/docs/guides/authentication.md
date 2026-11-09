@@ -1,12 +1,12 @@
 ---
 title: Authentication
-description: Protect the service with API keys, tenant keys, basic auth or OpenID Connect, choose who is an admin, and know which routes stay open.
+description: Turn on API keys, tenant keys, basic auth or OpenID Connect, choose who is an admin, and see which routes stay open.
 sidebar: { order: 7 }
 ---
 
-With no credentials configured, the service answers anyone and warns at every start. After this page you can turn on API keys, tenant keys, basic auth or OpenID Connect, choose who may change fonts, and you will know what stays open.
+With no credentials configured, anyone who can reach the service can use it, and it warns you at every start. You can turn on API keys, tenant keys, basic auth or OpenID Connect, and choose who can change fonts.
 
-The service speaks plain HTTP, so terminate TLS in front of it. See [security](/docs/operate/security/).
+The service speaks plain HTTP, so terminate TLS in front of it (see [security](/docs/operate/security/)).
 
 ## API keys
 
@@ -23,9 +23,9 @@ curl -H "Authorization: Bearer $KEY" -F files=@report.docx \
   http://localhost:9027/v1/convert -o report.pdf
 ```
 
-Write `Bearer` with that capital for an API key: `bearer` gets `401`. If both headers are present, the `Authorization` one is tried. An OpenID Connect token takes the scheme in any case.
+For an API key, `Bearer` needs its capital letter, and `bearer` gets a `401`. An OpenID Connect token takes the scheme in any case. If a request has both headers, the service tries the `Authorization` one.
 
-Each key in `RUSTICDOC_API_KEYS` is its own caller. Stored templates, aliases, background jobs and webhook signing keys belong to the key, so replacing it leaves them behind and changes its signing key. To replace keys without that, give them a tenant's name, as the next section shows.
+Each key in `RUSTICDOC_API_KEYS` is its own caller, and its stored templates, aliases, background jobs and webhook signing key belong to that key. Replace the key and you leave them all behind and get a new signing key. To replace keys without losing anything, use tenant keys.
 
 ## Tenant keys
 
@@ -33,17 +33,19 @@ Each key in `RUSTICDOC_API_KEYS` is its own caller. Stored templates, aliases, b
 RUSTICDOC_TENANT_KEYS=acme:old-secret,acme:new-secret,globex:another-secret
 ```
 
-Each entry is `tenant:key`. Every key of one tenant is the same caller, `tenant:acme`, whichever of them a request sends. Its templates, aliases, jobs and webhook signing key belong to the tenant, so you can replace a key without losing anything:
+Each entry is `tenant:key`. All of a tenant's keys are the same caller (`tenant:acme` here), whichever one a request sends. The templates, aliases, jobs and webhook signing key belong to the tenant, so you can replace a key without losing anything:
 
 1. Add the new key beside the old one: `acme:old-secret,acme:new-secret`.
 2. Move clients to the new key.
-3. Remove the old key. It stops working at once; the tenant keeps everything.
+3. Remove the old key. It stops working immediately.
 
-Callers send a tenant key as they send an API key, in `X-Api-Key` or `Authorization: Bearer`.
+Callers send a tenant key the same way as an API key, in `X-Api-Key` or `Authorization: Bearer`.
 
-A tenant name is 1 to 64 lowercase letters, digits and hyphens. A key may belong to one caller only, so the service refuses to start when a key is listed twice or is also in `RUSTICDOC_API_KEYS`. Keys in `RUSTICDOC_API_KEYS` keep the caller they always had, so turning tenant keys on changes nothing for them. To move an existing key's templates to a tenant, store them again under a tenant key.
+A tenant name is 1 to 64 lowercase letters, digits and hyphens. A key can belong to only one caller, so the service refuses to start if a key is listed twice or is also in `RUSTICDOC_API_KEYS`.
 
-`rusticdoc webhook-secret --tenant acme` prints the tenant's webhook signing key. See [webhooks](/docs/guides/webhooks/).
+Turning tenant keys on changes nothing for the keys in `RUSTICDOC_API_KEYS`, which keep the caller they always had. To move an existing key's templates to a tenant, store them again under a tenant key.
+
+`rusticdoc webhook-secret --tenant acme` prints the tenant's signing key for [webhooks](/docs/guides/webhooks/).
 
 ## Basic auth
 
@@ -56,11 +58,11 @@ RUSTICDOC_BASIC_AUTH_PASSWORD=a-long-password
 curl -u ada:a-long-password http://localhost:9027/v1/version
 ```
 
-There is one user. A refused request gets a `WWW-Authenticate: Basic realm="rusticdoc"` header. The user may change fonts only when `RUSTICDOC_BASIC_AUTH_ADMIN=true`. See [admins](#admins).
+Basic auth has a single user, who can change fonts only if you set `RUSTICDOC_BASIC_AUTH_ADMIN=true` (see [admins](#admins)). A refused request gets a `WWW-Authenticate: Basic realm="rusticdoc"` header.
 
 ## OpenID Connect
 
-The service accepts bearer tokens from one provider. Setting the issuer turns it on, and the audience is required with it:
+The service accepts bearer tokens from one provider. Setting the issuer turns this on, and you have to set the audience with it:
 
 ```bash
 RUSTICDOC_OIDC_ISSUER=https://id.example.com
@@ -73,24 +75,24 @@ RUSTICDOC_OIDC_JWKS_URL=https://id.example.com/keys
 curl -H "Authorization: Bearer $TOKEN" http://localhost:9027/v1/version
 ```
 
-A token passes when its signature checks out and its issuer, audience and expiry are right. The rules are:
+A token passes when its signature checks out and its issuer, audience and expiry are right.
 
 - `exp`, `iss` and `aud` are required.
 - Only `RS256` and `ES256` are accepted.
 - `RUSTICDOC_OIDC_ISSUER` and `RUSTICDOC_OIDC_JWKS_URL` must be `https`, or `http` on a loopback host.
 - Keys are fetched when the first token arrives, kept for 5 minutes, and fetched at most once every 30 seconds.
 
-The caller is the token's `sub`, so each subject has its own templates and webhook signing key. Tokens without a `sub` are treated as a caller of their own. Which users are admins is up to you; see [admins](#admins).
+The caller is the token's `sub`, so each subject has its own templates and webhook signing key. Tokens without a `sub` are treated as a caller of their own. Which users are admins is up to you (see [admins](#admins)).
 
-For this guide it was run with a local key server and RS256 tokens: a good token passed, and expired tokens, a wrong audience and a wrong issuer got `401`. It has not been run against a production identity provider.
+This is tested with a local key server and RS256 tokens, where a good token passes and an expired token, a wrong audience or a wrong issuer gets a `401`. It isn't tested against a production identity provider yet.
 
 ## Using several together
 
-You can configure them all. The service tries an API key first, then a tenant key, then an admin key, then basic auth, then OpenID Connect. The first that matches decides who the caller is.
+You can configure them all. The service tries an API key first, then a tenant key, an admin key, basic auth and finally OpenID Connect, and the first one that matches decides who the caller is.
 
 ## Configuration mistakes stop the service
 
-The service refuses to start rather than run half-protected, and says why:
+Rather than run half-protected, the service refuses to start and tells you why:
 
 | Setting | Message |
 |---|---|
@@ -104,13 +106,13 @@ The service refuses to start rather than run half-protected, and says why:
 | `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM` without OpenID Connect | `RUSTICDOC_OIDC_ADMIN_SUBJECTS and RUSTICDOC_OIDC_ADMIN_CLAIM need OpenID Connect configured` |
 | `RUSTICDOC_OIDC_ADMIN_CLAIM=groups` | `RUSTICDOC_OIDC_ADMIN_CLAIM is 'groups'; use claim=value, such as groups=rusticdoc-admins` |
 
-Error messages about tenant keys never repeat an entry, since it may hold a key.
+Error messages about tenant keys never repeat the entry, because it may hold a key.
 
-An empty `RUSTICDOC_API_KEYS=` counts as unset, which leaves the service open.
+An empty `RUSTICDOC_API_KEYS=` counts as unset, so the service stays open.
 
 ## What stays open
 
-With credentials configured:
+Once credentials are configured, each route returns:
 
 | Route | Without credentials | With credentials |
 |---|---|---|
@@ -121,13 +123,13 @@ With credentials configured:
 | `GET /docs` | `401`, or `200` with `RUSTICDOC_ENABLE_DOCS=true` | `404`, or `200` with `RUSTICDOC_ENABLE_DOCS=true` |
 | Every `/v1/*` route | `401` | Served |
 
-With credentials configured, responses from the open routes carry no version header.
+Responses from the open routes also carry no version header.
 
-A `401` is JSON: `{"error":"unauthorized","message":"Unauthorized"}`.
+A `401` has a JSON body, `{"error":"unauthorized","message":"Unauthorized"}`.
 
 ## Admins
 
-Only an admin may upload and delete [fonts](/docs/guides/fonts/#admin-keys), because a font changes everyone's documents. With credentials configured nobody is an admin until you say who:
+Only an admin can upload and delete [fonts](/docs/guides/fonts/#admin-keys), because a font changes everyone's documents. Once credentials are configured, nobody is an admin until you say who:
 
 | Setting | Who is an admin |
 |---|---|
@@ -136,11 +138,11 @@ Only an admin may upload and delete [fonts](/docs/guides/fonts/#admin-keys), bec
 | `RUSTICDOC_OIDC_ADMIN_SUBJECTS=alice,bob` | Tokens whose `sub` is listed |
 | `RUSTICDOC_OIDC_ADMIN_CLAIM=groups=rusticdoc-admins` | Tokens whose claim equals the value, or is a list holding it |
 
-The claim can be a path into nested claims, such as Keycloak's `realm_access.roles=rusticdoc-admin`, or a whole claim name with dots in it, such as `https://example.com/roles=admin`. The value must match a whole entry: `groups=admin` does not match `admins`. Any of these settings can be combined.
+The claim can be a path into nested claims, like Keycloak's `realm_access.roles=rusticdoc-admin`, or a whole claim name with dots in it, like `https://example.com/roles=admin`. The value has to match a whole entry, so `groups=admin` doesn't match `admins`. You can combine any of these settings.
 
 Being an admin changes nothing else. An admin is still the caller its credential makes it, with its own templates.
 
-An admin key works anywhere a credential is asked for, as a caller of its own: it has its own stored templates and does not see other callers'. Setting only `RUSTICDOC_ADMIN_KEYS`, with no other credentials, leaves the service open to anyone except for font changes.
+An admin key works anywhere a credential is asked for, as a caller of its own, so it has its own stored templates and doesn't see other callers'. If you set only `RUSTICDOC_ADMIN_KEYS`, with no other credentials, the service stays open to anyone except for font changes.
 
 ```bash
 RUSTICDOC_API_KEYS=first-key
@@ -149,4 +151,4 @@ RUSTICDOC_ADMIN_KEYS=ops-key
 
 ## With no credentials
 
-Every caller is the one principal `public`, which shares one scope of templates, and webhooks sign with the secret itself. The service warns at every start, and with a store it warns that anyone can store, read and delete templates and fonts. Run this way only on a network you trust.
+Every caller is the same principal, `public`, sharing one scope of templates, and webhooks sign with the secret itself. If the service has a store, the warning at start also says that anyone can store, read and delete templates and fonts. Only run it this way on a network you trust.

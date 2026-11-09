@@ -1,34 +1,34 @@
 ---
 title: Translations and settings
-description: Set the language, translated labels, time zone and default currency of a template, per template or per request, and keep translations in dictionaries.
+description: Set a template's language, translated labels, time zone and default currency, per template or per request, and keep translations in dictionaries.
 sidebar:
   order: 6
 ---
 
-This page shows how to translate labels, and set a language, a time zone and a default currency, so that one template can print an invoice in French for one request and in German for the next. They can live in the template, in each request, and in dictionaries the service holds.
+One template can print an invoice in French for one request and in German for the next. You do that by translating its labels and setting a language, a time zone and a default currency, which can live in the template, in each request, and in dictionaries the service holds.
 
 ## The four settings
 
-| Setting | Does |
+| Setting | What it does |
 |---|---|
-| `lang` | Picks the translations `t` uses. With a language CLDR has data for, it also sets how [`number`, `currency` and `date`](/docs/templates/filters/#language) write numbers, money and names |
-| `timezone`, or `tz` | The zone `date` shows moments in: an offset such as `+02:00`, or an IANA zone such as `Europe/Paris` |
-| `currency` | The code `currency` uses when given none |
+| `lang` | Picks the translations `t` uses. If CLDR has data for the language, it also sets how [`number`, `currency` and `date`](/docs/templates/filters/#language) write numbers, money and names |
+| `timezone`, or `tz` | The zone `date` shows moments in, either an offset like `+02:00` or an IANA zone like `Europe/Paris` |
+| `currency` | The code `currency` uses when you don't give it one |
 | translations | The text `t` prints for each key |
 
-Each can be set in three places. For the same setting, the first that sets it wins:
+Each can be set in three places, and when more than one sets the same thing, the first in this list wins:
 
 1. The request's fields: `lang`, `timezone`, `currency` and `translations`.
 2. A `{% settings %}` tag in the template.
 3. The template's custom document properties.
 
-Translations add up rather than replace each other: see [how `t` looks a key up](#how-t-finds-a-translation).
+Translations add up instead of replacing each other. See [how `t` looks a key up](#how-t-finds-a-translation).
 
-They work the same in Office templates, text templates and PDF tags. A PDF holds no settings of its own, so only the request applies there.
+Settings work the same in Office templates, text templates and PDF tags, except that a PDF holds no settings of its own, so only the request applies there.
 
 ## Settings in the request
 
-`/v1/render`, `/v1/render/batch` and `/v1/templates/validate` take these fields, as multipart fields or as members of a [JSON body](/docs/guides/stored-templates/):
+`/v1/render`, `/v1/render/batch` and `/v1/templates/validate` take these fields, either as multipart fields or as members of a [JSON body](/docs/guides/stored-templates/):
 
 | Field | Example | Notes |
 |---|---|---|
@@ -51,9 +51,9 @@ test "$(perl -CSD -pe 's/\x{a0}/_/g' out.txt)" = \
   'Summe: 1.500,00_€, 01 Juli 2026 12:00'
 ```
 
-A field that cannot be used is a `400` that names it, so a typing mistake is not silently ignored:
+A field the service can't use gets a `400` that names it, so a typo isn't silently ignored:
 
-| Sent | Answer |
+| Sent | Message |
 |---|---|
 | `lang=French` | `'lang' is "French", which is not a language tag such as fr, fr-CA or en-us` |
 | `timezone=Mars/Olympus` | `'timezone': timezone "Mars/Olympus" is neither an offset like +02:00 nor an IANA zone like Europe/Paris` |
@@ -69,10 +69,11 @@ The `{% settings %}` tag sets the same things inside the template, with `t.<key>
 {% settings lang="fr" currency="EUR" timezone="Europe/Paris" t.billed.fr="Facturé à" t.billed.de="Rechnung an" %}
 ```
 
-- Type it anywhere in the document. It applies to the whole file wherever it sits, and is removed from the output.
-- In an Office template, a paragraph holding only this tag stays as an empty paragraph, so put it in a line that has other text. In a text template the tag leaves nothing, not even its line's text, though a line break after it stays.
-- Several `{% settings %}` tags add up. For a repeated setting, the last one wins.
-- Values must be quoted text. `lang=language` is ignored with no error, because settings are read when the template is parsed, before any data exists. Send what varies as a request field instead.
+You can type the tag anywhere in the document. It applies to the whole file wherever it sits, and it's removed from the output. In an Office template, a paragraph that holds only this tag stays behind as an empty paragraph, so put it in a line that has other text. In a text template the tag leaves nothing, not even its line's text, though a line break after it stays.
+
+Several `{% settings %}` tags add up, and for a repeated setting the last one wins.
+
+Values must be quoted text. `lang=language` is ignored with no error, because settings are read when the template is parsed, before any data exists. Send anything that varies as a request field instead.
 
 This example puts the settings in the sample invoice:
 
@@ -98,19 +99,16 @@ unzip -p out.docx word/document.xml | perl -CSD -pe 's/\x{a0}/_/g' |
 ```
 
 :::note
-A template whose `lang` has CLDR data now writes numbers, money and dates in that language, as above (`5,00 €` where it once printed `EUR 5.00`). A template without a `lang`, rendered without one, prints exactly as before.
+A template whose `lang` has CLDR data now writes numbers, money and dates in that language, as above (`5,00 €` where it used to print `EUR 5.00`). A template with no `lang`, rendered without one, prints exactly as before.
 :::
 
 ### Settings in document properties
 
-The same settings can be custom document properties instead, so that nothing has to be typed on the page. Name each property after its setting (`lang`, `currency`, `timezone` or `tz`, `t.<key>`) and give it a text value:
+You can set the same things as custom document properties instead, so nothing has to be typed on the page. Name each property after its setting (`lang`, `currency`, `timezone` or `tz`, `t.<key>`) and give it a text value. In Word, Excel and PowerPoint that's under File > Properties > Custom, and in LibreOffice under File > Properties > Custom Properties.
 
-- In Word, Excel and PowerPoint: File > Properties > Custom.
-- In LibreOffice: File > Properties > Custom Properties.
+A `{% settings %}` tag wins over a property that sets the same thing. Translations add up, so a `t.<key>` property and a `t.<key>` in the tag both count, and for the same key the tag's wins. Properties with other names are ignored.
 
-A `{% settings %}` tag wins over a property that sets the same thing. Translations add up: a `t.<key>` property and a `t.<key>` in the tag both count, and for the same key the tag's wins. Properties with other names are ignored.
-
-They are read from `docProps/custom.xml` in a DOCX, XLSX or PPTX, and from `meta.xml` in an ODT, ODS or ODP. This example writes the property by hand, as Word would save it:
+Properties are read from `docProps/custom.xml` in a DOCX, XLSX or PPTX, and from `meta.xml` in an ODT, ODS or ODP. This example writes one by hand, the way Word would save it:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -136,14 +134,14 @@ unzip -p out.docx word/document.xml | grep -o 'EUR 5.00'
 
 ## How `t` finds a translation
 
-`{{ "key" | t }}`, or `{{ value | t }}` with a key from the data, looks in the language, then in each shorter tag it falls back to, then in the template's translations with no language, and prints the key itself when nothing has it. For `lang=fr-ca`:
+`{{ "key" | t }}`, or `{{ value | t }}` with a key from the data, looks in the language first, then in each shorter tag it falls back to, then in the template's translations that have no language. If nothing has the key, it prints the key itself. For `lang=fr-ca` the order is:
 
 1. `fr-ca`: the request's `translations`, then the service's dictionaries, then the template's `t.key.fr-ca`.
 2. `fr`: the same three, in the same order.
 3. The template's `t.key`, with no language.
 4. The key, printed as it is, with no error.
 
-So a more exact language beats a higher source: a template's `t.total.fr-ca` wins over a request's `fr` entry. Within one language, the request beats the dictionaries, and the dictionaries beat the template.
+So a more exact language beats a higher source, and a template's `t.total.fr-ca` wins over a request's `fr` entry. Within one language, the request beats the dictionaries and the dictionaries beat the template.
 
 ```bash test
 cat > t.txt <<'EOF'
@@ -156,7 +154,7 @@ curl -F template=@t.txt -F lang=fr-CA \
 test "$(cat out.txt)" = 'Montant|TPS|Note|other'
 ```
 
-A template written before languages fell back keeps working: `lang="fr-FR"` with `t.total.fr-FR` still finds it, and a `lang` that is not a language tag still finds `t.key.<lang>` as written.
+Templates written before languages fell back keep working. `lang="fr-FR"` with `t.total.fr-FR` still finds it, and a `lang` that isn't a language tag still finds `t.key.<lang>` as written.
 
 ## Dictionaries on the service
 
@@ -166,12 +164,15 @@ Set `RUSTICDOC_TRANSLATIONS_DIR` to a directory of `<lang>.json` files, each a f
 {"total": "Montant", "due": "Échéance"}
 ```
 
-- File names are language tags in any case: `fr.json`, `fr-CA.json`. Other files, such as notes, are ignored if they do not end in `.json`.
-- They are read when the service starts. A file that is not a flat object of strings, a `.json` file whose name is not a language, or a missing directory stops the service from starting, naming the file, so a broken deploy is noticed at once.
-- They are read again when a file changes: a request checks the directory's sizes and times at most once a second, so nothing is parsed per request. A file that turns bad while the service runs is logged as a warning, and its last good version stays in use. A deleted file stops applying.
-- Each file may be 1 MiB, with the same limits per entry as the request field. There may be 200 files and 4 MiB in all.
+File names are language tags in any case, like `fr.json` or `fr-CA.json`. Other files, like notes, are ignored as long as they don't end in `.json`.
 
-With a request `lang`, a render receives the dictionaries for that language and those it falls back to. Without one, it receives every dictionary, since the template's own `lang` may pick one.
+The files are read when the service starts. A file that isn't a flat object of strings, a `.json` file whose name isn't a language, or a missing directory stops the service from starting, with a message that names the file, so you notice a broken deploy straight away.
+
+They're read again when a file changes. A request checks the directory's sizes and times at most once a second, so nothing is parsed per request. If a file turns bad while the service is running, it's logged as a warning and its last good version stays in use. A deleted file stops applying.
+
+Each file can be up to 1 MiB, with the same limits per entry as the request field, and there can be up to 200 files and 4 MiB in all.
+
+When a request has a `lang`, the render gets the dictionaries for that language and the ones it falls back to. Without one it gets every dictionary, because the template's own `lang` may pick one.
 
 ## Finding the keys to translate
 
@@ -181,16 +182,15 @@ With a request `lang`, a render receives the dictionaries for that language and 
 rusticdoc translate --lang fr --out translations templates/
 ```
 
-- The file is created when missing. When it exists, its translations are kept, and new keys are added with an empty text for a translator to fill.
-- Keys in the file that no template uses any more are listed, and kept.
-- Directories are searched below, for `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp` and text templates.
-- A key that comes from data, as in `{{ label | t }}`, cannot be known before a render, so it is not listed.
+The file is created if it's missing. If it exists, its translations are kept, and new keys are added with an empty text for a translator to fill in. Keys in the file that no template uses any more are listed, and kept.
 
-The result is a dictionary ready for `RUSTICDOC_TRANSLATIONS_DIR`. `rusticdoc render` takes `--lang`, `--translations FILE` and `--timezone`, and reads the same directory, so the command line renders as the service does.
+Directories are searched recursively for `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp` and text templates. A key that comes from data, as in `{{ label | t }}`, can't be known before a render, so it isn't listed.
+
+The result is a dictionary ready for `RUSTICDOC_TRANSLATIONS_DIR`. `rusticdoc render` takes `--lang`, `--translations FILE` and `--timezone`, and reads the same directory, so the command line renders the same way the service does.
 
 ## Checking translations
 
-`/v1/templates/validate` with a `lang`, from the request or the template, warns about each tag passing `t` a literal key that has no translation in that language or one it falls back to. A translation with no language does not count, since it is what the warning is about. Warnings do not make `ok` false.
+When `/v1/templates/validate` has a `lang`, from the request or the template, it warns about each tag that passes `t` a literal key with no translation in that language or one it falls back to. A translation with no language doesn't count, since that's what the warning is about. Warnings don't make `ok` false.
 
 ```bash test
 printf '{{ "total" | t }} {{ "due" | t }}' > v.txt

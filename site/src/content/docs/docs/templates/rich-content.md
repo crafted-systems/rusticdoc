@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-This page shows how to place content that is more than text: a logo, a QR code, a link, coloured text, formatted HTML, a native chart or a page break. Each one is a filter, and each works in Office templates only. The `shift` filter, which spreads a loop's shapes across a slide, is described with [PPTX loops](/docs/templates/office/#shapes-that-move-down-or-across-a-slide), and the `drop` function, which removes the element holding its tag, under [remove an element](/docs/templates/office/#remove-an-element).
+Rich content is anything a template prints that's more than text: a logo, a QR code, a link, coloured text, formatted HTML, a native chart or a page break. Each one is a filter, and they only work in Office templates. The `shift` filter, which spreads a loop's shapes across a slide, is covered with [PPTX loops](/docs/templates/office/#shapes-that-move-down-or-across-a-slide), and the `drop` function, which removes the element holding its tag, under [remove an element](/docs/templates/office/#remove-an-element).
 
 ## What works where
 
@@ -25,19 +25,19 @@ This page shows how to place content that is more than text: a logo, a QR code, 
 | `shift` | Refused | Refused | Refused | Refused | Yes | Refused |
 | [`drop`](/docs/templates/office/#remove-an-element) | Yes | Yes | Yes | Yes | Yes | Yes |
 
-Which elements `drop` removes depends on the format: a DOCX has no slides and a sheet no paragraphs. The [table of elements](/docs/templates/office/#remove-an-element) says which.
+Which elements `drop` removes depends on the format, since a DOCX has no slides and a sheet has no paragraphs. The [table of elements](/docs/templates/office/#remove-an-element) lists them.
 
-In a text template or a PDF tag these filters do not exist, and using one is a `422` with `unknown filter`.
+These filters don't exist in a text template or a PDF tag, so using one there fails with a `422` and `unknown filter`.
 
 ## Rules for all of them
 
-- **Print the result directly.** `{{ logo | image }}` works, and so does `{% set x = logo | image %}{{ x }}`. Sending the result through another filter, `~`, a macro or a `{% set %}...{% endset %}` block is refused: `a rich filter's result must be printed directly`.
-- **Unknown arguments are refused**, not ignored. `barcode("qr", depth=90)` fails with `unknown keyword argument 'depth'`.
-- **A missing value is an error**, as everywhere: `image: the value is undefined`.
+A rich filter's result has to be printed directly. `{{ logo | image }}` works, and so does `{% set x = logo | image %}{{ x }}`, but sending the result through another filter, `~`, a macro or a `{% set %}...{% endset %}` block is refused with `a rich filter's result must be printed directly`.
+
+Unknown arguments are refused rather than ignored, so `barcode("qr", depth=90)` fails with `unknown keyword argument 'depth'`. A missing value is an error, as it is everywhere else: `image: the value is undefined`.
 
 ## Trying the examples
 
-The examples below take the sample invoice and replace the words `Billed to` in its XML with a tag. This does what typing the tag in Word does, and leaves the rest of the invoice as it was. In your own template, type the tag where the content should go.
+The examples below take the sample invoice and replace the words `Billed to` in its XML with a tag. That does the same thing as typing the tag in Word, and leaves the rest of the invoice alone. In your own template, type the tag where you want the content to go.
 
 ## image
 
@@ -50,12 +50,12 @@ The examples below take the sample invoice and replace the words `Billed to` in 
 
 | Argument | Meaning |
 |---|---|
-| `width`, `height` | Printed size in points, above 0 and at most 14400. Give one and the aspect is kept. Give both and the image is stretched to them, unless `fit` says otherwise |
+| `width`, `height` | Printed size in points, above 0 and at most 14400. If you give one, the aspect ratio is kept. If you give both, the image is stretched to them unless `fit` says otherwise |
 | `fit` | How the image sits in its box: `contain`, `cover` (or `fill`), `width` or `stretch`. See [fit](#fit) |
 
-With no size, the picture prints at its natural size at 96 dpi, capped at a width of 450 points.
+Without a size, the picture prints at its natural size at 96 dpi, capped at a width of 450 points.
 
-The value carries the image's bytes, in one of three forms:
+The value has to carry the image's bytes, in one of three forms:
 
 | Form | Example |
 |---|---|
@@ -63,7 +63,7 @@ The value carries the image's bytes, in one of three forms:
 | A data URL | `"data:image/png;base64,iVBORw0KGgo..."` |
 | An object | `{"data": "iVBORw0KGgo...", "mime": "image/png", "width": 30, "height": 30}` |
 
-`mime`, `width` and `height` are optional in the object, and the filter's arguments win over its sizes.
+In the object, `mime`, `width` and `height` are optional, and the filter's arguments override its sizes.
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -79,16 +79,20 @@ unzip -l out.docx | grep -o 'word/media/rich1.png'
 
 ### Image types
 
-The bytes decide the type, not a name or the `mime`.
+The type is worked out from the bytes, not from a name or the `mime`.
 
 | Type | What goes into the document |
 |---|---|
 | PNG, JPEG | The bytes as they are |
 | GIF | The bytes as they are. A PDF shows the first frame of an animation |
-| WebP | Converted to PNG, since office suites do not all read WebP |
-| SVG | A cleaned copy of the drawing, with a PNG of it for readers that do not show SVG. DOCX, XLSX and PPTX carry the PNG as the picture and the SVG as Office's SVG extension; ODF frames list the SVG first and the PNG after it |
+| WebP | Converted to PNG, because not every office suite reads WebP |
+| SVG | A cleaned copy of the drawing, plus a PNG of it for readers that don't show SVG. DOCX, XLSX and PPTX carry the PNG as the picture and the SVG as Office's SVG extension. ODF frames list the SVG first and the PNG after it |
 
-An SVG is rebuilt from what draws, element by element. Scripts, event attributes such as `onload`, animation, `foreignObject`, `<style>` stylesheets, and links to other files or addresses are all removed. A `style` attribute keeps only presentation properties such as `fill`, `stroke` and `font-size`, which become attributes, and every value must be plain: no backslash escapes, comments or `@`, and no function but colours, transforms and `url(#id)` pointing inside the file. References are followed before anything is drawn, so `use` elements and patterns that draw each other cannot turn a small file into millions of shapes: past 1,000,000 elements the image is refused. Elements may nest at most 256 deep, and two elements may not share an `id`. A picture inside an SVG stays only as embedded PNG, JPEG or GIF data. A DTD is refused. The PNG beside it is drawn by the service, with the fonts of the machine it runs on, at up to 2000 pixels on the long side.
+An SVG is rebuilt element by element from the parts that draw something. Scripts, event attributes like `onload`, animation, `foreignObject`, `<style>` stylesheets, and links to other files or addresses are all removed. A `style` attribute keeps only presentation properties like `fill`, `stroke` and `font-size`, which become attributes. Every value has to be plain, which means no backslash escapes, comments or `@`, and no functions other than colours, transforms and a `url(#id)` that points inside the file.
+
+References are followed before anything is drawn, so `use` elements and patterns that draw each other can't turn a small file into millions of shapes. Past 1,000,000 elements the image is refused. Elements can nest at most 256 deep, and two elements can't share an `id`. A picture inside an SVG is kept only as embedded PNG, JPEG or GIF data, and a DTD is refused.
+
+The PNG that goes with it is drawn by the service, using the fonts of the machine it runs on, at up to 2000 pixels on the long side.
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -110,13 +114,13 @@ unzip -p out.docx word/document.xml | grep -o 'asvg:svgBlip'
 ! unzip -p out.docx 'word/media/rich*.svg' | grep script
 ```
 
-Refused:
+These values are refused:
 
 | Value | Error |
 |---|---|
 | A URL | `the value must carry the image's bytes: URLs are not fetched`. Fetch it yourself and send the bytes |
 | BMP, TIFF or anything else | `only PNG, JPEG, GIF, SVG and WebP images are supported` |
-| A `mime` that does not match the bytes | `the bytes are image/png but the value says image/jpeg` |
+| A `mime` that doesn't match the bytes | `the bytes are image/png but the value says image/jpeg` |
 | Over 20 MB, or an SVG over 5 MB | `the image is larger than 20971520 bytes` |
 | A WebP over 25 megapixels or 16384 pixels a side | `the WebP image has more than 25000000 pixels` |
 | An SVG with a DTD, no SVG root, more than 200,000 nodes, or a size over 19200 pixels a side | `the SVG image cannot be read: ...` and similar |
@@ -141,11 +145,11 @@ curl -F template=@tagged.docx -F "data=<with-url.json" \
 | ODS | A frame on the tag's cell |
 | PPTX, ODP | A new picture at the position of the shape that held the tag. The shape keeps its other text |
 
-In PPTX the position is read from the shape itself. A placeholder that inherits its position from the layout has none, and the picture lands at the slide's top left corner. Put the tag in a shape with its own position, such as a text box, or use a placeholder picture.
+In PPTX the position is read from the shape itself. A placeholder that inherits its position from the layout has none of its own, so the picture lands at the slide's top left corner. To avoid that, put the tag in a shape that has its own position, like a text box, or use a placeholder picture.
 
 ### Placeholder pictures
 
-To control exactly where a picture goes and how it looks, put a real picture in the template and write the tag in its alt text. The rendered image replaces the picture's image, and everything else about the picture stays: its frame, position, wrapping, border, shadow and other effects, and its brightness or recolouring.
+To control exactly where a picture goes and how it looks, put a real picture in the template and write the tag in its alt text. The rendered image replaces the picture's image and everything else about the picture stays: its frame, position, wrapping, border, shadow and other effects, and its brightness or recolouring.
 
 | Application | Where the tag goes |
 |---|---|
@@ -158,7 +162,9 @@ To control exactly where a picture goes and how it looks, put a real picture in 
 {{ sku | barcode("ean13", text=true) }}
 ```
 
-The alt text holds one tag, and it must end in `image` or `barcode`. Text around it stays as the picture's alt text. Any other tag in the same alt text is filled in as text, as alt text tags are. A placeholder takes its size from its frame, so `width`, `height` and `size` are refused there: `a placeholder picture takes its size from its frame`. Choose how the image sits with `fit`, whose default in a placeholder is `contain`.
+The alt text holds one tag, which has to end in `image` or `barcode`. Text around it stays as the picture's alt text, and any other tag in the same alt text is filled in as text, the way alt text tags normally are.
+
+A placeholder takes its size from its frame, so `width`, `height` and `size` are refused there with `a placeholder picture takes its size from its frame`. Use `fit` to choose how the image sits in the frame, where it defaults to `contain`.
 
 ```bash test
 jq -n --arg photo "$(base64 < logo.png | tr -d '\n')" '{photo: $photo}' \
@@ -171,22 +177,22 @@ grep -o '<a:srcRect l="33333" t="0" r="33333" b="0"/>' out.xml
 grep -o '<wp:extent cx="1371600" cy="1371600"/>' out.xml
 ```
 
-A placeholder in a table row that a loop repeats gives each copy its own image, as `{{ item.photo | image }}` would. In XLSX, pictures live in a drawing beside the sheet, so a placeholder there sees the data's top level but not loop variables, and is not copied by a row loop.
+When a loop repeats a table row that has a placeholder in it, each copy gets its own image, as it would with `{{ item.photo | image }}`. XLSX is different, because pictures there live in a drawing beside the sheet. A placeholder in an XLSX sees the data's top level but not loop variables, and a row loop doesn't copy it.
 
-Only pictures can be placeholders. A tag in the alt text of a shape, chart or text box is refused with `only a picture can be a placeholder`. Errors name the picture, as `picture "Picture 1"`.
+Only pictures can be placeholders, so a tag in the alt text of a shape, chart or text box is refused with `only a picture can be a placeholder`. Errors name the picture, for example `picture "Picture 1"`.
 
 ### fit
 
-`fit` decides how an image sits in a box of another shape: a placeholder's frame, or `width` and `height` given together.
+`fit` decides how an image sits in a box with a different shape from its own. That box is either a placeholder's frame or a `width` and `height` given together.
 
 | Value | Result |
 |---|---|
-| `contain` | All of the image, as large as fits, centred, with its aspect kept. Empty space fills the rest of the box. The default in a placeholder |
-| `cover`, `fill` | The box filled, with the aspect kept and the overflow cropped equally from both sides |
-| `width` | The box's width kept, and its height changed to follow the image's aspect |
-| `stretch` | The image stretched to the box. The default for `width` and `height` given together |
+| `contain` | The whole image, as large as fits, centred, with its aspect ratio kept. The rest of the box is left empty. The default in a placeholder |
+| `cover`, `fill` | The box is filled, with the aspect ratio kept and the overflow cropped equally from both sides |
+| `width` | The box keeps its width, and its height changes to follow the image's aspect ratio |
+| `stretch` | The image is stretched to the box. The default when `width` and `height` are given together |
 
-Cropping is done the way the office suites do it, so the full image stays in the document and the crop can be undone in Word, PowerPoint, Excel or LibreOffice: `a:srcRect` in DOCX, XLSX and PPTX, and `fo:clip` in ODF. In XLSX, `fit="width"` turns a two-cell anchor into a one-cell anchor, so that the height can change.
+Cropping is done the way the office suites do it, with `a:srcRect` in DOCX, XLSX and PPTX and `fo:clip` in ODF. The full image stays in the document, so the crop can be undone in Word, PowerPoint, Excel or LibreOffice. In XLSX, `fit="width"` turns a two-cell anchor into a one-cell anchor so that the height can change.
 
 ## barcode
 
@@ -197,16 +203,16 @@ Cropping is done the way the office suites do it, so the full image stays in the
 {{ ticket | barcode("pdf417", width=220, ec=5) }}
 ```
 
-The first argument is required and names the symbology. There is no default.
+The first argument names the symbology. It's required, and there's no default.
 
-| Symbology | Takes |
+| Symbology | Accepts |
 |---|---|
 | `qr` | Any text a QR code can hold, encoded as UTF-8 |
 | `datamatrix` | ASCII text, up to what the largest Data Matrix holds |
 | `pdf417` | Any text a PDF417 symbol can hold |
 | `aztec` | Any text an Aztec code can hold |
 | `code128` | Printable ASCII |
-| `gs1-128` | Application identifiers in parentheses, such as `(01)09501101530003(10)ABC123` |
+| `gs1-128` | Application identifiers in parentheses, like `(01)09501101530003(10)ABC123` |
 | `code39` | Upper-case letters, digits, space and `- . $ / + %`. `lower` is refused |
 | `code93` | Printable ASCII |
 | `ean13` | 12 digits, or 13 with a correct check digit |
@@ -217,25 +223,25 @@ The first argument is required and names the symbology. There is no default.
 | `itf14` | 13 digits, or 14 with a correct check digit. Bearer bars are drawn above and below |
 | `codabar` | Digits and `- $ : / . +`, between optional start and stop letters A to D |
 
-A wrong check digit names the right one: `"5901234123458" has a wrong check digit: EAN-13 expects 7`. A value too long for its symbology gives `the value is too long for a QR code`, and so on.
+If a check digit is wrong, the error gives the right one: `"5901234123458" has a wrong check digit: EAN-13 expects 7`. A value that's too long for its symbology gives `the value is too long for a QR code`, and so on.
 
-For `gs1-128`, each identifier is 2 to 4 digits in parentheses, followed by its data. Identifiers whose data has a fixed length in the GS1 tables, such as `(01)` and `(17)`, are checked for that length, and `(00)`, `(01)` and `(02)` for their check digit. The service puts the FNC1 characters where GS1 wants them: at the start, and after each variable-length field that another follows. The text under the bars shows the parentheses.
+For `gs1-128`, each identifier is 2 to 4 digits in parentheses, followed by its data. Identifiers whose data has a fixed length in the GS1 tables, like `(01)` and `(17)`, are checked for that length, and `(00)`, `(01)` and `(02)` are checked for their check digit. The service puts the FNC1 characters where GS1 wants them, which is at the start and after each variable-length field that's followed by another. The text under the bars shows the parentheses.
 
 | Argument | Meaning |
 |---|---|
 | `size` | Printed width in points, above 0 and at most 14400. The default is 144 for `qr`, `datamatrix`, `pdf417` and `aztec`, and 200 for the others |
 | `width` | The same as `size`. Give one or the other |
-| `height` | Printed height in points. A linear code's bars take what the text leaves. A `qr`, `datamatrix` or `aztec` code is square, so `height` alone sets both sides, and a `width` and `height` that differ are refused. A `pdf417` symbol stretches its rows to the height |
+| `height` | Printed height in points. A linear code's bars take whatever the text leaves. A `qr`, `datamatrix` or `aztec` code is square, so `height` alone sets both sides, and a `width` and `height` that differ are refused. A `pdf417` symbol stretches its rows to the height |
 | `text` | `true` prints the value under a linear code. EAN and UPC codes print their digits between guard bars that reach down, with the leading and trailing digits outside the bars. The default is `false`, and two-dimensional codes refuse it |
-| `font_size` | The text's size in points. The default is ten modules or an eighteenth of the width, whichever is smaller, between 6 and 12 points |
-| `color` | The bars, `#rgb` or `#rrggbb`. The default is black |
-| `background` | The space around them, as a colour or `transparent`. The default is white |
+| `font_size` | The text's size in points. The default is ten modules or an eighteenth of the width, whichever is smaller, kept between 6 and 12 points |
+| `color` | The colour of the bars, as `#rgb` or `#rrggbb`. The default is black |
+| `background` | The space around the bars, as a colour or `transparent`. The default is white |
 | `quiet_zone` | The empty margin on each side, in modules, from 0 to 100. The default is 10 for linear codes, 4 for `qr` and 2 for the other two-dimensional codes |
 | `rotate` | `0`, `90`, `180` or `270` degrees clockwise. The printed width and height swap at 90 and 270 |
 | `ec` | Error correction: `L`, `M`, `Q` or `H` for `qr` (default `M`), a percentage from 5 to 95 for `aztec`, a level from 0 to 8 for `pdf417`. Other symbologies refuse it |
 | `fit` | How the code sits in a placeholder picture. See [fit](#fit) |
 
-The sample invoice holds a QR code, which you can see with no changes to it:
+The sample invoice already has a QR code in it, so you can see one without changing anything:
 
 ```bash test
 curl -F template=@invoice.docx -F "data=<invoice.json" \
@@ -243,7 +249,7 @@ curl -F template=@invoice.docx -F "data=<invoice.json" \
 unzip -l out.docx | grep -o 'word/media/rich1.png'
 ```
 
-A retail code with its digits under the bars, rotated and in colour:
+This one is a retail code with its digits under the bars, rotated and in colour:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -258,7 +264,7 @@ curl -F template=@tagged.docx -F "data=<with-gtin.json" \
 unzip -l out.docx | grep -c 'word/media/rich[0-9]*\.png' | grep -x 2
 ```
 
-A bad value is a `422` naming the problem:
+A bad value fails with a `422` that names the problem:
 
 ```bash test=fail
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -270,7 +276,11 @@ curl -F template=@tagged.docx -F "data=<invoice.json" \
   http://localhost:9027/v1/render -o out.docx
 ```
 
-A barcode counts as an image for placement and limits, and fills a placeholder picture like one. The bars are drawn with a whole number of device pixels per module, so their edges stay sharp, and the image is then printed at the size asked for. Every symbology decodes to its exact value with rxing, a port of ZXing, from the PNG the service makes, with and without text, colours, a wider quiet zone and rotation, and from LibreOffice's PDF of the document at 300 dpi. ZBar reads the same PNGs for every linear code and QR; it has no Data Matrix or Aztec reader. EAN and UPC codes come back with the check digit the service adds. rxing reports Codabar without its start and stop letters, and ZBar with them. At 100 dpi a long Code 128 or Code 39 at the default size is too fine to read, so give it a larger `size` for screens. No code has been scanned with a hardware or phone reader, as [known limits](/docs/project/known-limits/) says, so test yours on your own hardware.
+A barcode counts as an image for placement and limits, and it fills a placeholder picture the way an image does. The bars are drawn with a whole number of device pixels per module so their edges stay sharp, and the image is then printed at the size you asked for.
+
+Every symbology decodes to its exact value with rxing, a port of ZXing. That holds for the PNG the service makes, with and without text, colours, a wider quiet zone and rotation, and for LibreOffice's PDF of the document at 300 dpi. ZBar reads the same PNGs for every linear code and QR, but it has no Data Matrix or Aztec reader. EAN and UPC codes come back with the check digit the service adds. Codabar comes back without its start and stop letters from rxing, and with them from ZBar.
+
+At 100 dpi, a long Code 128 or Code 39 at the default size is too fine to read, so give it a larger `size` for screens. Scanning with a hardware or phone reader isn't tested yet (see [known limits](/docs/project/known-limits/)), so test yours on your own hardware.
 
 ## link
 
@@ -279,9 +289,9 @@ A barcode counts as an image for placement and limits, and fills a placeholder p
 {{ url | link("Pay now") }}
 ```
 
-The one optional argument is the text to show. Without it the link shows its address, with `mailto:` removed.
+`link` takes one optional argument, the text to show. Without it, the link shows its address with `mailto:` removed.
 
-Only `http`, `https` and `mailto` links are allowed. `javascript:`, `file:` and relative addresses such as `/pay` are refused with an error naming the problem. A link inside a hyperlink that is already in the template is refused too.
+Only `http`, `https` and `mailto` links are allowed. `javascript:`, `file:` and relative addresses like `/pay` are refused with an error that names the problem, and so is a link inside a hyperlink that's already in the template.
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -304,9 +314,9 @@ unzip -p out.docx word/_rels/document.xml.rels |
 {{ status | color(background="#fdd", scope="row") }}
 ```
 
-A colour is `#rgb` or `#rrggbb`, and nothing else: `red` is refused. Give a colour, a `background=`, or both. Both can come from data.
+A colour is `#rgb` or `#rrggbb` and nothing else, so `red` is refused. Give a colour, a `background=`, or both. Either can come from data.
 
-The colour is the text's. `background` fills whatever `scope` names, which is the text itself by default:
+The colour applies to the text. `background` fills whatever `scope` names, which is the text itself by default:
 
 | `scope` | The colour | The background |
 |---|---|---|
@@ -316,9 +326,9 @@ The colour is the text's. `background` fills whatever `scope` names, which is th
 | `row` | The text of every cell in the row | The fill of every cell in the row. In XLSX the row's own format too, so empty cells match |
 | `shape` | The text of the shape | The shape's fill. PPTX and ODP only |
 
-The printed value always stays where the tag is. A colour from a scope does not change runs that another rich value made, such as a link.
+The printed value always stays where the tag is. A colour from a scope doesn't change runs that another rich value made, like a link.
 
-Sheets have no runs of text here, so in XLSX and ODS `text` and `cell` both colour the whole cell, and the last `color` in a cell wins. They have no paragraphs or shapes either, and asking for them is refused: `XLSX has no paragraphs to colour; use scope="cell" or scope="row"`. A `cell` or `row` scope outside a table is refused where the tag is: `scope="cell" needs the tag inside a table cell`.
+Sheets have no runs of text here, so in XLSX and ODS `text` and `cell` both colour the whole cell, and the last `color` in a cell wins. They have no paragraphs or shapes either, so asking for those is refused with `XLSX has no paragraphs to colour; use scope="cell" or scope="row"`. A `cell` or `row` scope outside a table is refused where the tag is, with `scope="cell" needs the tag inside a table cell`.
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -330,7 +340,7 @@ curl -F template=@tagged.docx -F "data=<invoice.json" \
 unzip -p out.docx word/document.xml | grep -o '<w:color w:val="CC0000"/>'
 ```
 
-A shaded paragraph:
+This shades a paragraph:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -360,7 +370,7 @@ curl -F template=@tagged.docx -F "data=<invoice.json" \
 {{ body | html }}
 ```
 
-It takes no arguments. It reads this subset:
+`html` takes no arguments, and reads this subset of HTML:
 
 | Kind | Tags |
 |---|---|
@@ -371,10 +381,10 @@ It takes no arguments. It reads this subset:
 
 Everything else follows these rules:
 
-- `script` and `style` are removed with their content.
-- Other tags are dropped and their text kept, so `<div>Hi</div>` gives a paragraph holding `Hi` and `<img src="x">` gives nothing.
-- No attribute is copied except a checked `href` and colour. A `span` with any other style loses the style.
-- An `a` with a scheme `link` would refuse is an error. Broken HTML is otherwise closed as well as can be, and never refused.
+- `script` and `style` are removed along with their content.
+- Other tags are dropped but their text is kept, so `<div>Hi</div>` gives a paragraph holding `Hi` and `<img src="x">` gives nothing.
+- No attribute is copied except a checked `href` and colour, so a `span` with any other style loses the style.
+- An `a` with a scheme that `link` would refuse is an error. Apart from that, broken HTML is closed as well as it can be and never refused.
 
 What you get depends on the format:
 
@@ -384,7 +394,7 @@ What you get depends on the format:
 | ODT | Native paragraphs, lists and tables, with the same handling of text around the tag |
 | PPTX, XLSX, ODS, ODP | Plain text, with a line break per paragraph, item or row. Bullets and numbers stay, and table cells are separated by tabs. XLSX also sets wrap text on the cell |
 
-In DOCX the tag must sit directly in a paragraph, not in a hyperlink or content control.
+In DOCX the tag has to sit directly in a paragraph, not inside a hyperlink or content control.
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -432,14 +442,15 @@ curl -F template=@tagged.docx -F "data=<with-rows.json" \
 unzip -l out.docx | grep -o 'word/charts/chart1.xml'
 ```
 
-Values must be numbers. A `null` or missing value is a gap, while a key with no value in any row is an error, since that is what a misspelt key looks like: `no row has a value for "nope"`. A string such as `"12"` is refused. So is an empty list, and a row with no `x` key.
+Values have to be numbers. A `null` or missing value is a gap, but a key with no value in any row is an error, because that's what a misspelt key looks like: `no row has a value for "nope"`. A string like `"12"` is refused, and so are an empty list and a row with no `x` key.
 
-- **DOCX and PPTX.** The chart carries its values inline and has no embedded workbook. It renders, but its data cannot be edited in Word or PowerPoint.
-- **XLSX.** The chart is anchored at the tag's cell, and a hidden sheet named `RichChartData` holds the values.
-- **PPTX.** The chart goes at the position of the shape that held the tag. A placeholder PowerPoint has not moved has no position of its own, so the chart takes the one its layout or master gives it.
-- **ODT, ODS and ODP.** The chart is an embedded chart object, `Object N/` in the package, as LibreOffice writes one. It carries its values in its own table and does not read a sheet, so in ODS it does not follow the cells around it. LibreOffice opens it as a chart whose data can be edited. In ODT it sits in the line where the tag is, in ODS it is a frame on the tag's cell, and in ODP it goes at the position of the shape that held the tag. Two charts or pictures for the same cell or shape are stacked, the second below the first.
+In DOCX and PPTX the chart carries its values inline and has no embedded workbook, so it renders but you can't edit its data in Word or PowerPoint. In PPTX it goes at the position of the shape that held the tag. A placeholder that PowerPoint hasn't moved has no position of its own, so the chart takes the one its layout or master gives it.
 
-Every format draws the series, or a pie's slices, in the same colours in turn: blue, orange, grey, gold, light blue and green, Office's default accents. DOCX, XLSX and PPTX take them from the document's theme, so a template with another theme shows its own colours there. ODF charts have the colours written in.
+In XLSX the chart is anchored at the tag's cell, and a hidden sheet named `RichChartData` holds the values.
+
+In ODT, ODS and ODP the chart is an embedded chart object (`Object N/` in the package), the way LibreOffice writes one. It carries its values in its own table and doesn't read a sheet, so in ODS it doesn't follow the cells around it. LibreOffice opens it as a chart whose data can be edited. In ODT it sits in the line where the tag is, in ODS it's a frame on the tag's cell, and in ODP it goes at the position of the shape that held the tag. Two charts or pictures for the same cell or shape are stacked, the second below the first.
+
+Every format draws the series, or a pie's slices, in the same colours in turn: blue, orange, grey, gold, light blue and green, which are Office's default accents. DOCX, XLSX and PPTX take them from the document's theme, so a template with a different theme shows its own colours there. ODF charts have the colours written in.
 
 ## pagebreak
 
@@ -447,11 +458,11 @@ Every format draws the series, or a pie's slices, in the same colours in turn: b
 {{ "" | pagebreak }}
 ```
 
-The value is ignored, and it takes no arguments. It works in DOCX and ODT. Other formats refuse it: `page breaks exist only in DOCX and ODT, not PPTX`.
+`pagebreak` ignores its value and takes no arguments. It works in DOCX and ODT, and other formats refuse it with `page breaks exist only in DOCX and ODT, not PPTX`.
 
 In a DOCX the break goes where the tag is. In an ODT, a tag with nothing after it breaks after its paragraph, and otherwise the text after it starts a new paragraph on the new page.
 
-It is useful between loop iterations. See [paragraph loops](/docs/templates/office/#paragraphs).
+It's useful between loop iterations (see [paragraph loops](/docs/templates/office/#paragraphs)).
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -472,7 +483,6 @@ curl -F template=@tagged.pptx -F 'data={"_":1}' \
   http://localhost:9027/v1/render -o out.pptx
 ```
 
-
 ## Limits
 
 | What | Limit |
@@ -483,7 +493,7 @@ curl -F template=@tagged.pptx -F 'data={"_":1}' \
 | One WebP image | 25 megapixels, 16384 pixels a side |
 | Images and barcodes in one render | 200 |
 | Barcode value | 4 KB, and 4096 modules when linear |
-| Barcode image | 4 megapixels. The module gets smaller, and the printed size does not |
+| Barcode image | 4 megapixels. The module gets smaller and the printed size doesn't |
 | Charts in one render | 200 |
 | Values in one chart | 1,000 |
 | One `html` value | 1 MB, nested at most 64 deep |
