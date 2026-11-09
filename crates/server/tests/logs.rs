@@ -159,11 +159,21 @@ async fn webhook_job_failures_are_logged_in_the_requests_span() {
         .unwrap();
     let res = app(AppState::new(c)).oneshot(request).await.unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let logged = logged_since_clear();
-    let line = logged
-        .lines()
-        .find(|line| line.contains("template_error"))
-        .unwrap_or_else(|| panic!("the job's failure was not logged: {logged}"));
+    // The job runs after the answer; wait for its line rather than a fixed
+    // time, which a loaded machine can overrun.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let (logged, line) = loop {
+        let logged = logged_since_clear();
+        if let Some(line) = logged.lines().find(|l| l.contains("template_error")) {
+            let line = line.to_string();
+            break (logged, line);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the job's failure was not logged: {logged}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    let _ = logged;
     assert!(line.contains("job-under-test"), "{line}");
 }
