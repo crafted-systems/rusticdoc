@@ -29,6 +29,10 @@ Not yet released. This is the first release. The image will be `ghcr.io/vmosoti/
 - Calculation helpers: `avg`, `ceil`, `floor`, `words`, `truncate`, `unaccent`, `pad_left`, `pad_right`, date arithmetic with `date_add`, `date_sub`, `start_of`, `end_of` and `date_diff`, `duration`, `now()`, and the `empty` test. New pages on [calculations](/docs/templates/calculations/) and [conditions](/docs/templates/conditions/).
 - Translations and formatting by language: `lang`, `translations`, `timezone` and `currency` request fields, dictionaries in `RUSTICDOC_TRANSLATIONS_DIR`, fallback from a region to its language, numbers, money and dates written by CLDR for 62 languages, IANA time zones, a `number` filter, and `t`, `date`, `currency` and `{% settings %}` in text templates and PDF tags. A template that sets `lang` now formats numbers, money and dates for that language. `rusticdoc translate` lists a template's keys in a dictionary file.
 - Validation reports fonts a template names that the service lacks, and keys without a translation in the language asked for.
+- `drop()` removes the paragraph, row, column, table, picture, chart, shape, slide or sheet that holds it, on a condition, in every Office format where that element exists. See [remove an element](/docs/templates/office/#remove-an-element).
+- Placeholder pictures: a picture in the template whose alt text holds an `image` or `barcode` tag keeps its frame, position and effects, with `fit` set to `contain`, `cover`, `width` or `stretch`. Images may be PNG, JPEG, GIF, WebP or SVG, which is cleaned and given a PNG fallback.
+- Fifteen barcode symbologies, adding Data Matrix, PDF417, Aztec, Code 93, UPC-A, UPC-E, ITF, ITF-14, Codabar and GS1-128, with text under linear codes, colours, quiet zone, rotation, error correction and exact sizes.
+- `color` reaches a paragraph, table cell, table row or shape, as a text or background colour.
 
 ### Conversion and PDF
 
