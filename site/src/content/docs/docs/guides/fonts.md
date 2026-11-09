@@ -8,7 +8,7 @@ A document that names a font the service lacks comes out in a fallback font, wit
 
 | Way | Needs | Applies to | Survives a restart |
 |---|---|---|---|
-| Upload to the store | `RUSTICDOC_STORE` and an admin key | Every caller and replica | Yes |
+| Upload to the store | `RUSTICDOC_STORE` and an admin | Every caller and replica | Yes |
 | Mount at `/fonts` | A volume, then a reload | This replica, for every caller | As long as the mount does |
 | Send with a request | Nothing | That request | No |
 
@@ -113,21 +113,23 @@ jq -e 'map(.family) | index("Caladea") != null' fonts.json
 
 ## Delete
 
-`DELETE /v1/fonts/{id}` removes a stored font and answers `204`. It takes an admin key. An unknown id answers `404`. Documents that name the font then fall back to another one, with no error.
+`DELETE /v1/fonts/{id}` removes a stored font and answers `204`. It takes an admin. An unknown id answers `404`. Documents that name the font then fall back to another one, with no error.
 
 A font from the image or a mount has no `id` and cannot be deleted this way.
 
 ## Admin keys
 
-Fonts are shared by every caller, and a font decides what the digits look like in everyone's documents, so changing them takes an admin key.
+Fonts are shared by every caller, and a font decides what the digits look like in everyone's documents, so changing them takes an admin.
 
 | Service is configured with | Who may upload and delete fonts |
 |---|---|
-| `RUSTICDOC_ADMIN_KEYS` | Only those keys, in `X-Api-Key` or `Authorization: Bearer` |
-| Other credentials but no admin keys | Nobody. The answer is `403 admin_required` |
-| No credentials at all | Anyone who can reach the service |
+| `RUSTICDOC_ADMIN_KEYS` | Those keys, in `X-Api-Key` or `Authorization: Bearer` |
+| `RUSTICDOC_BASIC_AUTH_ADMIN=true` | The basic-auth user |
+| `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM` | The OpenID Connect users they name |
+| Other credentials but none of these | Nobody. The answer is `403 admin_required` |
+| No credentials at all | Anyone who can reach the service, unless admin keys are set |
 
-A valid API key, a basic-auth user and an OpenID Connect token are all refused unless they are an admin key. See [authentication](/docs/guides/authentication/).
+Any other API key, tenant key, basic-auth user or token is refused. See [admins](/docs/guides/authentication/#admins).
 
 ## Chinese, Japanese and Korean fonts
 

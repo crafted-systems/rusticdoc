@@ -235,5 +235,50 @@ fn webhook_secret_prints_the_key_a_receiver_verifies_with() {
     );
     let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(run(&["--basic-user", "ada"]), hex);
+    let key = rusticdoc_server::webhook::signing_key(
+        "master",
+        &rusticdoc_server::auth::tenant_principal("acme").0,
+    );
+    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(run(&["--tenant", "acme"]), hex);
     assert_eq!(run(&[]), "6d6173746572", "the master secret, in hex");
+}
+
+#[tokio::test]
+async fn a_stored_templates_variables_are_read_in_the_worker() {
+    let store = std::env::temp_dir().join(format!("rusticdoc-worker-store-{}", std::process::id()));
+    let url = format!("file://{}", store.display());
+    let service = start(&[
+        ("RUSTICDOC_STORE", url.as_str()),
+        (
+            "RUSTICDOC_FONT_CACHE_DIR",
+            store.join("fonts").to_str().unwrap(),
+        ),
+    ]);
+    let client = wait_until_up(&service).await;
+    let template = b"{% for item in items %}{{ item.name }}{% endfor %}{{ total }}";
+    let (status, body) = post_parts(
+        &client,
+        &format!("{}/v1/templates", service.base),
+        &[("template", "list.txt", template)],
+    )
+    .await;
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    let id = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let res = client
+        .get(format!("{}/v1/templates/{id}/variables", service.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let found: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(
+        found["example"],
+        serde_json::json!({"items": [{"name": ""}], "total": ""})
+    );
+    drop(service);
+    let _ = std::fs::remove_dir_all(&store);
 }

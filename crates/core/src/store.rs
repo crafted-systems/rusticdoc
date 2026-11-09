@@ -5,7 +5,8 @@
 //!
 //! Each object is written once and never changed, and a metadata object written
 //! after the content is what makes it exist, so replicas need no locks or
-//! coordination. Templates are read from the store. Fonts have to be files for
+//! coordination. Aliases and background jobs keep to that too: each change is a
+//! new object, and the newest one is what holds. Templates are read from the store. Fonts have to be files for
 //! LibreOffice, so each replica keeps a copy in sync with [`Store::sync_fonts`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -186,7 +187,7 @@ pub fn scope_key(principal: &str) -> String {
         .collect()
 }
 
-fn is_template_id(id: &str) -> bool {
+pub fn is_template_id(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.hyphenated().to_string() == id)
 }
 
@@ -605,6 +606,628 @@ impl Store {
     }
 }
 
+/// Most versions one alias keeps. Deleting the alias starts it again.
+pub const MAX_ALIAS_VERSIONS: usize = 1000;
+
+/// One version of an alias: which template it named from when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasVersion {
+    /// 1 for the first template the alias named, counted since it was last
+    /// deleted.
+    pub version: usize,
+    pub template_id: String,
+    /// RFC 3339.
+    pub set_at: String,
+}
+
+/// An alias and the template it names now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasMeta {
+    pub name: String,
+    pub template_id: String,
+    pub version: usize,
+    /// RFC 3339: when it was pointed at this template.
+    pub set_at: String,
+}
+
+/// An alias with every version it has had, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasHistory {
+    pub name: String,
+    pub template_id: String,
+    pub version: usize,
+    pub set_at: String,
+    pub versions: Vec<AliasVersion>,
+}
+
+/// One page of a caller's aliases.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasPage {
+    pub aliases: Vec<AliasMeta>,
+    /// Pass as `cursor` for the next page. Absent on the last.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// What an alias record says, as stored.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AliasRecord {
+    template_id: String,
+    set_at: String,
+}
+
+/// An alias's records, from a listing: each a time-ordered id, and whether it
+/// set the alias (`true`) or deleted it.
+#[derive(Debug, Default)]
+struct AliasRecords {
+    /// Sorted oldest first.
+    records: Vec<(String, bool)>,
+}
+
+impl AliasRecords {
+    /// The records since the last deletion, which make up the alias as it is.
+    fn live(&self) -> &[(String, bool)] {
+        let start = self
+            .records
+            .iter()
+            .rposition(|(_, set)| !set)
+            .map_or(0, |at| at + 1);
+        &self.records[start..]
+    }
+}
+
+/// An alias record's id and kind, from its object's file name.
+fn alias_file(file: &str) -> Option<(&str, bool)> {
+    let (id, set) = if let Some(id) = file.strip_suffix(".json") {
+        (id, true)
+    } else {
+        (file.strip_suffix(".gone")?, false)
+    };
+    is_template_id(id).then_some((id, set))
+}
+
+/// Where a job is, from the caller's side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobStatus {
+    Queued,
+    Running,
+    Done,
+    Failed,
+}
+
+impl JobStatus {
+    /// The state object's name: later states sort after earlier ones.
+    fn object(self) -> &'static str {
+        match self {
+            JobStatus::Queued => "1-queued.json",
+            JobStatus::Running => "2-running.json",
+            JobStatus::Done => "3-done.json",
+            JobStatus::Failed => "3-failed.json",
+        }
+    }
+
+    pub fn ended(self) -> bool {
+        matches!(self, JobStatus::Done | JobStatus::Failed)
+    }
+}
+
+/// The file a finished job made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobResult {
+    pub name: String,
+    pub content_type: String,
+    pub size: u64,
+    /// Hex SHA-256 of the content.
+    pub sha256: String,
+}
+
+/// A background job, as each of its states records it in full.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobRecord {
+    pub id: String,
+    pub status: JobStatus,
+    /// RFC 3339, to the millisecond.
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    /// When it is gone: set once it ends, or for one lost on the way, its
+    /// time to run plus the time to keep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// A job that has not ended by then never will: the replica running it
+    /// stopped.
+    pub runs_until: String,
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<JobResult>,
+    /// What a failed job's request would have answered: `error`, `message`
+    /// and `status`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+}
+
+/// A time as jobs record it: RFC 3339 to the millisecond.
+pub fn job_time(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn parse_time(text: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
+}
+
+fn chrono_duration(d: Duration) -> chrono::Duration {
+    chrono::Duration::from_std(d).unwrap_or(chrono::Duration::hours(1))
+}
+
+impl JobRecord {
+    /// A new job, queued now, that should end within `limit`.
+    pub fn queued(id: String, request_id: String, limit: Duration) -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            id,
+            status: JobStatus::Queued,
+            created_at: job_time(now),
+            started_at: None,
+            finished_at: None,
+            expires_at: None,
+            runs_until: job_time(now + chrono_duration(limit)),
+            request_id,
+            result: None,
+            error: None,
+        }
+    }
+
+    /// Marks the job ended now, to be kept for `ttl`.
+    pub fn ended(&mut self, status: JobStatus, ttl: Duration) {
+        let now = chrono::Utc::now();
+        self.status = status;
+        self.finished_at = Some(job_time(now));
+        self.expires_at = Some(job_time(now + chrono_duration(ttl)));
+    }
+
+    /// The job as a caller should see it at `now`, or `None` once it has
+    /// expired. One that ran past its time without ending is reported as
+    /// failed, since nothing will ever finish it.
+    pub fn as_of(mut self, now: chrono::DateTime<chrono::Utc>, ttl: Duration) -> Option<Self> {
+        if !self.status.ended() {
+            let until = parse_time(&self.runs_until)?;
+            if now <= until {
+                return Some(self);
+            }
+            self.status = JobStatus::Failed;
+            self.expires_at = Some(job_time(until + chrono_duration(ttl)));
+            self.error = Some(serde_json::json!({
+                "error": "job_lost",
+                "message": "the job did not finish in its time, most likely because the container running it stopped; send the request again",
+                "status": 503,
+            }));
+        }
+        let expires = match self.expires_at.as_deref().and_then(parse_time) {
+            Some(at) => at,
+            None => parse_time(self.finished_at.as_deref()?)? + chrono_duration(ttl),
+        };
+        (now < expires).then_some(self)
+    }
+}
+
+fn alias_prefix(scope: &str, name: &str) -> ObjectPath {
+    ObjectPath::from(format!("aliases/{scope}/{name}"))
+}
+
+fn alias_path(scope: &str, name: &str, id: &str, set: bool) -> ObjectPath {
+    let kind = if set { "json" } else { "gone" };
+    ObjectPath::from(format!("aliases/{scope}/{name}/{id}.{kind}"))
+}
+
+fn job_prefix(scope: &str, id: &str) -> ObjectPath {
+    ObjectPath::from(format!("jobs/{scope}/{id}"))
+}
+
+fn job_result_path(scope: &str, id: &str) -> ObjectPath {
+    ObjectPath::from(format!("jobs/{scope}/{id}/result"))
+}
+
+/// An alias: 1 to 64 letters, digits, `.`, `_` and `-`, starting with a letter
+/// or digit, and not shaped like a template id, so that wherever an id is
+/// accepted an alias can be told from one.
+pub fn is_alias_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && !is_template_id(name)
+}
+
+/// A job id: what this store makes, and nothing that could be a path.
+pub fn is_job_id(id: &str) -> bool {
+    is_template_id(id)
+}
+
+/// A new job id, ordered by time like template ids.
+pub fn new_job_id() -> String {
+    uuid::Uuid::now_v7().hyphenated().to_string()
+}
+
+impl Store {
+    /// An alias's records, as listed.
+    async fn alias_records(&self, scope: &str, name: &str) -> StoreResult<AliasRecords> {
+        let listed: Vec<_> = self
+            .objects
+            .list(Some(&alias_prefix(scope, name)))
+            .try_collect()
+            .await?;
+        let mut records: Vec<(String, bool)> = listed
+            .iter()
+            .filter_map(|o| alias_file(o.location.filename()?))
+            .map(|(id, set)| (id.to_string(), set))
+            .collect();
+        // Ids sort by when they were made.
+        records.sort_unstable();
+        Ok(AliasRecords { records })
+    }
+
+    async fn alias_record(&self, scope: &str, name: &str, id: &str) -> StoreResult<AliasRecord> {
+        self.read_json(&alias_path(scope, name, id, true)).await
+    }
+
+    /// The template an alias names now, or the one its `version` named.
+    pub async fn resolve_alias(
+        &self,
+        scope: &str,
+        name: &str,
+        version: Option<usize>,
+    ) -> StoreResult<String> {
+        if !is_alias_name(name) {
+            return Err(StoreError::NotFound);
+        }
+        let records = self.alias_records(scope, name).await?;
+        let live = records.live();
+        let id = match version {
+            None => live.last(),
+            Some(v) => v.checked_sub(1).and_then(|at| live.get(at)),
+        };
+        let Some((id, _)) = id else {
+            return Err(StoreError::NotFound);
+        };
+        Ok(self.alias_record(scope, name, id).await?.template_id)
+    }
+
+    /// An alias with its versions, oldest first.
+    pub async fn alias_history(&self, scope: &str, name: &str) -> StoreResult<AliasHistory> {
+        if !is_alias_name(name) {
+            return Err(StoreError::NotFound);
+        }
+        let records = self.alias_records(scope, name).await?;
+        let live: Vec<String> = records.live().iter().map(|(id, _)| id.clone()).collect();
+        let read: Vec<StoreResult<AliasRecord>> = stream::iter(live)
+            .map(|id: String| async move { self.alias_record(scope, name, &id).await })
+            .buffered(CONCURRENT_READS)
+            .collect()
+            .await;
+        let mut versions = Vec::with_capacity(read.len());
+        for (at, record) in read.into_iter().enumerate() {
+            let record = record?;
+            versions.push(AliasVersion {
+                version: at + 1,
+                template_id: record.template_id,
+                set_at: record.set_at,
+            });
+        }
+        let current = versions.last().cloned().ok_or(StoreError::NotFound)?;
+        Ok(AliasHistory {
+            name: name.to_string(),
+            template_id: current.template_id,
+            version: current.version,
+            set_at: current.set_at,
+            versions,
+        })
+    }
+
+    /// How many versions an alias holds now, for its limit.
+    pub async fn alias_versions(&self, scope: &str, name: &str) -> StoreResult<usize> {
+        Ok(self.alias_records(scope, name).await?.live().len())
+    }
+
+    /// Points an alias at a template, as a new version. Nothing already
+    /// written changes: the newest record is the alias.
+    pub async fn set_alias(
+        &self,
+        scope: &str,
+        name: &str,
+        template_id: &str,
+    ) -> StoreResult<AliasMeta> {
+        if !is_alias_name(name) {
+            return Err(StoreError::NotFound);
+        }
+        self.template_meta(scope, template_id).await?;
+        let record = AliasRecord {
+            template_id: template_id.to_string(),
+            set_at: now(),
+        };
+        let encoded = serde_json::to_vec(&record)
+            .map_err(|e| StoreError::Backend(format!("metadata: {e}")))?;
+        let id = uuid::Uuid::now_v7().hyphenated().to_string();
+        self.objects
+            .put(
+                &alias_path(scope, name, &id, true),
+                Bytes::from(encoded).into(),
+            )
+            .await?;
+        let version = self
+            .alias_records(scope, name)
+            .await?
+            .live()
+            .iter()
+            .position(|(r, _)| *r == id)
+            .map_or(1, |at| at + 1);
+        Ok(AliasMeta {
+            name: name.to_string(),
+            template_id: record.template_id,
+            version,
+            set_at: record.set_at,
+        })
+    }
+
+    /// Deletes an alias. A marker written in one step ends it for every
+    /// replica at once; the records before it are then removed, oldest first,
+    /// so that no reader sees an older version come back.
+    pub async fn delete_alias(&self, scope: &str, name: &str) -> StoreResult<()> {
+        if !is_alias_name(name) {
+            return Err(StoreError::NotFound);
+        }
+        let records = self.alias_records(scope, name).await?;
+        if records.live().is_empty() {
+            return Err(StoreError::NotFound);
+        }
+        let marker = uuid::Uuid::now_v7().hyphenated().to_string();
+        self.objects
+            .put(
+                &alias_path(scope, name, &marker, false),
+                Bytes::new().into(),
+            )
+            .await?;
+        for (id, set) in &records.records {
+            match self
+                .objects
+                .delete(&alias_path(scope, name, id, *set))
+                .await
+            {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+                // The marker already ended the alias; what is left is only space.
+                Err(e) => {
+                    tracing::warn!(alias = %name, error = %e, "an old alias record was not removed");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Every live alias of a scope, by name, each with its records.
+    async fn live_aliases(&self, scope: &str) -> StoreResult<Vec<(String, AliasRecords)>> {
+        let prefix = ObjectPath::from(format!("aliases/{scope}"));
+        let listed: Vec<_> = self.objects.list(Some(&prefix)).try_collect().await?;
+        let mut by_name: std::collections::BTreeMap<String, AliasRecords> = Default::default();
+        for object in &listed {
+            let parts: Vec<String> = object
+                .location
+                .parts()
+                .map(|p| p.as_ref().to_string())
+                .collect();
+            let [_, _, name, file] = parts.as_slice() else {
+                continue;
+            };
+            let Some((id, set)) = alias_file(file) else {
+                continue;
+            };
+            if !is_alias_name(name) {
+                continue;
+            }
+            by_name
+                .entry(name.clone())
+                .or_default()
+                .records
+                .push((id.to_string(), set));
+        }
+        Ok(by_name
+            .into_iter()
+            .filter_map(|(name, mut records)| {
+                records.records.sort_unstable();
+                (!records.live().is_empty()).then_some((name, records))
+            })
+            .collect())
+    }
+
+    /// How many aliases a scope holds, for its limit.
+    pub async fn alias_count(&self, scope: &str) -> StoreResult<usize> {
+        Ok(self.live_aliases(scope).await?.len())
+    }
+
+    /// A page of a scope's aliases, by name.
+    pub async fn list_aliases(
+        &self,
+        scope: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> StoreResult<AliasPage> {
+        let all = self.live_aliases(scope).await?;
+        let start = cursor.map_or(0, |after| all.partition_point(|(n, _)| n.as_str() <= after));
+        let page = &all[start.min(all.len())..];
+        let shown = &page[..limit.min(page.len())];
+        let wanted: Vec<(String, String, usize)> = shown
+            .iter()
+            .filter_map(|(name, records)| {
+                let live = records.live();
+                let (id, _) = live.last()?;
+                Some((name.clone(), id.clone(), live.len()))
+            })
+            .collect();
+        let read: Vec<StoreResult<AliasMeta>> = stream::iter(wanted)
+            .map(|(name, id, version): (String, String, usize)| async move {
+                let record = self.alias_record(scope, &name, &id).await?;
+                Ok(AliasMeta {
+                    name,
+                    template_id: record.template_id,
+                    version,
+                    set_at: record.set_at,
+                })
+            })
+            .buffered(CONCURRENT_READS)
+            .collect()
+            .await;
+        let mut aliases = Vec::with_capacity(read.len());
+        for meta in read {
+            match meta {
+                Ok(meta) => aliases.push(meta),
+                // Deleted since the listing.
+                Err(StoreError::NotFound) => {}
+                Err(other) => return Err(other),
+            }
+        }
+        let next_cursor = (page.len() > shown.len())
+            .then(|| shown.last().map(|(n, _)| n.clone()))
+            .flatten();
+        Ok(AliasPage {
+            aliases,
+            next_cursor,
+        })
+    }
+
+    /// Records a job's state. Each state is an object of its own, written once,
+    /// and the latest holds the whole record.
+    pub async fn put_job(&self, scope: &str, record: &JobRecord) -> StoreResult<()> {
+        if !is_job_id(&record.id) {
+            return Err(StoreError::NotFound);
+        }
+        let encoded = serde_json::to_vec(record)
+            .map_err(|e| StoreError::Backend(format!("metadata: {e}")))?;
+        let path = ObjectPath::from(format!(
+            "jobs/{scope}/{}/{}",
+            record.id,
+            record.status.object()
+        ));
+        self.objects.put(&path, Bytes::from(encoded).into()).await?;
+        Ok(())
+    }
+
+    /// Stores what a job made. Written before the state that names it.
+    pub async fn put_job_result(&self, scope: &str, id: &str, bytes: Bytes) -> StoreResult<()> {
+        if !is_job_id(id) {
+            return Err(StoreError::NotFound);
+        }
+        self.objects
+            .put(&job_result_path(scope, id), bytes.into())
+            .await?;
+        Ok(())
+    }
+
+    /// A job as its latest state records it.
+    pub async fn job(&self, scope: &str, id: &str) -> StoreResult<JobRecord> {
+        if !is_job_id(id) {
+            return Err(StoreError::NotFound);
+        }
+        let listed: Vec<_> = self
+            .objects
+            .list(Some(&job_prefix(scope, id)))
+            .try_collect()
+            .await?;
+        let latest = listed
+            .iter()
+            .filter_map(|o| {
+                let file = o.location.filename()?;
+                (file.ends_with(".json") && file.as_bytes()[0].is_ascii_digit())
+                    .then(|| (file.to_string(), &o.location))
+            })
+            .max_by(|a, b| a.0.cmp(&b.0))
+            .ok_or(StoreError::NotFound)?;
+        self.read_json(latest.1).await
+    }
+
+    /// What a finished job made, checked against the hash its record holds.
+    pub async fn job_result(&self, scope: &str, record: &JobRecord) -> StoreResult<Bytes> {
+        let expected = record.result.as_ref().ok_or(StoreError::NotFound)?;
+        let bytes = self.read(&job_result_path(scope, &record.id)).await?;
+        if digest(&bytes) != expected.sha256 {
+            return Err(StoreError::Integrity(format!(
+                "job {} result does not match its hash",
+                record.id
+            )));
+        }
+        Ok(bytes)
+    }
+
+    /// Removes the jobs of every scope that expired: ended more than `ttl` ago,
+    /// or lost and past their time by as much. Every replica runs this, and a
+    /// delete that finds nothing is not an error. Returns how many went.
+    pub async fn expire_jobs(&self, ttl: Duration) -> StoreResult<usize> {
+        let now = chrono::Utc::now();
+        let prefix = ObjectPath::from("jobs");
+        let listed: Vec<_> = self.objects.list(Some(&prefix)).try_collect().await?;
+        let mut jobs: std::collections::BTreeMap<(String, String), Vec<object_store::ObjectMeta>> =
+            Default::default();
+        for object in listed {
+            let parts: Vec<String> = object
+                .location
+                .parts()
+                .map(|p| p.as_ref().to_string())
+                .collect();
+            if let [_, scope, id, _] = parts.as_slice() {
+                jobs.entry((scope.clone(), id.clone()))
+                    .or_default()
+                    .push(object);
+            }
+        }
+        let mut removed = 0;
+        for ((scope, id), mut objects) in jobs {
+            let ended = objects
+                .iter()
+                .find(|o| o.location.filename().is_some_and(|f| f.starts_with("3-")));
+            let expired = match ended {
+                // Written as the job ended, so its time needs no read; most
+                // jobs a sweep sees have ended.
+                Some(state) => state.last_modified + chrono_duration(ttl) < now,
+                None => match self.job(&scope, &id).await {
+                    Ok(record) => record.as_of(now, ttl).is_none(),
+                    // Half written or half removed: old enough is enough.
+                    Err(_) => objects
+                        .iter()
+                        .all(|o| o.last_modified + chrono_duration(ttl) < now),
+                },
+            };
+            if !expired {
+                continue;
+            }
+            // Earlier states first and the final one last, so a reader in
+            // between still sees how the job ended.
+            objects.sort_by_key(|o| match o.location.filename() {
+                Some(f) if f.starts_with("3-") => 3,
+                Some("result") => 2,
+                _ => 1,
+            });
+            for object in objects {
+                match self.objects.delete(&object.location).await {
+                    Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            removed += 1;
+        }
+        Ok(removed)
+    }
+}
+
 /// Creates a directory only this user can enter, if it is not there yet.
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
@@ -714,6 +1337,69 @@ mod tests {
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&fresh, &link).unwrap();
         assert!(create_owned_private_dir(&link).is_err());
+    }
+
+    #[test]
+    fn a_job_reads_as_it_stands_and_expires_after_it_ends() {
+        let ttl = Duration::from_secs(60);
+        let now = chrono::Utc::now();
+        let mut job = JobRecord::queued(new_job_id(), "-".into(), Duration::from_secs(30));
+        assert_eq!(
+            job.clone().as_of(now, ttl).unwrap().status,
+            JobStatus::Queued
+        );
+        // Past its time without ending: lost, and gone a TTL later.
+        let later = now + chrono::Duration::seconds(31);
+        let lost = job.clone().as_of(later, ttl).unwrap();
+        assert_eq!(lost.status, JobStatus::Failed);
+        assert_eq!(lost.error.unwrap()["error"], "job_lost");
+        assert!(
+            job.clone()
+                .as_of(later + chrono::Duration::seconds(61), ttl)
+                .is_none()
+        );
+
+        job.ended(JobStatus::Done, ttl);
+        let ended = parse_time(job.finished_at.as_deref().unwrap()).unwrap();
+        assert!(
+            job.clone()
+                .as_of(ended + chrono::Duration::seconds(59), ttl)
+                .is_some()
+        );
+        assert!(
+            job.as_of(ended + chrono::Duration::seconds(61), ttl)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_alias_is_its_records_since_the_last_deletion() {
+        let id = |n: u8| format!("01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c{n:02x}");
+        let records = AliasRecords {
+            records: vec![(id(1), true), (id(2), true), (id(3), false), (id(4), true)],
+        };
+        assert_eq!(records.live(), &[(id(4), true)]);
+        let records = AliasRecords {
+            records: vec![(id(1), true), (id(2), true)],
+        };
+        assert_eq!(records.live().len(), 2);
+        let records = AliasRecords {
+            records: vec![(id(1), true), (id(2), false)],
+        };
+        assert!(records.live().is_empty());
+        assert_eq!(
+            alias_file(&format!("{}.json", id(1))),
+            Some((id(1).as_str(), true))
+        );
+        assert_eq!(
+            alias_file(&format!("{}.gone", id(1))),
+            Some((id(1).as_str(), false))
+        );
+        assert_eq!(alias_file("../x.json"), None);
+        assert!(is_alias_name("invoice-2026.v2"));
+        for bad in ["", ".x", "-x", "a/b", "a b", &id(1), &"x".repeat(65)] {
+            assert!(!is_alias_name(bad), "{bad}");
+        }
     }
 
     #[test]

@@ -170,6 +170,60 @@ pub fn check_syntax(doc: &Document) -> Vec<rusticdoc_template::Diagnostic> {
     Vec::new()
 }
 
+/// Every tag a template holds, in document order: `{{ customer.name }}`,
+/// `{% for item in items %}`. Formats that hold no tags have none. A template
+/// with a syntax error fails, as it would at its first render.
+pub fn tags(doc: &Document) -> Result<Vec<String>> {
+    let ext = doc.extension();
+    if let Some(format) = rusticdoc_template::Format::from_extension(&ext) {
+        return Ok(compiled(format, &doc.bytes)?.tags().to_vec());
+    }
+    if is_text_template(&ext) {
+        let source = String::from_utf8_lossy(&doc.bytes);
+        environment()
+            .template_from_str(&source)
+            .map_err(|e| Error::Template(e.to_string()))?;
+        return Ok(scan_tags(&source));
+    }
+    Ok(Vec::new())
+}
+
+/// The tags of a text template, as written, less comments and what a
+/// `{% raw %}` block holds.
+fn scan_tags(source: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = source;
+    let mut raw = false;
+    while let Some(at) = rest.find('{') {
+        let after = &rest[at..];
+        let close = match after.as_bytes().get(1) {
+            Some(b'{') => "}}",
+            Some(b'%') => "%}",
+            Some(b'#') => "#}",
+            _ => {
+                rest = &after[1..];
+                continue;
+            }
+        };
+        let Some(end) = after[2..].find(close) else {
+            break;
+        };
+        let tag = &after[..end + 4];
+        rest = &after[end + 4..];
+        let inner = tag[2..tag.len() - 2].trim().trim_matches('-').trim();
+        if raw {
+            raw = !(close == "%}" && inner == "endraw");
+            continue;
+        }
+        match close {
+            "#}" => {}
+            "%}" if inner == "raw" => raw = true,
+            _ => found.push(tag.to_string()),
+        }
+    }
+    found
+}
+
 /// Most compiled templates kept in memory, by content hash.
 const CACHE_ENTRIES: usize = 64;
 /// Largest template kept for reuse by hash.

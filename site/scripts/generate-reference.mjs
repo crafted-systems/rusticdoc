@@ -34,7 +34,8 @@ const TAGS = {
   fonts: { title: 'Fonts', order: 4 },
   pdf: { title: 'PDF operations', order: 5 },
   'pdf-forms': { title: 'PDF forms', order: 6 },
-  service: { title: 'Service', order: 7 },
+  jobs: { title: 'Background jobs', order: 7 },
+  service: { title: 'Service', order: 8 },
 };
 
 const stale = [];

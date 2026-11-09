@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
 #
 # Builds the rusticdoc service image: one Rust binary on Debian 13 with
-# LibreOffice (from trixie-backports) and its Python UNO bridge, qpdf and
-# pdfcpu. No Node, Java or Chromium. Build from the project root:
+# LibreOffice (from trixie-backports) and its Python UNO bridge, qpdf,
+# pdfcpu, and poppler's pdftoppm for template previews (libpoppler itself
+# comes with LibreOffice's PDF import). No Node, Java or Chromium. Build
+# from the project root:
 #   docker build -t rusticdoc .
 
 # Base images are pinned by digest; dependabot's docker ecosystem keeps them fresh.
@@ -63,7 +65,7 @@ RUN groupadd --gid 1001 rusticdoc \
     && apt-get update -qq \
     && apt-get upgrade -yqq \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        ca-certificates qpdf fontconfig python3 \
+        ca-certificates qpdf poppler-utils fontconfig python3 \
         fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fonts-liberation2 \
         fonts-dejavu fonts-noto-cjk fonts-noto-color-emoji fonts-noto-core \
         hyphen-en-us hyphen-en-gb hyphen-de hyphen-fr hyphen-es hyphen-it hyphen-nl hyphen-pt-pt hyphen-pt-br \

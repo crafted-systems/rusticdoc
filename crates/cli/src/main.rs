@@ -73,6 +73,10 @@ enum Command {
         /// The subject of the caller's OpenID Connect tokens.
         #[arg(long, group = "caller")]
         oidc_subject: Option<String>,
+        /// The caller's tenant, from RUSTICDOC_TENANT_KEYS: every key of a
+        /// tenant signs with the same key.
+        #[arg(long, group = "caller")]
+        tenant: Option<String>,
     },
     /// Evaluates templates for `serve`, in a process of their own.
     #[command(name = "__render-worker", hide = true)]
@@ -271,6 +275,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             api_key,
             basic_user,
             oidc_subject,
+            tenant,
         } => {
             use rusticdoc_server::auth;
             let Some(secret) = &config.webhook_secret else {
@@ -282,6 +287,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 auth::basic_principal(&user)
             } else if let Some(subject) = oidc_subject {
                 auth::oidc_principal(&subject)
+            } else if let Some(tenant) = tenant {
+                auth::tenant_principal(&tenant)
             } else {
                 auth::Principal("public".into())
             };

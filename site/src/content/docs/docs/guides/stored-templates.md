@@ -1,10 +1,10 @@
 ---
 title: Stored templates
-description: Upload a template once, then render it by id from any replica, and list, download and delete what you stored.
+description: Upload a template once, name it with an alias that keeps its versions, render it by id or alias with a form or JSON, see what data it reads, and preview a page.
 sidebar: { order: 4 }
 ---
 
-Stored templates let you upload a file once and then send only its id. After this page you can store a template, render it by `templateId`, page through what you stored and remove it.
+Stored templates let you upload a file once and then send only its id or a name. After this page you can store a template, name it with an alias and roll its versions forward and back, render it with a form or with JSON, list the data it reads, draw a page of it, and remove what you stored.
 
 ## Turn it on
 
@@ -74,7 +74,36 @@ curl -X DELETE "http://localhost:9027/v1/templates/$ID"
 
 Sending both `templateId` and a `template` file part is a `400`. With `templateId`, any files you do send are further inputs for the `merge` step.
 
-An id this caller does not have answers `404 not_found`. So does an id that is not a UUID.
+`templateId` also takes an [alias](#aliases-and-versions), as `invoice` or `invoice@2`.
+
+An id this caller does not have answers `404 not_found`. So does an id that is not a UUID and not an alias.
+
+## Send JSON instead of a form
+
+A render by id has no files to send, so `/v1/render`, `/v1/render/batch` and `/v1/templates/validate` also take a JSON object with `Content-Type: application/json`:
+
+```bash test
+curl -F template=@letter.txt http://localhost:9027/v1/templates -o stored.json
+ID=$(jq -r .id stored.json)
+
+curl -H "Content-Type: application/json" \
+  -d "{\"templateId\":\"$ID\",\"data\":{\"customer\":{\"name\":\"Ada\"},\"total\":1500},\"outputFilename\":\"ada\"}" \
+  http://localhost:9027/v1/render -o ada.txt
+grep -q "Dear Ada" ada.txt
+
+curl -X DELETE "http://localhost:9027/v1/templates/$ID"
+```
+
+Every text field of the form is a member of the same name, with the same meaning and the same limits:
+
+| Member | As JSON |
+|---|---|
+| `templateId` | A string: an id or an alias |
+| `data`, `ctx`, `metadata`, `bookmarks`, `downloadFrom` | Objects and arrays as they are, not as text |
+| `steps` | A list such as `["convert","pdfa"]`, or the form's comma-separated text |
+| Anything else, such as `to`, `pdfa`, `outputFilename`, `splitBy`, `flatten` | A string, number or boolean |
+
+A JSON body cannot carry files, so a member named `template`, `files`, `assets`, `embeds`, `watermark` or `stamp` is a `400`, as is a body that is not an object or not valid JSON. The body limit and the limit of 2000 fields apply as for a form. Without a store, JSON still works with a `templateHash`.
 
 ## List
 
@@ -132,11 +161,126 @@ curl "http://localhost:9027/v1/templates/$ID"
 
 ## A stored template cannot change
 
-There is no route to replace a template's content, and there are no versions or aliases yet. To change a template, store the new file, use its new id, and delete the old one.
+There is no route to replace a template's content. The id is a new UUID on every upload, and uploading the same bytes twice stores two templates with one `sha256`. To change a template, store the new file and point an alias at it.
 
-The id is a new UUID on every upload. Uploading the same bytes twice stores two templates with one `sha256`.
+## Aliases and versions
 
-So your application has to hold the mapping from a name such as `invoice` to the current id. You can roll back by pointing it at the older id, as long as you have not deleted that template.
+An alias is a name for a template, such as `invoice`, that your application renders instead of an id. Pointing the alias at a newer template makes a new version; the earlier versions stay listed and can still be rendered.
+
+`PUT /v1/aliases/{name}` takes `templateId`, as JSON or a form field. A new alias answers `201` at version 1, and pointing an existing one elsewhere answers `200` with the next version. Every replica sees the change at once.
+
+```bash test
+curl -F template=@letter.txt http://localhost:9027/v1/templates -o one.json
+curl -F template=@letter.txt http://localhost:9027/v1/templates -o two.json
+
+curl -X PUT -H "Content-Type: application/json" -d "{\"templateId\":\"$(jq -r .id one.json)\"}" \
+  http://localhost:9027/v1/aliases/letter -o v1.json
+jq -e '.version == 1' v1.json
+curl -X PUT -F templateId="$(jq -r .id two.json)" http://localhost:9027/v1/aliases/letter -o v2.json
+jq -e '.version == 2' v2.json
+
+curl -F templateId=letter -F "data=<letter.json" http://localhost:9027/v1/render -o now.txt
+curl -F templateId=letter@1 -F "data=<letter.json" http://localhost:9027/v1/render -o before.txt
+grep -q "Dear Ada" now.txt && grep -q "Dear Ada" before.txt
+
+curl http://localhost:9027/v1/aliases/letter -o history.json
+jq -e '(.versions | length) == 2 and .templateId == "'"$(jq -r .id two.json)"'"' history.json
+
+curl -X DELETE http://localhost:9027/v1/aliases/letter
+curl -X DELETE "http://localhost:9027/v1/templates/$(jq -r .id one.json)"
+curl -X DELETE "http://localhost:9027/v1/templates/$(jq -r .id two.json)"
+```
+
+Anywhere an id is accepted, an alias is too:
+
+| Written as | Means |
+|---|---|
+| `invoice` | The template the alias names now |
+| `invoice@2` | The template its version 2 named |
+
+That holds for `templateId` on every render route and in JSON, and for `GET /v1/templates/{id}`, `/content`, `/variables` and `/preview`. Deleting a template is by id only. `templateId` in `PUT /v1/aliases/{name}` may itself be an alias, which copies where that alias points now.
+
+| Route | Answer |
+|---|---|
+| `GET /v1/aliases/{name}` | `name`, the current `templateId`, `version` and `setAt`, and `versions`: every version, oldest first, each with `version`, `templateId` and `setAt` |
+| `GET /v1/aliases` | `aliases`, by name, each with its current `templateId` and `version`, and `nextCursor`. It takes `limit` and `cursor` as the template list does |
+| `DELETE /v1/aliases/{name}` | `204`. The alias and its history are gone at once on every replica; the templates stay. Setting it again starts at version 1 |
+
+To roll back, point the alias at the older template again, which adds a version, or render `invoice@1` while you decide.
+
+An alias whose template has since been deleted answers `404`, saying which template it names. An alias is 1 to 64 letters, digits, `.`, `_` and `-`, starting with a letter or digit, and never shaped like a UUID. Another name is a `400`. Each caller has its own aliases, scoped as templates are, so two callers can both have an `invoice`.
+
+Nothing in the store is changed to make this work: each version is an object of its own, and the newest one is the alias. A delete writes a marker first, then removes the older records.
+
+## See what a template reads
+
+`GET /v1/templates/{id}/variables` lists the data a template reads, from its tags, so your application can build its data or check what it has:
+
+```bash test
+curl -F template=@letter.txt http://localhost:9027/v1/templates -o stored.json
+ID=$(jq -r .id stored.json)
+curl "http://localhost:9027/v1/templates/$ID/variables" -o variables.json
+jq -e '.example == {"customer": {"name": ""}, "total": ""}' variables.json
+curl -X DELETE "http://localhost:9027/v1/templates/$ID"
+```
+
+For a template with `{% for line in lines %}{{ line.sku }}{% endfor %}` it answers:
+
+```json
+{
+  "templateId": "01a1b291-787f-748b-ad1a-e899ffc5aa28",
+  "format": "docx",
+  "variables": [
+    { "path": "lines", "type": "array" },
+    { "path": "lines[]", "type": "object" },
+    { "path": "lines[].sku", "type": "value" }
+  ],
+  "example": { "lines": [{ "sku": "" }] }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `variables` | Every path the template reads, parents before their fields, in the order the template first names them |
+| `path` | Dotted, with `[]` for each item of an array. `lines[]` says what each item is |
+| `type` | `array` when the template loops over it, `object` when it reads fields of it, `value` otherwise |
+| `example` | Data of the right shape, with empty strings where values go and one item in each array |
+
+Names the template makes itself, such as a loop variable, a `{% set %}` or a macro's arguments, are not data and are left out. A filter that names a field, such as `items | sum(attribute="price")` or `selectattr("paid")`, adds it to the items. A path built at render time, such as `row[column]`, is listed only as far as it is written. A template's syntax errors answer `422`.
+
+For a PDF form, the variables are its fields' names, read as paths (`items.0.qty` is `items[].qty`), and the tags in the fields' values. Tags in annotations are not listed.
+
+## Preview a page
+
+`POST /v1/templates/{id}/preview` renders the template with sample data and draws one page as a PNG. It takes JSON or a form:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `data`, `ctx` | `{}` | The sample data |
+| `page` | `1` | The page to draw |
+| `width` | `800` | The image's width in pixels, from 16 to 2000. The height follows the page |
+| `dpi` | None | Draw at this resolution instead, from 18 to 300. Send `width` or `dpi`, not both |
+| `htmlEngine` | `fulgur` | For HTML templates, as on a render |
+
+```bash test
+curl -F template=@invoice.html http://localhost:9027/v1/templates -o stored.json
+ID=$(jq -r .id stored.json)
+curl -s -D headers.txt -H "Content-Type: application/json" -d '{"width": 400}' \
+  "http://localhost:9027/v1/templates/$ID/preview" -o page.png
+[ "$(head -c 4 page.png | tail -c 3)" = PNG ]
+grep -qi "^x-page-count: 1" headers.txt
+curl -X DELETE "http://localhost:9027/v1/templates/$ID"
+```
+
+The answer is `image/png`, with the rendered document's page count in `X-Page-Count`. Office templates are converted with LibreOffice, HTML with its HTML engine, and a PDF form is filled when `data` is not empty; poppler's `pdftoppm` draws the page.
+
+| Status | When |
+|---|---|
+| `400` | The page is past the end, or a size is out of range. An image can never pass 4000 pixels on a side, so a large page at a high `dpi` is refused |
+| `422` | The template failed to render with this data |
+| `503 engine_unavailable` | `pdftoppm` is not installed, or LibreOffice is needed and absent. Without `pdftoppm` the answer comes before anything is rendered |
+
+The image has `pdftoppm`. Elsewhere, install poppler or set `RUSTICDOC_PDFTOPPM_BIN`.
 
 ## Scope
 
@@ -144,8 +288,8 @@ So your application has to hold the mapping from a name such as `invoice` to the
 
 | Value | Behaviour |
 |---|---|
-| `caller` (default) | Each credential sees only its own templates. Another caller's id answers `404`, not `403`. An API key's scope follows the key, so replacing a key leaves its templates behind |
-| `shared` | Every credential reads and deletes the same templates |
+| `caller` (default) | Each credential sees only its own templates and aliases. Another caller's id answers `404`, not `403`. An API key's scope follows the key, so replacing a key leaves its templates behind, unless it is a [tenant key](/docs/guides/authentication/#tenant-keys) |
+| `shared` | Every credential reads and deletes the same templates and aliases. Background jobs stay each caller's own |
 
 An admin key is a credential with its own scope, and it cannot see other callers' templates either. With no credentials configured there is one scope, shared by everyone who can reach the service. See [authentication](/docs/guides/authentication/).
 
@@ -154,7 +298,8 @@ An admin key is a credential with its own scope, and it cannot see other callers
 | Setting | Default | What happens past it |
 |---|---|---|
 | `RUSTICDOC_MAX_TEMPLATE_BYTES` | `50MB` | `413 template_too_large` |
-| `RUSTICDOC_MAX_TEMPLATES` | `10000`, per scope | `403 quota_exceeded` |
+| `RUSTICDOC_MAX_TEMPLATES` | `10000`, per scope | `403 quota_exceeded`. It also caps aliases, counted apart from templates |
+| Versions of one alias | `1000` | `403 quota_exceeded`. Delete the alias to start again |
 | `RUSTICDOC_MAX_TEMPLATE_STORAGE` | `5GB`, per scope | `403 quota_exceeded` |
 | `RUSTICDOC_BODY_LIMIT` | `64MB` | `400 invalid_request`, because the whole form did not fit |
 
