@@ -44,8 +44,43 @@ pub async fn run(
     env: &[(&str, String)],
     timeout: Duration,
 ) -> Result<()> {
+    run_limited(engine, bin, args, cwd, env, timeout, None).await
+}
+
+/// [`run`], with the child's address space capped at `memory` bytes on Linux,
+/// for engines that parse a client's file and could be made to allocate
+/// without bound. macOS does not enforce the cap.
+pub async fn run_limited(
+    engine: &'static str,
+    bin: &Path,
+    args: &[String],
+    cwd: &Path,
+    env: &[(&str, String)],
+    timeout: Duration,
+    memory: Option<u64>,
+) -> Result<()> {
     let mut cmd = Command::new(bin);
     clean_env(&mut cmd);
+    #[cfg(target_os = "linux")]
+    if let Some(memory) = memory {
+        // SAFETY: the closure only calls setrlimit, which is async-signal-safe,
+        // and allocates nothing.
+        unsafe {
+            cmd.pre_exec(move || {
+                let limit = libc::rlimit {
+                    rlim_cur: memory as _,
+                    rlim_max: memory as _,
+                };
+                if libc::setrlimit(libc::RLIMIT_AS, &limit) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = memory;
     cmd.args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())

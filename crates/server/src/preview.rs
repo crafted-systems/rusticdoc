@@ -16,6 +16,10 @@ use crate::error::{ApiError, ApiResult};
 
 /// Most pixels an image may have on either side.
 pub const MAX_SIDE: u32 = 4000;
+
+/// Address space pdftoppm may use: a full 4000-pixel square image is 48 MB, and
+/// the rest is room for fonts and a page's content.
+const PDFTOPPM_MEMORY: u64 = 1024 * 1024 * 1024;
 /// The widths a request may ask for.
 pub const MIN_WIDTH: u32 = 16;
 pub const MAX_WIDTH: u32 = 2000;
@@ -84,13 +88,37 @@ fn measure(pdf: &[u8], page: u32) -> rusticdoc_core::Result<(u32, Option<(f32, f
     let Some(&id) = pages.get(&page) else {
         return Ok((count, None));
     };
-    let media = inherited(&doc, id, b"MediaBox")
-        .and_then(|o| o.as_array().ok().cloned())
-        .and_then(|a| {
-            let n: Vec<f32> = a.iter().filter_map(|o| o.as_float().ok()).collect();
-            (n.len() == 4).then(|| ((n[2] - n[0]).abs(), (n[3] - n[1]).abs()))
-        })
-        .unwrap_or((612.0, 792.0));
+    // The crop box is what pdftoppm draws. A box that cannot be read is an
+    // error rather than a guess: the size decides how many pixels are asked for.
+    let read_box = |key: &[u8]| -> Option<(f32, f32)> {
+        let array = inherited(&doc, id, key)?.as_array().ok()?.clone();
+        let n: Vec<f32> = array
+            .iter()
+            .map(|o| match o {
+                Object::Reference(r) => doc.get_object(*r).ok().and_then(|o| o.as_float().ok()),
+                other => other.as_float().ok(),
+            })
+            .collect::<Option<Vec<f32>>>()?;
+        (n.len() == 4 && n.iter().all(|v| v.is_finite()))
+            .then(|| ((n[2] - n[0]).abs(), (n[3] - n[1]).abs()))
+    };
+    let unit = inherited(&doc, id, b"UserUnit")
+        .and_then(|o| o.as_float().ok())
+        .filter(|u| u.is_finite() && *u > 0.0)
+        .unwrap_or(1.0);
+    let Some((bw, bh)) = read_box(b"CropBox").or_else(|| read_box(b"MediaBox")) else {
+        return Err(Error::Engine {
+            engine: "preview",
+            message: format!("page {page} has no readable page box"),
+        });
+    };
+    let media = (bw * unit, bh * unit);
+    if media.0 < 1.0 || media.1 < 1.0 {
+        return Err(Error::Engine {
+            engine: "preview",
+            message: format!("page {page} has an empty page box"),
+        });
+    }
     let rotate = inherited(&doc, id, b"Rotate")
         .and_then(|o| o.as_i64().ok())
         .unwrap_or(0);
@@ -166,18 +194,27 @@ pub async fn draw(
         page.to_string(),
         "-singlefile".into(),
     ];
-    match size {
-        Size::Width(w) => args.extend([
-            "-scale-to-x".into(),
-            w.to_string(),
-            "-scale-to-y".into(),
-            "-1".into(),
-        ]),
-        Size::Dpi(d) => args.extend(["-r".into(), d.to_string()]),
-    }
+    // The image's size in pixels is given outright, whatever DPI was asked
+    // for, so pdftoppm never draws more than was measured and checked above,
+    // even if it reads the page box differently.
+    args.extend([
+        "-scale-to-x".into(),
+        (w.round() as u32).max(1).to_string(),
+        "-scale-to-y".into(),
+        (h.round() as u32).max(1).to_string(),
+    ]);
     args.extend(["in.pdf".into(), "out".into()]);
     let left = timeout.saturating_sub(started.elapsed());
-    rusticdoc_core::process::run("pdftoppm", bin, &args, dir.path(), &[], left).await?;
+    rusticdoc_core::process::run_limited(
+        "pdftoppm",
+        bin,
+        &args,
+        dir.path(),
+        &[],
+        left,
+        Some(PDFTOPPM_MEMORY),
+    )
+    .await?;
     let png = tokio::fs::read(dir.path().join("out.png"))
         .await
         .map_err(|e| {
