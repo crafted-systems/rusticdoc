@@ -145,6 +145,22 @@ The names also match in their own scripts, such as 宋体 and ＭＳ 明朝. Non
 
 To get the serif faces back, add `NotoSerifCJK-Regular.ttc` and `NotoSerifCJK-Bold.ttc` in any of the three ways above. They are under the SIL Open Font License, from the [Noto CJK releases](https://github.com/notofonts/noto-cjk/releases) or Debian's `fonts-noto-cjk`. Each is about 27 MB, under the 128 MB limit for one font. Nothing else needs to change: the serif names above ask for Noto Serif CJK first.
 
+## Find fonts a template needs
+
+[Validation](/docs/templates/validate/) lists the fonts a DOCX, XLSX, PPTX, ODT, ODS or ODP template names that the service can neither find nor substitute, in `missing_fonts`, with a warning for each:
+
+```bash
+curl -F template=@letter.docx http://localhost:9027/v1/templates/validate | jq .missing_fonts
+```
+
+```json
+["Aptos"]
+```
+
+A name counts as found when a loaded font has that family, or when the image maps it to a font with the same metrics, such as Calibri to Carlito. The mapping is the image's fontconfig file, so the report agrees with what a conversion does. Text in a missing font still renders, in a fallback font, so its line and page breaks can move. Upload the font or mount it to fix that.
+
+Validation reads the fonts the document's text, styles and theme name. A font used only in an embedded object or a chart is not checked.
+
 ## Check what a document used
 
 `x-fonts-used` on a PDF response lists the fonts named in that PDF.

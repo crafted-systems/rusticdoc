@@ -469,6 +469,11 @@ pub struct Validation {
     /// `part`, `place` and `snippet` where known.
     #[schema(value_type = Vec<Object>)]
     pub diagnostics: Vec<serde_json::Value>,
+    /// Fonts the template names that the service has neither loaded nor
+    /// mapped to a substitute with the same metrics. Text set in them renders
+    /// in a fallback font, which moves line and page breaks. Each also appears
+    /// in `diagnostics` as a warning.
+    pub missing_fonts: Vec<String>,
 }
 
 /// Checks a template against sample data without converting anything.
@@ -511,6 +516,25 @@ pub async fn validate(
             state.config.api_timeout,
         )
         .await?;
+    let mut diagnostics = diagnostics;
+    let wanted = rusticdoc_core::fonts::referenced(&template);
+    let missing_fonts = if wanted.is_empty() {
+        Vec::new()
+    } else {
+        let loaded = crate::routes::fonts::loaded(&state).await?;
+        rusticdoc_core::fonts::missing(&wanted, &loaded)
+    };
+    for family in &missing_fonts {
+        diagnostics.push(rusticdoc_template::Diagnostic {
+            severity: rusticdoc_template::Severity::Warning,
+            message: format!(
+                "the template uses the font '{family}', which the service does not have; \
+                 another font will stand in, which can move line and page breaks. \
+                 Upload it to /v1/fonts or mount it in the fonts directory"
+            ),
+            location: None,
+        });
+    }
     let error = diagnostics
         .iter()
         .find(|d| matches!(d.severity, rusticdoc_template::Severity::Error))
@@ -528,5 +552,6 @@ pub async fn validate(
             .iter()
             .map(|d| serde_json::to_value(d).unwrap_or_default())
             .collect(),
+        missing_fonts,
     }))
 }

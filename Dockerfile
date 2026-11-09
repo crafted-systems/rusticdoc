@@ -38,6 +38,8 @@ RUN mkdir -p crates/template/src crates/core/src crates/server/src crates/cli/sr
     && cargo build --release --locked -p rusticdoc \
     && rm -rf crates/*/src
 COPY crates ./crates
+# The missing-font report reads the image's font aliases at compile time.
+COPY deploy/fonts.conf deploy/fonts.conf
 # Touch so cargo sees the real sources as newer than the placeholders.
 RUN find crates -name '*.rs' -exec touch {} + \
     && cargo build --release --locked -p rusticdoc \

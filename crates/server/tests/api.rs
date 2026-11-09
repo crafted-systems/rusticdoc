@@ -1617,3 +1617,75 @@ async fn disabling_conversion_stops_fulgur_too() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+/// A DOCX whose document names `font`, the smallest Word will open.
+fn docx_in(font: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(&mut out);
+    let options: zip::write::SimpleFileOptions = Default::default();
+    for (name, body) in [
+        (
+            "[Content_Types].xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_string(),
+        ),
+        (
+            "_rels/.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#.to_string(),
+        ),
+        (
+            "word/document.xml",
+            format!(r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="{font}" w:hAnsi="{font}"/></w:rPr><w:t>Hello {{{{ name }}}}</w:t></w:r></w:p></w:body></w:document>"#),
+        ),
+    ] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(body.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+    out.into_inner()
+}
+
+#[tokio::test]
+async fn validation_reports_fonts_the_service_lacks() {
+    let template = docx_in("Nonexistent Grotesque 9");
+    let mut body = format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"template\"; filename=\"letter.docx\"\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&template);
+    body.extend_from_slice(
+        format!("\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"data\"\r\n\r\n{{\"name\":\"Ada\"}}\r\n--{BOUNDARY}--\r\n").as_bytes(),
+    );
+    let req = Request::post("/v1/templates/validate")
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let res = app(AppState::new(config())).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let report: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(
+        report["ok"], true,
+        "a missing font warns, it does not fail: {report}"
+    );
+    assert_eq!(
+        report["missing_fonts"],
+        serde_json::json!(["Nonexistent Grotesque 9"]),
+        "{report}"
+    );
+    let warning = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["severity"] == "warning")
+        .expect("a warning");
+    assert!(
+        warning["message"]
+            .as_str()
+            .unwrap()
+            .contains("Nonexistent Grotesque 9"),
+        "{warning}"
+    );
+}
