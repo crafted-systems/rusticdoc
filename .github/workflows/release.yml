@@ -8,12 +8,18 @@ name: release
 on:
   push:
     tags: ['v0.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing tag to publish, such as v0.1.0
+        required: true
 
 permissions:
   contents: read
 
 env:
   IMAGE: ghcr.io/vmosoti/rusticdoc
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -31,7 +37,13 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Check the tag
+        shell: bash
+        run: |
+          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "not a version tag such as v0.1.0: $TAG"; exit 1; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.TAG }}
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -49,7 +61,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=release-${{ matrix.arch }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.version=${{ env.TAG }}
             org.opencontainers.image.licenses=Apache-2.0
       - name: smoke
         run: |
@@ -60,9 +72,12 @@ jobs:
           head -c 4 out.pdf | grep -q PDF
           docker rm -f rd
       - name: keep the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          # Artifact file names cannot hold the colon in sha256:<hex>.
           mkdir -p digests
-          touch "digests/${{ steps.build.outputs.digest }}"
+          touch "digests/${DIGEST#sha256:}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: digest-${{ matrix.arch }}
@@ -91,7 +106,7 @@ jobs:
       - name: join the architectures under the version
         working-directory: digests
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           docker buildx imagetools create -t "${IMAGE}:${version}" \
             $(printf "${IMAGE}@sha256:%s " $(ls | sed 's/^sha256://'))
           docker buildx imagetools inspect "${IMAGE}:${version}"
