@@ -2,16 +2,16 @@
 
 The design lives in [rusticdoc: a document engine in Rust](https://claude.ai/artifact/4ZBnc3L7jTH1ov5TKH8qs3). This is its delivery plan and where each part stands.
 
-All six phases are built. Each phase has a gate. Phase 0's is met, phase 4's is met on a Mac, phases 1 and 3 are met in part, and phase 2's has not been run.
+All six phases are built. Each phase has a gate. Phases 0 and 4 have met theirs, phases 1 and 3 have met theirs in part, and phase 2's has not been run.
 
 | Phase | Scope | State | Gate | Gate met? |
 |---|---|---|---|---|
-| 0 | Service, CLI, webhooks, OpenAPI, metrics, auth, image, LibreOffice conversion | Built | The unit and integration tests pass on every commit, with the linter and a dependency audit | **Yes** |
+| 0 | Service, CLI, webhooks, background jobs, OpenAPI, metrics, auth, image, LibreOffice conversion | Built | The unit and integration tests pass on every commit, with the linter and a dependency audit | Yes |
 | 1 | DOCX and ODT templates: tags across split runs, loops on rows and paragraphs, filters, translations, validation | Built | A corpus renders byte-identical to its golden PDFs on amd64 and arm64 | Partly. `make golden` renders 14 outputs on both: the Office and text outputs and the PDF form the service fills itself are byte-identical. LibreOffice's PDFs are not, since its layout moves text by hundredths of a point between processors: seven match as page images, one in layout within 0.25 pt |
-| 2 | XLSX, PPTX, ODS, ODP templates and batch rendering to ZIP | Built, except repeating a whole sheet | Third-party XLSX and PPTX examples reproduce with this syntax | Not run |
-| 3 | PDF templates: form fields, tags in annotations, overlay on a base PDF | Built, with Latin text only where the service draws it | Filled forms show their values in Chrome, Acrobat Reader and Preview | Chrome and Preview yes. Acrobat Reader not run |
-| 4 | Images, barcodes, native charts, data-bound colours, signature images, an HTML subset | Built, except charts in ODF | Word and LibreOffice open every output without a repair prompt | Yes on a Mac, for the Office-made corpus: Word, Excel and PowerPoint 16.114 and LibreOffice open it with no repair prompt. Barcodes decode with ZXing and ZBar, and have not been scanned with a reader |
-| 5 | Fewer external engines | Built in part: `lopdf` is the first engine for most PDF operations. The in-process DOCX path is declined | Per engine, the PDF tests pass with it first | `lopdf` yes; see below for DOCX |
+| 2 | XLSX, PPTX, ODS, ODP templates, whole-sheet loops, nested row loops and batch rendering to ZIP | Built | Third-party XLSX and PPTX examples reproduce with this syntax | Not run |
+| 3 | PDF templates: form fields, tags in annotations, text in any script, overlay and underlay on a base PDF | Built | Filled forms show their values in Chrome, Acrobat Reader and Preview | Preview yes, for Latin and other scripts. Chrome yes for Latin text, not checked for other scripts. Acrobat Reader not run |
+| 4 | Images, barcodes, native charts in every format, colours, signature images, an HTML subset, removing elements on a condition | Built | Word and LibreOffice open every output without a repair prompt | Yes on a Mac for the Office-made corpus, and for removed elements in Word, Excel and PowerPoint. Barcodes decode with ZXing and ZBar, and have not been scanned with a reader |
+| 5 | Fewer external engines | Built in part. `lopdf` is the first engine for most PDF operations, and Fulgur lays out HTML without a browser. The in-process DOCX path is declined | Per engine, the PDF tests pass with it first | `lopdf` yes. DOCX declined |
 
 ## In-process DOCX to PDF: declined
 
@@ -39,7 +39,9 @@ An OWASP review found 20 issues, 6 of them High, and all are fixed. Automated re
 | Stylesheet link in a converted HTML file | Fetched by LibreOffice | No request leaves the container |
 | Service secrets in `/proc/1/environ` | Readable by LibreOffice | Permission denied |
 
-`make outbound` and `make isolation` keep the last two true, and `make disk` the row above them. Still open:
+`make outbound` and `make isolation` keep the last two true, and `make disk` the row above them.
+
+Since then, rendering takes macros, OLE objects, external links and private hyperlinks out of every Office output, failing closed on anything it cannot read with certainty, and automated review of each new feature (the sanitiser, sheet copies, previews, underlays and signing) found issues that are fixed with a test for each. Still open:
 
 - Many clients together can fill the connection and memory budgets for as long as the timeouts allow. Rate limiting at a proxy is the answer, and the README says so.
 - A compromised LibreOffice runs as the service's user. It cannot read the service's secrets or memory, but it can see other requests' temporary files.
@@ -48,16 +50,17 @@ An OWASP review found 20 issues, 6 of them High, and all are fixed. Automated re
 
 ## Cryptographic signatures
 
-`/v1/pdf/sign` with `signature=certificate`, the `sign` step on `/v1/render` and `rusticdoc pdf sign --key --cert` sign with one key per deployment, from `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`. The signature is an incremental update with a `/ETSI.CAdES.detached` CMS signature: PAdES baseline B-B style, with RSA (PKCS#1 v1.5, SHA-256) or ECDSA P-256 keys.
+`/v1/pdf/sign` with `signature=certificate`, the `sign` step on `/v1/render` and `rusticdoc pdf sign` sign from PAdES B-B to B-LTA (`level`): an incremental update with a `/ETSI.CAdES.detached` CMS signature, RSA (PKCS#1 v1.5, SHA-256) or ECDSA P-256, then for B-T an RFC 3161 timestamp from an authority pinned in `RUSTICDOC_SIGNING_TSA_CERT`, for B-LT a DSS with the chains and OCSP responses or CRLs, each verified, and for B-LTA a document timestamp. `certify` writes a DocMDP certification, the `sign` step can be visible, `RUSTICDOC_SIGNING_KEYS` names keys each with its allowed callers, and a key can live in a PKCS#11 token.
 
 | Check | Result |
 |---|---|
-| poppler `pdfsig` 26.09 | Signature valid, total document signed; an earlier signature in a twice-signed file valid for its revision; a changed byte refused. `make sign-check` repeats it |
-| pyHanko 0.38.1 | `VALID`, the certificate trusted when given as a root, and `VALID` in its AdES report |
-| Unit tests | The byte ranges hashed again, compared with the message-digest attribute, and the CMS signature verified with the certificate's key, without the signer's code |
+| poppler `pdfsig` 26.09 | Valid at every level; the document timestamp covers the whole file. `make sign-check` repeats it |
+| pyHanko 0.38.1, offline, revocation hard-fail | B-T, B-LT, B-LTA and a certified file at B-LTA, read from the file's own DSS |
+| SoftHSM2 token | RSA at every level and ECDSA P-256 at B-LTA; a wrong certificate or PIN is refused |
+| Unit tests | Signatures verified without the signer's code; forged OCSP answers, impostor issuers, untrusted or stale tokens and expired revocation data refused |
 | Adobe Acrobat | Not run |
 
-Not built: RFC 3161 timestamps (B-T), revocation data and document timestamps (B-LT, B-LTA), keys per caller or in an HSM, certification (DocMDP) signatures, and a visible `sign` step on `/v1/render`.
+Not built: renewing archive timestamps, keys in a cloud KMS, encrypted key files.
 
 ## Office, viewers, barcodes and architectures
 
@@ -72,27 +75,19 @@ Checked on 7 November 2026 on a Mac with macOS 27.
 
 ## Next
 
-1. Open the output in Office for Windows, filled forms and signed files in Adobe Acrobat, and scan the barcodes with a hardware or phone reader.
-2. Reproduce third-party XLSX and PPTX examples.
-3. Repeat whole sheets in XLSX and ODS, and add charts to ODF.
-4. Embed fonts for text drawn into PDFs, so Arabic and CJK values show.
-5. Report fonts a template uses that the service lacks, such as Word's default Aptos, and strip macros and OLE objects from templates.
-6. Add an RFC 3161 timestamp to signatures so they reach PAdES B-T.
+1. Open the output in Office for Windows, filled forms and signed files in Adobe Acrobat, filled forms in other scripts in Chrome, and scan the barcodes with a hardware or phone reader.
+2. Reproduce third-party XLSX and PPTX examples, which is phase 2's gate.
+3. Run a load test, and give sizing figures measured under load.
+4. Publish the image and make the generated SDKs compile.
+5. Renew archive timestamps on B-LTA signatures, and support keys in a cloud KMS.
 
-## API gaps worth closing
+## API gaps, closed
 
-The store made these possible, and none is built:
-
-1. **Template versions or aliases**, so an application asks for `invoice` rather than an id that changes with every edit.
-2. **`GET /v1/jobs/{id}`, with results kept for a time.** Webhooks need a receiver the caller can host; polling does not.
-3. **`GET /v1/templates/{id}/variables`**, listing the tags a template uses, so an application can build or check its data.
-4. **A JSON request body for `POST /v1/render`**, since a render by id has no files to send.
-5. **Admin rights for basic auth and OpenID Connect users**, and tenants that survive replacing a key.
-6. **`POST /v1/templates/{id}/preview`**, rendering sample data to an image.
+The store made these possible, and all are built: template aliases with versions, `GET /v1/jobs/{id}` with results kept for `RUSTICDOC_JOB_TTL`, `GET /v1/templates/{id}/variables`, a JSON body for `POST /v1/render`, admin rights for basic-auth and OpenID Connect users, tenants whose keys can be replaced, and `POST /v1/templates/{id}/preview`.
 
 ## Conventions
 
-- Every request is one multipart POST; `steps` lists the pipeline in order.
+- Every request is one POST, multipart or, for a stored template, JSON; `steps` lists the pipeline in order. `Prefer: respond-async` runs it as a background job.
 - Engines sit behind the core's `Engines` and are found at start; an absent engine fails its step with 503, never the service.
 - Nothing is stored until `RUSTICDOC_STORE` names a place. Everything written there is immutable, and replicas share nothing else.
 - No attribution trailers in commits.
