@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "rusticdoc",
-    "description": "Fills Office and PDF templates from JSON, converts documents with LibreOffice, and runs PDF operations. One multipart request does the whole job; webhooks deliver results asynchronously.",
+    "description": "Fills Office and PDF templates from JSON, converts documents with LibreOffice, and runs PDF operations. One multipart request, or a JSON one for a stored template, does the whole job; webhooks or background jobs deliver results asynchronously.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -67,6 +67,338 @@
             }
           }
         }
+      }
+    },
+    "/v1/aliases": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Lists this caller's aliases by name, each with the template it names now.",
+        "operationId": "listAliases",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many to return, up to 200. Default 50.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`nextCursor` from the page before.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of aliases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasList"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/aliases/{name}": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "An alias, the template it names now, and its history: every version since\nit was last deleted, oldest first.",
+        "operationId": "getAlias",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The alias",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The alias and its versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasHistorySchema"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Points an alias at a template. A new alias starts at version 1; pointing an\nexisting one elsewhere adds a version, and the earlier ones stay. Every\nreplica sees the change at once.",
+        "operationId": "setAlias",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The alias, such as `invoice`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasSet"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A new version of an alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSchema"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSchema"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a usable name, or no template named",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Too many aliases, or versions of this one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Deletes an alias and its history. The templates it named stay. Setting it\nagain starts at version 1.",
+        "operationId": "deleteAlias",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The alias",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "This caller has no such alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
       }
     },
     "/v1/convert": {
@@ -172,7 +504,7 @@
         "tags": [
           "fonts"
         ],
-        "summary": "Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,\nor one such file. Takes an admin key. They are in use on this replica when this\nreturns, and on the others within `syncIntervalSeconds`.",
+        "summary": "Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,\nor one such file. Takes an admin. They are in use on this replica when this\nreturns, and on the others within `syncIntervalSeconds`.",
         "operationId": "uploadFonts",
         "requestBody": {
           "content": {
@@ -206,7 +538,7 @@
             }
           },
           "403": {
-            "description": "Needs an admin key, or the store is full",
+            "description": "Needs an admin, or the store is full",
             "content": {
               "application/json": {
                 "schema": {
@@ -242,6 +574,9 @@
           },
           {
             "bearer": []
+          },
+          {
+            "basic": []
           }
         ]
       }
@@ -303,7 +638,7 @@
         "tags": [
           "fonts"
         ],
-        "summary": "Deletes a stored font. Takes an admin key. It leaves this replica when this\nreturns, and the others within the sync interval. Documents that name it fall\nback to another font.",
+        "summary": "Deletes a stored font. Takes an admin. It leaves this replica when this\nreturns, and the others within the sync interval. Documents that name it fall\nback to another font.",
         "operationId": "deleteFont",
         "parameters": [
           {
@@ -321,7 +656,7 @@
             "description": "Deleted"
           },
           "403": {
-            "description": "Needs an admin key",
+            "description": "Needs an admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -367,6 +702,165 @@
           },
           {
             "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Where a background job is. Ask again until `status` is `done` or `failed`;\n`Retry-After` says how soon. A job and its result are kept for\n`RUSTICDOC_JOB_TTL` after it ends, then removed.",
+        "operationId": "getJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id, from the 202's body or Location",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobSchema"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such job, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}/result": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Downloads what a finished job made, as the request would have answered it.",
+        "operationId": "getJobResult",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such job, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The job has not finished, or it failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
           }
         ]
       }
@@ -1244,7 +1738,7 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Signs a PDF. With `signature=certificate`, a cryptographic signature with\nthe key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`: an\nincremental update with a PAdES B-B style `/ETSI.CAdES.detached`\nsignature (no timestamp), invisible, or shown with the one image sent.\nWithout a configured key that answers 503. By default\n(`signature=image`) the images are drawn at exact coordinates, which is\nnot a cryptographic signature.",
+        "summary": "Signs a PDF. With `signature=certificate`, a cryptographic signature with\nthe key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or the\nnamed key `signingKey` chooses: an incremental update with a PAdES\n`/ETSI.CAdES.detached` signature at the `level` asked for (B-B to B-LTA),\napproving or, with `certify`, certifying. It is invisible, shown with the\none image sent, or, with a position and no image, shown as text naming\nthe signer, the date and the reason. Without a configured key that answers\n503; a timestamp authority or revocation source that fails answers 502. By\ndefault (`signature=image`) the images are drawn at exact coordinates,\nwhich is not a cryptographic signature.",
         "operationId": "sign",
         "requestBody": {
           "content": {
@@ -1280,8 +1774,28 @@
               }
             }
           },
+          "403": {
+            "description": "The caller may not use the signing key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The timestamp authority or a revocation source failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "signature=certificate and no signing key is configured, or the certificate has expired",
+            "description": "signature=certificate and no signing key is configured, the level needs a timestamp authority that is not configured, or the certificate has expired",
             "content": {
               "application/json": {
                 "schema": {
@@ -1466,7 +1980,7 @@
           "render"
         ],
         "summary": "Fills a template and runs the steps.",
-        "description": "Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its\nown key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself\nwhen the service requires no credentials; `rusticdoc webhook-secret` prints it.",
+        "description": "Send a multipart form, or JSON with a `templateId` (see `RenderJson`).\n\nAdd `Prefer: respond-async` to get 202 at once, with the job in the body and\nits address in `Location`, and fetch the result from `/v1/jobs/{id}/result`\nonce it is done. This needs `RUSTICDOC_STORE`.\n\nAdd `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its\nown key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself\nwhen the service requires no credentials; `rusticdoc webhook-secret` prints it.",
         "operationId": "render",
         "parameters": [
           {
@@ -1492,10 +2006,27 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "Prefer",
+            "in": "header",
+            "description": "`respond-async` to run in the background and answer 202",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "requestBody": {
           "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderJson"
+              }
+            },
             "multipart/form-data": {
               "schema": {
                 "$ref": "#/components/schemas/RenderForm"
@@ -1511,6 +2042,16 @@
               "application/octet-stream": {
                 "schema": {
                   "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted as a background job (`Prefer: respond-async`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobSchema"
                 }
               }
             }
@@ -1602,10 +2143,27 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "Prefer",
+            "in": "header",
+            "description": "`respond-async` to run in the background and answer 202",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "requestBody": {
           "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderJson"
+              }
+            },
             "multipart/form-data": {
               "schema": {
                 "$ref": "#/components/schemas/RenderForm"
@@ -1621,6 +2179,16 @@
               "application/zip": {
                 "schema": {
                   "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted as a background job (`Prefer: respond-async`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobSchema"
                 }
               }
             }
@@ -1850,6 +2418,11 @@
         "operationId": "validate",
         "requestBody": {
           "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderJson"
+              }
+            },
             "multipart/form-data": {
               "schema": {
                 "$ref": "#/components/schemas/RenderForm"
@@ -1904,7 +2477,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The template's id",
+            "description": "The template's id, or an alias as `name` or `name@version`",
             "required": true,
             "schema": {
               "type": "string"
@@ -2041,7 +2614,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "The template's id",
+            "description": "The template's id, or an alias as `name` or `name@version`",
             "required": true,
             "schema": {
               "type": "string"
@@ -2061,6 +2634,207 @@
           },
           "404": {
             "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/{id}/preview": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Renders a stored template with sample data and draws one page as a PNG,\nfor checking a template without opening the document. Office templates\nconvert with LibreOffice, HTML with its HTML engine, and PDF forms are filled;\npoppler's `pdftoppm` draws the page. The page count is in `X-Page-Count`.",
+        "operationId": "previewTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The template's id, or an alias as `name` or `name@version`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewForm"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The page as a PNG",
+            "headers": {
+              "X-Page-Count": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "How many pages the rendered document has"
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong, or the page does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template failed to render",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "pdftoppm or LibreOffice is unavailable, or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/{id}/variables": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Lists the data a template reads: each path, which paths are arrays it loops\nover, and the fields it reads from their items, with a skeleton of data.\nRead from the template's tags, so a path built at render time, such as\n`row[column]`, is listed only as far as it is written.",
+        "operationId": "templateVariables",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The template's id, or an alias as `name` or `name@version`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the template reads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVariables"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This caller has no such template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template has syntax errors",
             "content": {
               "application/json": {
                 "schema": {
@@ -2138,6 +2912,124 @@
   },
   "components": {
     "schemas": {
+      "AliasHistorySchema": {
+        "type": "object",
+        "description": "An alias, the template it names now, and every version, oldest first.",
+        "required": [
+          "name",
+          "templateId",
+          "version",
+          "setAt",
+          "versions"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "setAt": {
+            "type": "string"
+          },
+          "templateId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AliasVersionSchema"
+            }
+          }
+        }
+      },
+      "AliasList": {
+        "type": "object",
+        "description": "One page of aliases.",
+        "required": [
+          "aliases"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AliasSchema"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page. Absent on the last."
+          }
+        }
+      },
+      "AliasSchema": {
+        "type": "object",
+        "description": "An alias and the template it names now.",
+        "required": [
+          "name",
+          "templateId",
+          "version",
+          "setAt"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "invoice"
+          },
+          "setAt": {
+            "type": "string",
+            "description": "RFC 3339: when it was pointed at this template."
+          },
+          "templateId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "description": "1 for the first template it named, counted since it was last deleted.\nRender an earlier one as `name@version`.",
+            "minimum": 0
+          }
+        }
+      },
+      "AliasSet": {
+        "type": "object",
+        "description": "What `PUT /v1/aliases/{name}` takes, as JSON or a multipart form.",
+        "required": [
+          "templateId"
+        ],
+        "properties": {
+          "templateId": {
+            "type": "string",
+            "description": "The template the alias names from now on: an id, or another alias.",
+            "example": "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"
+          }
+        }
+      },
+      "AliasVersionSchema": {
+        "type": "object",
+        "description": "One version of an alias.",
+        "required": [
+          "version",
+          "templateId",
+          "setAt"
+        ],
+        "properties": {
+          "setAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "templateId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "BinaryFile": {
         "type": "string",
         "format": "binary",
@@ -2571,6 +3463,106 @@
           }
         }
       },
+      "JobResultSchema": {
+        "type": "object",
+        "description": "The file a finished job made.",
+        "required": [
+          "name",
+          "contentType",
+          "size",
+          "sha256"
+        ],
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "example": "application/pdf"
+          },
+          "name": {
+            "type": "string",
+            "example": "invoice.pdf"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Hex SHA-256 of the content."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "JobSchema": {
+        "type": "object",
+        "description": "A background job.",
+        "required": [
+          "id",
+          "status",
+          "createdAt",
+          "runsUntil",
+          "requestId"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "description": "RFC 3339, to the millisecond."
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Present once it failed: what the request would have answered, as\n`error`, `message` and `status`."
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the job and its result are removed."
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "example": "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "The `X-Request-Id` of the request that started it."
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JobResultSchema",
+                "description": "Present once it is done; download it from `/v1/jobs/{id}/result`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runsUntil": {
+            "type": "string",
+            "description": "A job that has not ended by then is reported as failed with\n`job_lost`: the container running it stopped."
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "`queued`, `running`, `done` or `failed`.",
+            "example": "done"
+          }
+        }
+      },
       "MergeForm": {
         "type": "object",
         "required": [
@@ -2659,6 +3651,52 @@
           }
         }
       },
+      "PreviewForm": {
+        "type": "object",
+        "description": "The fields `POST /v1/templates/{id}/preview` accepts, as JSON or as a\nmultipart form.",
+        "properties": {
+          "ctx": {
+            "description": "Visible as `ctx`."
+          },
+          "data": {
+            "description": "Sample data the template sees as its root."
+          },
+          "dpi": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Draw at this resolution, from 18 to 300, as large as the page is. An\nimage may not pass 4000 pixels on a side.",
+            "minimum": 0
+          },
+          "htmlEngine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What turns HTML into PDF: `fulgur` (default) or `libreoffice`."
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The page to draw, from 1. Default 1.",
+            "minimum": 0
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The image's width in pixels, from 16 to 2000; the height follows the\npage. Default 800. Send this or `dpi`.",
+            "minimum": 0
+          }
+        }
+      },
       "Reloaded": {
         "type": "object",
         "required": [
@@ -2686,6 +3724,7 @@
         "description": "The multipart form `/v1/render` accepts. Documented here; parsed by hand.",
         "required": [
           "template",
+          "underlay",
           "files"
         ],
         "properties": {
@@ -2697,6 +3736,15 @@
             },
             "description": "Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names\nby file name, as in `<img src=\"logo.png\">`. Every stylesheet applies to\nthe whole page. Nothing is fetched from anywhere else."
           },
+          "certify": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For `sign`: certify with DocMDP permission `1`, `2` or `3` instead of\napproving.",
+            "minimum": 0
+          },
           "contactInfo": {
             "type": [
               "string",
@@ -2706,6 +3754,13 @@
           },
           "ctx": {
             "description": "JSON object visible as `ctx`, sent as text or as a file."
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The currency `currency` uses when given none, such as `EUR`. Wins over\nthe template's."
           },
           "data": {
             "description": "JSON object the template sees as its root, sent as text or as a file."
@@ -2725,6 +3780,29 @@
             ],
             "description": "What turns HTML into PDF: `fulgur` (default), a layout engine with\nno browser and no network, or `libreoffice`.",
             "example": "fulgur"
+          },
+          "keep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What an Office template's result may keep of what rendering takes\nout, comma-separated: `macros`, `objects` (OLE objects and ActiveX\ncontrols), `externalLinks`, `privateLinks` (hyperlinks to private\naddresses), or `all`. Default: none of them.",
+            "example": "privateLinks"
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins\nover the template's `lang`: it picks translations for `t`, and when CLDR\nhas data for it, how `number`, `currency` and `date` write numbers,\nmoney and month names.",
+            "example": "fr-CA"
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `sign`: `b-b`, `b-t`, `b-lt` or `b-lta`, as on `/v1/pdf/sign`."
           },
           "location": {
             "type": [
@@ -2749,6 +3827,15 @@
               "null"
             ]
           },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For a visible `sign`: the 1-based page. Default 1.",
+            "minimum": 0
+          },
           "pdfa": {
             "type": [
               "string",
@@ -2763,6 +3850,11 @@
             ],
             "description": "For `sign`: why the document was signed."
           },
+          "signatureImage": {
+            "type": "string",
+            "format": "binary",
+            "description": "For `sign`: a PNG or JPEG to show the signature with, at `page`, `x`,\n`y` and `width`. With `x` and `y` and no image, the signature is shown\nas text: the signer, the date and the reason."
+          },
           "signerName": {
             "type": [
               "string",
@@ -2770,12 +3862,19 @@
             ],
             "description": "For `sign`: the signer's name as shown."
           },
+          "signingKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `sign`: a named key instead of the default one."
+          },
           "steps": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`, `sign`. `sign` signs cryptographically with the\nservice's key; it must be last and cannot be combined with `encrypt`.",
+            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the\nservice's key; it must be last and cannot be combined with `encrypt`.",
             "example": "convert,pdfa,encrypt"
           },
           "template": {
@@ -2788,7 +3887,15 @@
               "string",
               "null"
             ],
-            "description": "The id of a stored template, from `POST /v1/templates`. Send this or\n`template`. Files in the form are then only further inputs, for `merge`."
+            "description": "The id of a stored template, from `POST /v1/templates`, or an alias as\n`name` or `name@version`. Send this or `template`. Files in the form are\nthen only further inputs, for `merge`."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The time zone `date` shows moments in: an offset such as `+02:00`, or an\nIANA zone such as `Europe/Paris`. Wins over the template's.",
+            "example": "Europe/Paris"
           },
           "to": {
             "type": [
@@ -2797,7 +3904,196 @@
             ],
             "description": "Output format for `convert`. Default `pdf`."
           },
+          "translations": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Translations for `t`, by language, each a flat object of keys and texts.\nThey win over the service's dictionaries and the template's own. At most\n10,000 entries, keys of 256 bytes and texts of 16 KiB."
+          },
+          "undefinedAsEmpty": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` prints a value missing from the data as nothing instead of\nfailing the render. Default `false`, so a misspelt name is an error."
+          },
+          "underlay": {
+            "type": "string",
+            "format": "binary",
+            "description": "For `underlay`: the PDF the document is laid over, page by page, such\nas letterhead or a pre-printed form."
+          },
           "user_password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "For a visible `sign`: width in points. Default the image's natural\nsize, or 200 for text."
+          },
+          "x": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "For a visible `sign`: points from the page's left edge."
+          },
+          "y": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "For a visible `sign`: points from the page's bottom edge."
+          }
+        }
+      },
+      "RenderJson": {
+        "type": "object",
+        "description": "The JSON body `/v1/render`, `/v1/render/batch` and\n`/v1/templates/validate` accept with `Content-Type: application/json`, for a\nstored template: there are no files to send. Every text field of the\nmultipart form is accepted under the same name, with the same meaning and\nlimits; objects such as `data` and `metadata` are sent as JSON rather than as\ntext, and `steps` may be a list. Fields that carry files cannot be sent.",
+        "required": [
+          "templateId"
+        ],
+        "properties": {
+          "batchName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `/v1/render/batch`: each file's name, as a template."
+          },
+          "ctx": {
+            "description": "The object visible as `ctx`."
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The currency `currency` uses when given none, such as `EUR`. Wins over\nthe template's."
+          },
+          "data": {
+            "description": "The object the template sees as its root."
+          },
+          "downloadFrom": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "URLs to fetch as further inputs, as on the multipart form."
+          },
+          "htmlEngine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`fulgur` (default) or `libreoffice`, for HTML."
+          },
+          "keep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What an Office template's result may keep of what rendering takes\nout, comma-separated: `macros`, `objects` (OLE objects and ActiveX\ncontrols), `externalLinks`, `privateLinks` (hyperlinks to private\naddresses), or `all`. Default: none of them.",
+            "example": "privateLinks"
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins\nover the template's `lang`: it picks translations for `t`, and when CLDR\nhas data for it, how `number`, `currency` and `date` write numbers,\nmoney and month names.",
+            "example": "fr-CA"
+          },
+          "metadata": {
+            "description": "Metadata fields for `metadata`."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name of the result, without extension."
+          },
+          "ownerPassword": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pdfa": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PDF/A level for `pdfa`."
+          },
+          "splitBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `/v1/render/batch`: the array to render once per element."
+          },
+          "steps": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The steps in order, as a list or as comma-separated text.",
+            "example": [
+              "convert",
+              "pdfa"
+            ]
+          },
+          "templateId": {
+            "type": "string",
+            "description": "The stored template: its id, or an alias as `name` or `name@version`.",
+            "example": "invoice"
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The time zone `date` shows moments in: an offset such as `+02:00`, or an\nIANA zone such as `Europe/Paris`. Wins over the template's.",
+            "example": "Europe/Paris"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output format for `convert`. Default `pdf`."
+          },
+          "translations": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Translations for `t`, by language, each a flat object of keys and texts.\nThey win over the service's dictionaries and the template's own. At most\n10,000 entries, keys of 256 bytes and texts of 16 KiB."
+          },
+          "undefinedAsEmpty": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` prints a value missing from the data as nothing."
+          },
+          "userPassword": {
             "type": [
               "string",
               "null"
@@ -2842,6 +4138,15 @@
           "files"
         ],
         "properties": {
+          "certify": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "With `signature=certificate`: certify rather than approve, with this\nDocMDP permission: `1` no changes, `2` form filling and signing, `3`\nalso annotations. Only the document's first signature can certify.",
+            "minimum": 0
+          },
           "contactInfo": {
             "type": [
               "string",
@@ -2856,6 +4161,14 @@
               "format": "binary"
             },
             "description": "The PDF first, then one PNG or JPEG per placement. With\n`signature=certificate`, at most one image: the visible appearance."
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `signature=certificate`: the PAdES level, `b-b`, `b-t` (with an\nRFC 3161 timestamp), `b-lt` (and validation data in a DSS) or `b-lta`\n(and a document timestamp). Default the service's\n`RUSTICDOC_SIGNING_LEVEL`, `b-b` unless set.",
+            "example": "b-lt"
           },
           "location": {
             "type": [
@@ -2891,7 +4204,7 @@
               "string",
               "null"
             ],
-            "description": "`image` (default) draws the images and is not a cryptographic\nsignature. `certificate` signs with the service's key (PAdES B-B,\n`/ETSI.CAdES.detached`), invisibly unless an image is sent.",
+            "description": "`image` (default) draws the images and is not a cryptographic\nsignature. `certificate` signs with the service's key (PAdES,\n`/ETSI.CAdES.detached`), invisibly unless an image or a position is\nsent.",
             "example": "certificate"
           },
           "signerName": {
@@ -2901,13 +4214,20 @@
             ],
             "description": "With `signature=certificate`: the signer's name as shown. Validators\nidentify the signer by the certificate, not by this."
           },
+          "signingKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `signature=certificate`: a named key from `RUSTICDOC_SIGNING_KEYS`\ninstead of the default one. A caller not on its allow list gets 403."
+          },
           "width": {
             "type": [
               "number",
               "null"
             ],
             "format": "float",
-            "description": "Width in points. Default the image's natural size."
+            "description": "Width in points. Default the image's natural size, or 200 for a text\nappearance."
           },
           "x": {
             "type": [
@@ -3058,7 +4378,7 @@
           },
           "id": {
             "type": "string",
-            "description": "Pass as `templateId` to `/v1/render`, `/v1/render/batch` or `/v1/templates/validate`.",
+            "description": "Pass as `templateId` to `/v1/render`, `/v1/render/batch` or `/v1/templates/validate`,\nor point an alias at it with `PUT /v1/aliases/{name}`.",
             "example": "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"
           },
           "name": {
@@ -3097,6 +4417,37 @@
           }
         }
       },
+      "TemplateVariables": {
+        "type": "object",
+        "description": "What a stored template reads from its data.",
+        "required": [
+          "templateId",
+          "format",
+          "variables",
+          "example"
+        ],
+        "properties": {
+          "example": {
+            "type": "object",
+            "description": "Data of the right shape, with empty strings where values go."
+          },
+          "format": {
+            "type": "string",
+            "example": "docx"
+          },
+          "templateId": {
+            "type": "string",
+            "description": "The template's id, also when it was asked for by alias."
+          },
+          "variables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variable"
+            },
+            "description": "Every path the template reads, parents first: `customer.name`, `items`\n(an array), `items[].price`. For a PDF form, its fields' names and the\ntags in their values; tags in annotations are not listed."
+          }
+        }
+      },
       "Validation": {
         "type": "object",
         "required": [
@@ -3104,7 +4455,8 @@
           "template_hash",
           "format",
           "engine",
-          "diagnostics"
+          "diagnostics",
+          "missing_fonts"
         ],
         "properties": {
           "diagnostics": {
@@ -3128,6 +4480,13 @@
           "format": {
             "type": "string"
           },
+          "missing_fonts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fonts the template names that the service has neither loaded nor\nmapped to a substitute with the same metrics. Text set in them renders\nin a fallback font, which moves line and page breaks. Each also appears\nin `diagnostics` as a warning."
+          },
           "ok": {
             "type": "boolean",
             "description": "True when the template renders with the sample data."
@@ -3137,6 +4496,33 @@
             "description": "SHA-256 of the template, the cache key."
           }
         }
+      },
+      "Variable": {
+        "type": "object",
+        "description": "One path the template reads.",
+        "required": [
+          "path",
+          "type"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Dotted, with `[]` for each item of an array: `items[].price`. `items[]`\nitself says what each item is.",
+            "example": "items[].price"
+          },
+          "type": {
+            "$ref": "#/components/schemas/VariableKind"
+          }
+        }
+      },
+      "VariableKind": {
+        "type": "string",
+        "description": "What a template does with a path.",
+        "enum": [
+          "value",
+          "object",
+          "array"
+        ]
       },
       "Version": {
         "type": "object",
@@ -3190,7 +4576,11 @@
     },
     {
       "name": "templates",
-      "description": "Store a template and render it by id from any replica"
+      "description": "Store a template, name it with an alias, and render it by id or alias from any replica"
+    },
+    {
+      "name": "jobs",
+      "description": "Requests run in the background with `Prefer: respond-async`, and their results"
     },
     {
       "name": "fonts",
