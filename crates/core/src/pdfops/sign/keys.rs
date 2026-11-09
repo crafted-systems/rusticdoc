@@ -447,7 +447,7 @@ fn pem_blocks(text: &str) -> std::result::Result<Vec<(String, Vec<u8>)>, String>
 
 /// The certificates of a PEM file, in order. `Certificate::load_pem_chain` is
 /// not used: it panics on an empty file and refuses text between blocks.
-fn parse_chain(pem: &[u8]) -> std::result::Result<Vec<Certificate>, String> {
+pub(super) fn parse_chain(pem: &[u8]) -> std::result::Result<Vec<Certificate>, String> {
     let text =
         std::str::from_utf8(pem).map_err(|_| "the signing certificate is not a PEM text file")?;
     pem_blocks(text)?

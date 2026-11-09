@@ -14,6 +14,7 @@
 #   tsa.pem        the timestamp authority, critical timeStamping EKU, with a
 #                  CRL distribution point only (so the CRL path is used too)
 #   ocsp.pem       the OCSP responder, OCSPSigning EKU and id-pkix-ocsp-nocheck
+# and rogue.pem, a self-signed impostor with the root's name, with rogue.crl.
 # The timestamp authority is `openssl ts -reply` behind a small Python HTTP
 # handler, which also serves the CRL and the root certificate; the OCSP
 # responder is `openssl ocsp -port`.
@@ -138,6 +139,13 @@ EOF
     cat "$PKI/ec-signer.pem" "$PKI/root.pem" > "$PKI/ec-signer-chain.pem"
     openssl ca -gencrl "${q[@]}" -out "$PKI/root.crl.pem" 2>/dev/null || return 1
     openssl crl -in "$PKI/root.crl.pem" -outform DER -out "$PKI/root.crl" || return 1
+    # An impostor: the root's name with another key, for forged OCSP answers
+    # and CRLs that a validator must refuse.
+    openssl req -x509 -newkey rsa:2048 -nodes -days 30 -keyout "$PKI/rogue.key" -out "$PKI/rogue.pem" \
+        -subj "/CN=rusticdoc test root CA/O=rusticdoc tests" "${q[@]}" -extensions root_ext 2>/dev/null || return 1
+    openssl ca -gencrl "${q[@]}" -keyfile "$PKI/rogue.key" -cert "$PKI/rogue.pem" \
+        -out "$PKI/rogue.crl.pem" 2>/dev/null || return 1
+    openssl crl -in "$PKI/rogue.crl.pem" -outform DER -out "$PKI/rogue.crl" || return 1
 }
 
 # The timestamp authority and CRL server, and the OCSP responder.

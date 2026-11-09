@@ -153,7 +153,7 @@ else
         fail "the test PKI or its servers did not start"
     else
         trap 'pki_stop; rm -rf "$WORK"' EXIT
-        export RUSTICDOC_SIGNING_TSA_URL=$PKI_TSA_URL
+        export RUSTICDOC_SIGNING_TSA_URL=$PKI_TSA_URL RUSTICDOC_SIGNING_TSA_CERT=$PKI/root.pem
         export RUSTICDOC_SIGNING_OUTBOUND_ALLOW_PRIVATE=true
         RSA=(--key "$PKI/signer.key" --cert "$PKI/signer-chain.pem")
         EC=(--key "$PKI/ec-signer.key" --cert "$PKI/ec-signer-chain.pem")

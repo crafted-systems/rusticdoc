@@ -324,11 +324,19 @@ impl Signing {
                 .map_err(|e| format!("signing key '{}': {e}", key.name))?;
             named.insert(key.name.clone(), (Arc::new(signer), key.allow.clone()));
         }
+        let tsa = match &settings.tsa {
+            Some(tsa) => {
+                let mut tsa = tsa.clone();
+                tsa.load_anchors()?;
+                Some(tsa)
+            }
+            None => None,
+        };
         Ok(Self {
             default,
             default_allow: settings.default_allow.clone(),
             named,
-            tsa: settings.tsa.clone(),
+            tsa,
             level: settings.level,
             limits: settings.revocation.clone(),
             outbound: None,
@@ -435,14 +443,23 @@ impl Signing {
         options.validate()?;
         let level = options.level.unwrap_or(self.level);
         if level >= Level::BT {
-            if self.tsa.is_none() {
-                return Err(Error::Status(
-                    503,
-                    format!(
-                        "level {} needs a timestamp authority; this service's operator sets RUSTICDOC_SIGNING_TSA_URL",
-                        level.name()
-                    ),
-                ));
+            match &self.tsa {
+                None => {
+                    return Err(Error::Status(
+                        503,
+                        format!(
+                            "level {} needs a timestamp authority; this service's operator sets RUSTICDOC_SIGNING_TSA_URL",
+                            level.name()
+                        ),
+                    ));
+                }
+                Some(tsa) if !tsa.has_anchors() => {
+                    return Err(Error::Status(
+                        503,
+                        "the timestamp authority has no trusted certificate to check its tokens against; this service's operator sets RUSTICDOC_SIGNING_TSA_CERT".into(),
+                    ));
+                }
+                Some(_) => {}
             }
             if self.outbound.is_none() {
                 return Err(Error::Status(
@@ -626,7 +643,14 @@ pub async fn sign_with(
                 .map(|t| t.certificates.clone())
                 .unwrap_or_default(),
         );
-        let validation = revocation::collect(&certs, outbound, network.limits, deadline).await?;
+        let validation = revocation::collect(
+            &certs,
+            outbound,
+            network.limits,
+            deadline,
+            SystemTime::now(),
+        )
+        .await?;
         let signature = hex::decode(&bytes[contents.clone()]).map_err(incremental::writing)?;
         let name = doc.name.clone();
         bytes = blocking(time_left(deadline, timeout)?, move |_| {

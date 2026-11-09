@@ -6,13 +6,17 @@
 //! `caIssuers` URL; then its revocation status is asked of the OCSP responders
 //! its AIA names, and failing that fetched from its CRL distribution points.
 //! An OCSP responder's own certificate is covered in turn unless it carries
-//! `id-pkix-ocsp-nocheck`. Every request goes through the [`Outbound`] and its
+//! `id-pkix-ocsp-nocheck`. Nothing is taken on trust: an OCSP response must
+//! answer for the exact certificate identifier asked about, be signed by the
+//! issuer or by a responder the issuer authorised for OCSP, and be current; a
+//! CRL must be signed with the issuer's key and be current. One that fails is
+//! set aside for the next source, OCSP then CRLs. Every request goes through the [`Outbound`] and its
 //! rules, with a time and size limit, and the whole collection keeps to a
 //! deadline and a number of requests. A certificate found revoked, or one with
 //! no reachable status, is an error: the file would not be B-LT.
 
 use std::collections::{HashSet, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use der::asn1::{Null, ObjectIdentifier, OctetString};
 use der::{Decode, DecodePem, Encode};
@@ -23,12 +27,12 @@ use x509_cert::ext::pkix::{AuthorityInfoAccessSyntax, CrlDistributionPoints};
 use x509_cert::spki::AlgorithmIdentifierOwned;
 use x509_ocsp::{
     BasicOcspResponse, CertId, CertStatus, OcspRequest, OcspResponse, OcspResponseStatus, Request,
-    TbsRequest, Version,
+    ResponderId, TbsRequest, Version,
 };
 
 use super::keys::{cert_der, timestamp};
 use super::net::{Outbound, OutboundRequest, upstream};
-use super::verify::sha1;
+use super::verify::{self, CLOCK_SKEW, sha1};
 use crate::error::{Error, Result};
 
 const ID_AD_OCSP: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.48.1");
@@ -37,6 +41,7 @@ const ID_PKIX_OCSP_BASIC: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6
 const ID_PKIX_OCSP_NOCHECK: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.48.1.5");
 const AUTHORITY_INFO_ACCESS: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.1.1");
 const CRL_DISTRIBUTION_POINTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.31");
+const ID_KP_OCSP_SIGNING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.9");
 const ID_SHA1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.14.3.2.26");
 
 /// Most certificates one collection covers.
@@ -179,12 +184,93 @@ pub(super) fn ocsp_request(cert: &Certificate, issuer: &Certificate) -> Result<V
     .map_err(|e| upstream("the OCSP request", e))
 }
 
+/// Whether `this_update <= now < next_update`, with [`CLOCK_SKEW`] either side.
+/// Without a next update, the information has to be from the last hour.
+fn current(
+    this_update: SystemTime,
+    next_update: Option<SystemTime>,
+    now: SystemTime,
+) -> std::result::Result<(), String> {
+    if this_update > now + CLOCK_SKEW {
+        return Err(format!(
+            "it is dated {}, in the future",
+            timestamp(this_update)
+        ));
+    }
+    match next_update {
+        Some(next) if next + CLOCK_SKEW <= now => Err(format!("it expired at {}", timestamp(next))),
+        Some(_) => Ok(()),
+        None if this_update + Duration::from_secs(3600) + CLOCK_SKEW < now => Err(format!(
+            "it has no next update and is from {}, over an hour ago",
+            timestamp(this_update)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The certificate that signed a basic OCSP response, if it may: the issuer
+/// itself, or a certificate the issuer signed for OCSP (`id-kp-OCSPSigning`)
+/// that is valid now, found among the response's certificates.
+fn ocsp_signer<'a>(
+    basic: &'a BasicOcspResponse,
+    issuer: &'a Certificate,
+    now: SystemTime,
+) -> std::result::Result<&'a Certificate, String> {
+    let names = |c: &Certificate| match &basic.tbs_response_data.responder_id {
+        ResponderId::ByName(name) => c.tbs_certificate.subject == *name,
+        ResponderId::ByKey(hash) => {
+            sha1(
+                c.tbs_certificate
+                    .subject_public_key_info
+                    .subject_public_key
+                    .raw_bytes(),
+            ) == hash.as_bytes()
+        }
+    };
+    let issuer_key = &issuer.tbs_certificate.subject_public_key_info;
+    if names(issuer) {
+        return Ok(issuer);
+    }
+    let delegate = basic
+        .certs
+        .iter()
+        .flatten()
+        .find(|c| names(c))
+        .ok_or("the responder is neither the issuer nor a certificate the response carries")?;
+    if delegate.tbs_certificate.subject_public_key_info == *issuer_key {
+        return Ok(issuer);
+    }
+    if !verify::issued_by(delegate, issuer) {
+        return Err(format!(
+            "the responder's certificate ({}) was not issued by the certificate's issuer",
+            delegate.tbs_certificate.subject
+        ));
+    }
+    if !verify::extended_key_usage(delegate).is_some_and(|(_, u)| u.contains(&ID_KP_OCSP_SIGNING)) {
+        return Err(format!(
+            "the responder's certificate ({}) is not for OCSP signing",
+            delegate.tbs_certificate.subject
+        ));
+    }
+    if !verify::valid_at(delegate, now) {
+        return Err(format!(
+            "the responder's certificate ({}) is not valid now",
+            delegate.tbs_certificate.subject
+        ));
+    }
+    Ok(delegate)
+}
+
 /// What an OCSP response says of `cert`: good, with the responder's
-/// certificates, or why it cannot be used.
+/// certificates, or why it cannot be used. It must answer for exactly the
+/// certificate identifier asked about, be signed by the issuer or a
+/// responder the issuer authorised, and be current. `REVOKED` comes only
+/// from a response that passed all of that.
 fn read_ocsp(
     response: &[u8],
     cert: &Certificate,
     issuer: &Certificate,
+    now: SystemTime,
 ) -> std::result::Result<Vec<Certificate>, String> {
     let response = OcspResponse::from_der(response)
         .map_err(|e| format!("the answer is not an OCSP response: {e}"))?;
@@ -208,22 +294,51 @@ fn read_ocsp(
         .responses
         .iter()
         .find(|r| {
-            r.cert_id.serial_number == wanted.serial_number
+            r.cert_id.hash_algorithm.oid == wanted.hash_algorithm.oid
+                && r.cert_id.issuer_name_hash == wanted.issuer_name_hash
                 && r.cert_id.issuer_key_hash == wanted.issuer_key_hash
+                && r.cert_id.serial_number == wanted.serial_number
         })
         .ok_or("the response is about another certificate")?;
+
+    let signer = ocsp_signer(&basic, issuer, now)?;
+    let tbs = basic
+        .tbs_response_data
+        .to_der()
+        .map_err(|e| format!("the response cannot be encoded: {e}"))?;
+    let oid = &basic.signature_algorithm.oid;
+    verify::signature(signer, oid, oid, &tbs, basic.signature.raw_bytes())
+        .map_err(|e| format!("the response's signature {e}"))?;
+
+    let next = single
+        .next_update
+        .as_ref()
+        .map(|t| UNIX_EPOCH + t.0.to_unix_duration());
+    current(
+        UNIX_EPOCH + single.this_update.0.to_unix_duration(),
+        next,
+        now,
+    )
+    .map_err(|e| format!("the response is not current: {e}"))?;
+
     match &single.cert_status {
-        CertStatus::Good(_) => Ok(basic.certs.unwrap_or_default()),
+        CertStatus::Good(_) => Ok(basic.certs.clone().unwrap_or_default()),
         CertStatus::Revoked(info) => Err(format!(
             "REVOKED since {}",
-            timestamp(std::time::UNIX_EPOCH + info.revocation_time.0.to_unix_duration())
+            timestamp(UNIX_EPOCH + info.revocation_time.0.to_unix_duration())
         )),
         CertStatus::Unknown(_) => Err("the responder does not know the certificate".into()),
     }
 }
 
-/// What a CRL says of `cert`: `Ok` when it is not listed.
-fn read_crl(crl: &[u8], cert: &Certificate) -> std::result::Result<Vec<u8>, String> {
+/// What a CRL says of `cert`: its DER when `cert` is not listed. It must be
+/// from `cert`'s issuer, signed with the issuer's key, and current.
+fn read_crl(
+    crl: &[u8],
+    cert: &Certificate,
+    issuer: Option<&Certificate>,
+    now: SystemTime,
+) -> std::result::Result<Vec<u8>, String> {
     let list = CertificateList::from_der(crl)
         .or_else(|_| {
             // Some distribution points serve PEM.
@@ -235,6 +350,28 @@ fn read_crl(crl: &[u8], cert: &Certificate) -> std::result::Result<Vec<u8>, Stri
     if list.tbs_cert_list.issuer != cert.tbs_certificate.issuer {
         return Err("the CRL is from another issuer".into());
     }
+    let issuer = issuer.ok_or(
+        "the issuer's certificate is not in the chain and cannot be fetched, so the CRL's signature cannot be checked",
+    )?;
+    let tbs = list
+        .tbs_cert_list
+        .to_der()
+        .map_err(|e| format!("the CRL cannot be encoded: {e}"))?;
+    let signature = list
+        .signature
+        .as_bytes()
+        .ok_or("the CRL's signature is not whole bytes")?;
+    let oid = &list.signature_algorithm.oid;
+    verify::signature(issuer, oid, oid, &tbs, signature)
+        .map_err(|e| format!("the CRL's signature {e}"))?;
+    current(
+        UNIX_EPOCH + list.tbs_cert_list.this_update.to_unix_duration(),
+        list.tbs_cert_list
+            .next_update
+            .map(|t| UNIX_EPOCH + t.to_unix_duration()),
+        now,
+    )
+    .map_err(|e| format!("the CRL is not current: {e}"))?;
     if let Some(revoked) = list
         .tbs_cert_list
         .revoked_certificates
@@ -244,7 +381,7 @@ fn read_crl(crl: &[u8], cert: &Certificate) -> std::result::Result<Vec<u8>, Stri
     {
         return Err(format!(
             "REVOKED since {}",
-            timestamp(std::time::UNIX_EPOCH + revoked.revocation_date.to_unix_duration())
+            timestamp(UNIX_EPOCH + revoked.revocation_date.to_unix_duration())
         ));
     }
     list.to_der().map_err(|e| e.to_string())
@@ -339,6 +476,7 @@ pub(super) async fn collect(
     outbound: &dyn Outbound,
     limits: &Limits,
     deadline: Instant,
+    now: SystemTime,
 ) -> Result<Validation> {
     let mut fetcher = Fetcher {
         outbound,
@@ -397,7 +535,7 @@ pub(super) async fn collect(
                         continue;
                     }
                 };
-                match read_ocsp(&response, &cert, issuer) {
+                match read_ocsp(&response, &cert, issuer, now) {
                     Ok(responder_certs) => {
                         found.out.ocsps.push(response);
                         for responder in responder_certs {
@@ -431,7 +569,7 @@ pub(super) async fn collect(
                         continue;
                     }
                 };
-                match read_crl(&crl, &cert) {
+                match read_crl(&crl, &cert, issuer.as_ref(), now) {
                     Ok(der) => {
                         if !found.out.crls.contains(&der) {
                             found.out.crls.push(der);

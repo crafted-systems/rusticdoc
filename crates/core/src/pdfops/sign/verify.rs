@@ -96,3 +96,60 @@ pub(super) fn signature(
         .verify(message, signature)
         .map_err(|_| "does not verify with its certificate's key".to_string())
 }
+
+const BASIC_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.19");
+const EXTENDED_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.37");
+
+/// Clock skew allowed when comparing someone else's times with ours.
+pub(super) const CLOCK_SKEW: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// True when `issuer`'s public key verifies `cert`'s signature.
+pub(super) fn issued_by(cert: &Certificate, issuer: &Certificate) -> bool {
+    use der::Encode;
+    if cert.tbs_certificate.issuer != issuer.tbs_certificate.subject {
+        return false;
+    }
+    let Ok(tbs) = cert.tbs_certificate.to_der() else {
+        return false;
+    };
+    let Some(signature) = cert.signature.as_bytes() else {
+        return false;
+    };
+    let oid = &cert.signature_algorithm.oid;
+    self::signature(issuer, oid, oid, &tbs, signature).is_ok()
+}
+
+/// True when `t` is within the certificate's validity period.
+pub(super) fn valid_at(cert: &Certificate, t: std::time::SystemTime) -> bool {
+    let validity = &cert.tbs_certificate.validity;
+    let from = std::time::UNIX_EPOCH + validity.not_before.to_unix_duration();
+    let until = std::time::UNIX_EPOCH + validity.not_after.to_unix_duration();
+    from <= t && t <= until
+}
+
+/// True when the certificate is a CA's (basicConstraints cA).
+pub(super) fn is_ca(cert: &Certificate) -> bool {
+    cert.tbs_certificate
+        .extensions
+        .iter()
+        .flatten()
+        .find(|e| e.extn_id == BASIC_CONSTRAINTS)
+        .and_then(|e| {
+            x509_cert::ext::pkix::BasicConstraints::from_der(e.extn_value.as_bytes()).ok()
+        })
+        .is_some_and(|b| b.ca)
+}
+
+/// The certificate's extended key usages, and whether the extension is
+/// critical; `None` without the extension.
+pub(super) fn extended_key_usage(cert: &Certificate) -> Option<(bool, Vec<ObjectIdentifier>)> {
+    let extension = cert
+        .tbs_certificate
+        .extensions
+        .iter()
+        .flatten()
+        .find(|e| e.extn_id == EXTENDED_KEY_USAGE)?;
+    let usage =
+        x509_cert::ext::pkix::ExtendedKeyUsage::from_der(extension.extn_value.as_bytes()).ok()?;
+    Some((extension.critical, usage.0))
+}

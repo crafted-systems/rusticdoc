@@ -147,6 +147,14 @@ impl Settings {
                     "RUSTICDOC_SIGNING_TSA_URL must be an http or https URL, not '{url}'"
                 )),
             }
+            match get("RUSTICDOC_SIGNING_TSA_CERT") {
+                Some(path) => tsa.cert_file = Some(PathBuf::from(path)),
+                // A token whose signer nothing vouches for proves nothing.
+                None => problems.push(
+                    "RUSTICDOC_SIGNING_TSA_URL needs RUSTICDOC_SIGNING_TSA_CERT: the certificate the timestamp authority signs with, or the CA it chains to"
+                        .into(),
+                ),
+            }
             tsa.username = get("RUSTICDOC_SIGNING_TSA_USERNAME");
             tsa.password = vars("RUSTICDOC_SIGNING_TSA_PASSWORD").filter(|v| !v.is_empty());
             if tsa.password.is_some() && tsa.username.is_none() {
@@ -183,6 +191,7 @@ impl Settings {
             s.tsa = Some(tsa);
         } else {
             for name in [
+                "RUSTICDOC_SIGNING_TSA_CERT",
                 "RUSTICDOC_SIGNING_TSA_USERNAME",
                 "RUSTICDOC_SIGNING_TSA_PASSWORD",
                 "RUSTICDOC_SIGNING_TSA_HEADERS",
@@ -298,6 +307,7 @@ mod tests {
     fn timestamp_authority_and_level() {
         let (s, problems) = read(&[
             ("RUSTICDOC_SIGNING_TSA_URL", "https://tsa.example/stamp"),
+            ("RUSTICDOC_SIGNING_TSA_CERT", "/k/tsa-root.pem"),
             ("RUSTICDOC_SIGNING_TSA_USERNAME", "u"),
             ("RUSTICDOC_SIGNING_TSA_PASSWORD", "p"),
             ("RUSTICDOC_SIGNING_TSA_HEADERS", r#"{"X-Api-Key": "k"}"#),
@@ -320,7 +330,16 @@ mod tests {
         );
         let (_, problems) = read(&[("RUSTICDOC_SIGNING_TSA_TIMEOUT", "5s")]);
         assert!(problems[0].contains("without"), "{problems:?}");
-        let (_, problems) = read(&[("RUSTICDOC_SIGNING_TSA_URL", "ftp://x")]);
+        let (_, problems) = read(&[
+            ("RUSTICDOC_SIGNING_TSA_URL", "ftp://x"),
+            ("RUSTICDOC_SIGNING_TSA_CERT", "/k/tsa-root.pem"),
+        ]);
         assert!(problems[0].contains("http"), "{problems:?}");
+        // A timestamp authority without an anchor to check its tokens against.
+        let (_, problems) = read(&[("RUSTICDOC_SIGNING_TSA_URL", "https://tsa.example/")]);
+        assert!(
+            problems[0].contains("RUSTICDOC_SIGNING_TSA_CERT"),
+            "{problems:?}"
+        );
     }
 }
