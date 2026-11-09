@@ -75,6 +75,7 @@ Released on 9 November 2026. This is the first release. The image is `ghcr.io/vm
 ### CLI
 
 - The same binary as the service: `render`, `convert`, `validate`, `translate`, `pdf`, `engines`, `openapi`, `serve`, `health` and `webhook-secret`.
+- Downloads for Linux (x86-64 and ARM64) and macOS (Apple silicon and Intel), attached to the GitHub release with checksums. See [download it](/docs/start/install/#download-it).
 
 ### Not in this release
 

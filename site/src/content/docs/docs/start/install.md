@@ -71,6 +71,38 @@ The binary looks for its engines at fixed paths, not on your `PATH`. Set `RUSTIC
 
 ## The CLI
 
+### Download it
+
+Each release attaches the CLI for Linux and macOS to its [GitHub release](https://github.com/vmosoti/rusticdoc/releases), with a `SHA256SUMS` file:
+
+| System | Archive |
+|---|---|
+| Linux, x86-64 | `rusticdoc-0.1.0-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, ARM64 | `rusticdoc-0.1.0-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS, Apple silicon | `rusticdoc-0.1.0-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `rusticdoc-0.1.0-x86_64-apple-darwin.tar.gz` |
+
+While the repository is private, download with the GitHub CLI, which uses your sign-in. This fetches the Apple silicon build, checks it and puts it on your `PATH`:
+
+```bash
+gh release download v0.1.0 --repo vmosoti/rusticdoc \
+  --pattern 'rusticdoc-0.1.0-aarch64-apple-darwin.tar.gz' --pattern SHA256SUMS
+shasum -a 256 --check --ignore-missing SHA256SUMS
+tar -xzf rusticdoc-0.1.0-aarch64-apple-darwin.tar.gz
+sudo mv rusticdoc-0.1.0-aarch64-apple-darwin/rusticdoc /usr/local/bin/
+rusticdoc --version
+```
+
+On Linux, `sha256sum --check --ignore-missing SHA256SUMS` does the check.
+
+- **macOS** marks a downloaded binary as quarantined, and the builds are not notarised. If it refuses to open, run `xattr -d com.apple.quarantine /usr/local/bin/rusticdoc`.
+- **Linux** builds need glibc 2.35 or newer, as on Ubuntu 22.04 and Debian 12, and fontconfig for HTML layout to find fonts.
+- **Windows** has no build: the CLI's process handling is Unix-only. Run the Linux build under WSL, or use the image as below.
+
+The downloaded CLI renders, validates and runs the PDF operations its own engine covers. `convert` steps need LibreOffice installed, and some PDF operations need qpdf or pdfcpu, as [build from source](#build-from-source) describes. `rusticdoc engines` shows what it found.
+
+### From the image
+
 The service and the CLI are the same binary, so the image has the CLI in it:
 
 ```bash

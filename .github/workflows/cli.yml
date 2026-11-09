@@ -1,0 +1,102 @@
+name: cli
+
+# Builds the rusticdoc command-line tool for Linux and macOS and attaches the
+# archives, with a SHA256SUMS file, to the GitHub release of the tag. A v0.*
+# tag runs it; it can also be run by hand for a tag that already exists.
+# Linux binaries are built on Ubuntu 22.04, so they run on glibc 2.35 and
+# newer. Windows is not built: the tool's process handling is Unix-only, so
+# Windows users run it under WSL or use the image.
+on:
+  push:
+    tags: ['v0.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing tag to build, such as v0.1.0
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: cli (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check the tag
+        shell: bash
+        run: |
+          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "not a version tag such as v0.1.0: $TAG"; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p rusticdoc --target "${{ matrix.target }}"
+      - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: |
+          bin="target/${{ matrix.target }}/release/rusticdoc"
+          "$bin" --version
+          printf 'Hello {{ name }}' > t.txt
+          printf '{"name":"release"}' > d.json
+          "$bin" render t.txt -d d.json -o out.txt
+          test "$(cat out.txt)" = "Hello release"
+      - name: Package
+        run: |
+          name="rusticdoc-${TAG#v}-${{ matrix.target }}"
+          mkdir "$name"
+          cp "target/${{ matrix.target }}/release/rusticdoc" LICENSE README.md "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          retention-days: 7
+
+  attach:
+    name: attach to the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - name: Attach
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # The release is written by hand with its notes; if it does not
+          # exist yet, a draft is made for the notes to be added to.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag --title "rusticdoc ${TAG#v}" --notes "Notes to come."
+          fi
+          gh release upload "$TAG" dist/* --clobber
