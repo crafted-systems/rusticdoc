@@ -324,13 +324,20 @@ impl Compiled {
         let mut names: Vec<String> = outputs.iter().map(|(n, _)| n.clone()).collect();
         match self.format {
             Format::Pptx => {
+                let (outputs, orphans) = rich::drop::drop_slides(&entries, &outputs, table);
                 package::apply_slides(&mut entries, &outputs)?;
+                if let Some(orphans) = orphans {
+                    rich::drop::after_slides(&mut entries, &orphans)?;
+                }
                 // Before rich values, which are placed where their shape now sits.
                 rich::shift::apply(&mut entries)?;
             }
             Format::Xlsx => {
                 let mut formulas = false;
                 let mut sheets = Vec::with_capacity(outputs.len());
+                let compiled: Vec<&str> = self.parts.iter().map(|p| p.name.as_str()).collect();
+                let (outputs, orphans) =
+                    rich::drop::drop_sheets(&entries, &compiled, outputs, table)?;
                 for (name, content) in &outputs {
                     let (title, content) = workbook::split_title(content);
                     formulas |= content.contains("<f>") || content.contains("<f ");
@@ -345,6 +352,7 @@ impl Compiled {
                 }
                 let compiled: Vec<&str> = self.parts.iter().map(|p| p.name.as_str()).collect();
                 names = workbook::finish_xlsx(&mut entries, &sheets, &compiled)?;
+                rich::drop::gc(&mut entries, &orphans);
                 if formulas {
                     if let Some(wb) = package::text_of(&entries, "xl/workbook.xml") {
                         package::set(
@@ -377,6 +385,7 @@ impl Compiled {
             let names: Vec<&str> = names.iter().map(String::as_str).collect();
             rich::apply(self.format, &mut entries, table, rendered, &names)?;
         }
+        rich::drop::finish_alt(self.format, &mut entries)?;
         // Last, so that links data put in are checked too.
         sanitize::sanitize(self.format, &mut entries, keep)?;
         package::write(&entries)
@@ -417,6 +426,8 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
     // Properties first, so that a `{% settings %}` tag overrides them.
     let mut settings = properties::settings(format, &entries);
     let mut parts: Vec<PartTree> = Vec::new();
+    // Tags read from the alt text of pictures, charts and shapes.
+    let mut alt_tags = std::collections::HashSet::new();
     let named = match format {
         Format::Xlsx => workbook::xlsx_named_parts(&entries),
         _ => Default::default(),
@@ -472,8 +483,21 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
             &mut settings,
             &mut diags,
         );
+        rich::drop::extract_alt(
+            format,
+            parts.len(),
+            &mut tree,
+            &info.prefix,
+            &mut tags,
+            &mut ctxs,
+            &mut alt_tags,
+            &mut diags,
+        );
         parts.push(tree);
     }
+    rich::drop::check_tags(
+        format, &entries, &parts, &tags, &ctxs, &alt_tags, &mut diags,
+    );
     let blocks = program::match_blocks(&tags, &mut diags);
     program::place_blocks(format, &mut parts, &tags, &ctxs, &blocks, &mut diags);
     workbook::Compile {

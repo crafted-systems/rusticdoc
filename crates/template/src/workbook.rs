@@ -27,6 +27,8 @@ use crate::{Diagnostic, Format, Location, Severity, TemplateError};
 
 /// Opens the name a sheet copy printed for itself.
 const TITLE_OPEN: char = '\u{3}';
+/// Whether rendered content starts with a name it printed for itself.
+pub const TITLE_MARK: char = TITLE_OPEN;
 /// Closes it.
 const TITLE_CLOSE: char = '\u{4}';
 

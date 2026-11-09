@@ -460,6 +460,13 @@ fn resolve_cell(
                                     "a sheet has no page breaks",
                                 ))
                             }
+                            Rich::Drop(_) => {
+                                return Err(misplaced(
+                                    part,
+                                    &format!("cell {at}"),
+                                    "drop() cannot sit here",
+                                ))
+                            }
                         }
                     }
                     if !out.is_empty() {

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-This page shows how to place content that is more than text: a logo, a QR code, a link, coloured text, formatted HTML, a native chart or a page break. Each one is a filter, and each works in Office templates only. The `shift` filter, which spreads a loop's shapes across a slide, is described with [PPTX loops](/docs/templates/office/#shapes-that-move-down-or-across-a-slide).
+This page shows how to place content that is more than text: a logo, a QR code, a link, coloured text, formatted HTML, a native chart or a page break. Each one is a filter, and each works in Office templates only. The `shift` filter, which spreads a loop's shapes across a slide, is described with [PPTX loops](/docs/templates/office/#shapes-that-move-down-or-across-a-slide), and the `drop` function, which removes the element holding its tag, under [remove an element](/docs/templates/office/#remove-an-element).
 
 ## What works where
 
@@ -19,6 +19,9 @@ This page shows how to place content that is more than text: a logo, a QR code, 
 | `chart` | Yes | Yes | Yes | Yes | Yes | Yes |
 | `pagebreak` | Yes | Yes | Refused | Refused | Refused | Refused |
 | `shift` | Refused | Refused | Refused | Refused | Yes | Refused |
+| [`drop`](/docs/templates/office/#remove-an-element) | Yes | Yes | Yes | Yes | Yes | Yes |
+
+Which elements `drop` removes depends on the format: a DOCX has no slides and a sheet no paragraphs. The [table of elements](/docs/templates/office/#remove-an-element) says which.
 
 In a text template or a PDF tag these filters do not exist, and using one is a `422` with `unknown filter`.
 

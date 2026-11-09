@@ -327,6 +327,7 @@ impl Pptx<'_, '_> {
                     }
                 }
                 Rich::PageBreak => return Err(self.fail("a slide has no page breaks")),
+                Rich::Drop(_) => return Err(self.fail("drop() cannot sit here")),
             }
         }
         Ok(())
