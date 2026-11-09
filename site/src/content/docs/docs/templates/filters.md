@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-This page lists every filter, so you can format money and dates, translate labels, and sum or sort lists from inside a template. A filter follows a value with `|` and may take arguments: `{{ total | currency("KES") }}`. Filters chain from left to right.
+This page lists every filter, test and function, so you can format money and dates, translate labels, sum or sort lists, shorten and pad text, and calculate with dates from inside a template. A filter follows a value with `|` and may take arguments: `{{ total | currency("KES") }}`. Filters chain from left to right.
 
 ## Where each filter works
 
@@ -14,6 +14,7 @@ This page lists every filter, so you can format money and dates, translate label
 | `currency` | Yes | Yes | Yes |
 | `date`, `t` | Yes | No | No |
 | `image`, `barcode`, `link`, `color`, `html`, `chart`, `pagebreak` | Yes | No | No |
+| [Text](#text-helpers), [number](#number-helpers) and [date](#date-helpers) helpers: `truncate`, `unaccent`, `pad_left`, `pad_right`, `avg`, `ceil`, `floor`, `words`, `date_add`, `date_sub`, `start_of`, `end_of`, `date_diff`, `duration` | Yes | Yes | Yes |
 | [Built-in filters](#built-in-filters) | Yes | Yes | Yes |
 
 Using a filter where it does not exist is a `422`:
@@ -214,12 +215,178 @@ grep -x 'Lamp, Plug: EUR 20.00' out.txt
 
 ### Filters that do not exist
 
-`urlencode`, `truncate`, `wordcount`, `striptags`, `center` and `nl2br` are not in this build. Each gives `unknown filter`.
+`urlencode`, `wordcount`, `striptags`, `center` and `nl2br` are not in this build. Each gives `unknown filter`.
+
+## Text helpers
+
+These work in every template. They count characters, not bytes, so `é` is one character. A letter written as a base letter and a separate accent mark counts as two.
+
+They take text or a number. `null` counts as empty text, and a list or an object is an error: `expected text or a number`.
+
+### truncate
+
+```text
+{{ title | truncate(40) }}
+{{ title | truncate(40, end="...") }}
+{{ title | truncate(40, words=true) }}
+```
+
+Shortens text to at most `length` characters, `end` included. Text that fits is unchanged. `end` is `…` unless you pass another, as the second argument or as `end=`; `end=""` cuts with no mark.
+
+With `words=true`, the cut never falls inside a word: the text stops at the last space that fits. If the first word alone is too long, only `end` remains.
+
+| Value | Tag | Prints |
+|---|---|---|
+| `"crème brûlée au café"` | `truncate(9)` | `crème br…` |
+| `"crème brûlée au café"` | `truncate(9, words=true)` | `crème…` |
+| `"crème brûlée au café"` | `truncate(13, "...", words=true)` | `crème...` |
+| `"crème brûlée au café"` | `truncate(30)` | `crème brûlée au café` |
+
+A negative length is an error.
+
+### unaccent
+
+```text
+{{ name | unaccent }}
+```
+
+Removes accents and other marks above and below letters: `crème brûlée` gives `creme brulee`, and `Łódź` gives `Lodz`. Letters that are not a base letter plus a mark are spelled with plain letters: `ß` gives `ss`, `æ` gives `ae`, `ø` gives `o`. Scripts whose marks change the letter, such as Devanagari vowel signs or Japanese kana, are left as they are.
+
+Use it for file names, identifiers and systems that accept only ASCII, and chain it: `{{ name | unaccent | lower | replace(" ", "-") }}`.
+
+### pad_left and pad_right
+
+```text
+{{ number | pad_left(6, "0") }}
+{{ name | pad_right(20) }}
+{{ name | pad_right(20, char=".") }}
+```
+
+Fill text out to `width` characters, with spaces or the one character you pass. `pad_left` adds the fill in front, which right-aligns; `pad_right` adds it after. Text already that long is unchanged, never cut: chain `truncate` first for a fixed width.
+
+| Value | Tag | Prints |
+|---|---|---|
+| `42` | `pad_left(6, "0")` | `000042` |
+| `"é"` | `pad_right(3, ".")` | `é..` |
+| `"abcdef"` | `pad_left(3)` | `abcdef` |
+
+The width must be between 0 and 10,000, and the fill exactly one character. Anything else is an error, such as `pad_left: the width must be between 0 and 10000, got 100000`.
+
+```bash test
+printf '[{{ t | truncate(9) }}][{{ t | truncate(9, words=true) }}][{{ t | unaccent }}][{{ n | pad_left(6, "0") }}][{{ "é" | pad_right(3, ".") }}]' > text.txt
+curl -F template=@text.txt -F 'data={"t":"crème brûlée au café","n":42}' http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = '[crème br…][crème…][creme brulee au cafe][000042][é..]'
+```
+
+## Number helpers
+
+These work in every template. [Calculations](/docs/templates/calculations/) shows them alongside the built-in arithmetic.
+
+### avg
+
+```text
+{{ scores | avg }}
+{{ lines | avg(attribute="price") }}
+```
+
+The mean of a list of numbers, or of one attribute of a list of objects. The attribute can be a path such as `"totals.net"`. Items whose value is missing or `null` are left out of the count. An empty list, or one with no values, gives `null`; add `| default(0, true)` to print `0` instead. A value that is not a number is an error: `avg: can only average numbers, got string`.
+
+A whole result prints without decimals: `{{ [1, 2, 6] | avg }}` prints `3`, and `{{ [1, 2] | avg }}` prints `1.5`.
+
+### ceil and floor
+
+```text
+{{ 2.1 | ceil }}
+{{ 2.9 | floor }}
+```
+
+The next whole number up or down, as a whole number: `3` and `2`, not `3.0`. For negative numbers, up is toward zero: `{{ -2.1 | ceil }}` is `-2`. A value that is not a number is an error. To round to decimals instead, use `round(2, "ceil")`.
+
+### words
+
+```text
+{{ 1234 | words }}
+{{ 21 | words(ordinal=true) }}
+{{ 1250.5 | words(currency="EUR") }}
+{{ 1234 | words(lang="fr") }}
+```
+
+Spells a number out.
+
+| Value | Tag | Prints |
+|---|---|---|
+| `1234` | `words` | `one thousand two hundred thirty-four` |
+| `-7` | `words` | `minus seven` |
+| `1.5` | `words` | `one point five` |
+| `21` | `words(ordinal=true)` | `twenty-first` |
+| `1250.5` | `words(currency="EUR")` | `one thousand two hundred fifty euros and fifty cents` |
+| `1` | `words(currency="USD")` | `one US dollar` |
+| `81` | `words(lang="fr")` | `quatre-vingt-un` |
+| `70` | `words(lang="fr-BE")` | `septante` |
+
+- **Languages.** English (`en`), French (`fr`, with `fr-BE` and `fr-CH` for Belgian and Swiss numbers) and Ukrainian (`uk`). Without `lang=`, the template's [`lang` setting](/docs/templates/translations/) applies, and a language with no words, or no setting, gives English. `lang=` with a language that has no words is an error: `words: no words for language "de"; use en, fr or uk`.
+- **Currencies.** `currency=` takes an ISO 4217 code, in any case. The codes with words are AED, ARS, AUD, BRL, CAD, CHF, CLP, CNY, COP, CRC, DZD, EUR, GBP, HKD, IDR, ILS, INR, JPY, KRW, KWD, KZT, MXN, MYR, NOK, NZD, PEN, PHP, PLN, QAR, RUB, SAR, SGD, THB, TRY, TWD, UAH, USD, UYU, VND and ZAR, plus the generic `DOLLAR`, `DINAR`, `PESO` and `RIYAL`. The amount is rounded to cents first. Another code is an error; for a currency with no words, use `DOLLAR` and `replace`, as the [worked invoice](/docs/templates/calculations/#worked-example-an-invoice) does.
+- **Limits.** Numbers up to 999,999,999,999,999 either side of zero. A larger one is refused: `words: 1e15 is too large`. An ordinal must be a whole number of 0 or more, and `ordinal` and `currency` cannot be combined.
+- The value must be a number; text such as `"12"` is an error. Convert it with `| int` or `| float`.
+
+```bash test
+printf '{{ 1234 | words }}|{{ 21 | words(ordinal=true) }}|{{ 1250.5 | words(currency="EUR") }}|{{ 81 | words(lang="fr") }}' > words.txt
+curl -F template=@words.txt -F 'data={}' http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = 'one thousand two hundred thirty-four|twenty-first|one thousand two hundred fifty euros and fifty cents|quatre-vingt-un'
+```
+
+## Date helpers
+
+These work in every template. They read dates as [`date`](#what-it-accepts) does, ISO 8601 text or unix seconds, and return ISO 8601 text, which `date` can print in any format. [Calculations](/docs/templates/calculations/#dates) explains each rule with examples.
+
+| Filter | Does | Example | Gives |
+|---|---|---|---|
+| `date_add(amount, unit)` | Adds whole units | `"2028-01-31" \| date_add(1, "month")` | `2028-02-29` |
+| `date_sub(amount, unit)` | Subtracts whole units | `"2028-03-31" \| date_sub(1, "month")` | `2028-02-29` |
+| `start_of(unit)` | The first second of the period | `"2026-11-06T10:20:00Z" \| start_of("day")` | `2026-11-06T00:00:00Z` |
+| `end_of(unit)` | The last second of the period | `"2026-11-06" \| end_of("month")` | `2026-11-30` |
+| `date_diff(other, unit)` | Whole units from `other` to the value | `"2026-12-25" \| date_diff("2026-11-06", "weeks")` | `7` |
+| `duration(unit)` | An interval in words or in a unit | `5400000 \| duration` | `2 hours` |
+
+- The units are `year`, `quarter`, `month`, `week`, `day`, `hour`, `minute` and `second`, singular or plural. `date_add`, `date_sub` and `date_diff` count days when the unit is left out.
+- Adding months keeps the day of the month, or uses the month's last day when the target month is shorter.
+- A date stays a date, a time with no zone stays one, and a time with a zone keeps its offset. Unix seconds come back as UTC.
+- A week starts on Monday.
+- `date_diff` is negative when the value is before `other`, and drops part of a unit.
+- A result out of range is an error, `date_add: the date is out of range`, and so is an unknown unit.
+
+```bash test
+printf '{{ d | date_add(1, "month") }}|{{ d | end_of("month") }}|{{ "2026-12-25" | date_diff("2026-11-06", "weeks") }}|{{ 5400000 | duration }}' > dates.txt
+curl -F template=@dates.txt -F 'data={"d":"2028-01-31"}' http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = '2028-02-29|2028-01-31|7|2 hours'
+```
+
+### duration
+
+```text
+{{ elapsed_ms | duration }}
+{{ elapsed_ms | duration("hours") }}
+{{ "P1DT12H" | duration("hours") }}
+```
+
+Takes milliseconds, or an ISO 8601 duration such as `P1Y2M3DT4H5M6S` or `PT1H30M`. With no argument, or `"human"`, it prints words: `a few seconds`, `a minute`, `5 minutes`, `an hour`, `3 hours`, `a day`, `12 days`, `a month`, `4 months`, `a year`, `2 years`. The words are in English and ignore the sign.
+
+With a unit, `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` or `milliseconds` (`ms`), it prints a number, with decimals when needed: `5400000 | duration("hours")` is `1.5`. A month counts 30 days and a year 365. Text that is not an ISO duration, such as `"2 hours"`, is an error.
 
 ## Tests
 
-`is` asks a question about a value: `{% if qty is odd %}`. The tests available are `defined`, `undefined`, `none`, `boolean`, `number`, `integer` (or `int`), `float`, `string`, `sequence`, `iterable`, `mapping`, `odd`, `even`, `divisibleby`, `startingwith`, `endingwith`, `lower`, `upper`, `in`, `true`, `false`, `safe`, `sameas`, `eq`, `ne`, `lt`, `le`, `gt` and `ge`.
+`is` asks a question about a value: `{% if qty is odd %}`. The tests available are `defined`, `undefined`, `none`, `empty`, `boolean`, `number`, `integer` (or `int`), `float`, `string`, `sequence`, `iterable`, `mapping`, `odd`, `even`, `divisibleby`, `startingwith`, `endingwith`, `lower`, `upper`, `in`, `true`, `false`, `safe`, `sameas`, `eq`, `ne`, `lt`, `le`, `gt` and `ge`.
+
+`empty` works in every template. It is true for `null`, a missing value, `""`, `[]` and `{}`, and false for `0` and `false`: `{% if notes is not empty %}`. [Conditions](/docs/templates/conditions/#tests) explains each test.
 
 ## Functions
 
 `range(3)` gives `[0, 1, 2]`, `dict(a=1)` gives an object, and `namespace(x=1)` gives an object a loop can change with `{% set ns.x = ... %}`.
+
+`now()` gives the time of the render in UTC, to the second, such as `2026-11-06T10:20:00Z`, in every template. Send `ctx={"now":"2026-11-06T10:20:00Z"}` with the request to fix it, so the output is the same on every run:
+
+```bash test
+printf '{{ now() }}|{{ now() | date_add(30) }}' > now.txt
+curl -F template=@now.txt -F 'data={}' -F 'ctx={"now":"2026-11-06T10:20:00Z"}' http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = '2026-11-06T10:20:00Z|2026-12-06T10:20:00Z'
+```

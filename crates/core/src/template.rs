@@ -354,6 +354,7 @@ pub fn environment() -> Environment<'static> {
     // A budget of evaluation steps, so a template cannot loop for ever.
     env.set_fuel(Some(TEMPLATE_FUEL));
     env.add_filter("currency", currency);
+    rusticdoc_template::compute::add_filters(&mut env, None);
     env
 }
 

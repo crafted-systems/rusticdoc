@@ -40,6 +40,10 @@ newline in a value becomes a line break in DOCX and ODT.
 - `t` looks a key up in the settings translations, trying `key.<lang>` then
   `key`, and falls back to the key.
 - Everything minijinja ships: `upper`, `default`, `join`, `sum`, `round`, …
+- From `compute` (every template kind, text and PDF tags too): the `empty`
+  test; `truncate`, `unaccent`, `pad_left`, `pad_right`; `avg`, `ceil`,
+  `floor`, `words`; `date_add`, `date_sub`, `start_of`, `end_of`,
+  `date_diff`, `duration`; and `now()`, which `ctx.now` fixes.
 
 ## Rich content
 

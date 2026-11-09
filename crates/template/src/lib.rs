@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use minijinja::value::Value;
 use serde::{Deserialize, Serialize};
 
+pub mod compute;
 pub mod filters;
 mod formats;
 pub mod limit;

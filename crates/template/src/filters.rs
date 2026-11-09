@@ -194,6 +194,7 @@ pub(crate) fn office_environment(
     // [`undefined_as_empty`].
     env.add_test("__blank", |v: Value| v.is_none());
     rich::add_filters(&mut env, mode);
+    crate::compute::add_filters(&mut env, settings.lang.as_deref());
     env
 }
 
