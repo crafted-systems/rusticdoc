@@ -190,6 +190,7 @@ pub(crate) fn office_environment(
             .unwrap_or(key)
     });
     rich::add_filters(&mut env, mode);
+    crate::compute::add_filters(&mut env, settings.lang.as_deref());
     env
 }
 
