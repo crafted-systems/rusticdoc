@@ -91,9 +91,12 @@ pub fn sanitize(
     if keep == Keep::ALL {
         return Ok(removed);
     }
-    normalise_encodings(entries)?;
+    let xml = xml_part_names(format, entries)?;
+    normalise_encodings(entries, &xml)?;
     match format {
-        Format::Docx | Format::Xlsx | Format::Pptx => ooxml(format, entries, keep, &mut removed)?,
+        Format::Docx | Format::Xlsx | Format::Pptx => {
+            ooxml(format, entries, keep, &xml, &mut removed)?
+        }
         Format::Odt | Format::Ods | Format::Odp => odf(entries, keep, &mut removed)?,
     }
     Ok(removed)
@@ -318,11 +321,87 @@ fn is_xml_part(name: &str) -> bool {
         .any(|ext| lower.ends_with(ext))
 }
 
+/// Whether a media type is XML.
+fn is_xml_type(ty: &str) -> bool {
+    let ty = ty
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    ty.ends_with("+xml") || ty == "application/xml" || ty == "text/xml"
+}
+
+/// The parts that are XML, as the package names them: by extension, and by
+/// the type the package gives each part, so that an XML part named
+/// `foo.dat` is read and checked like any other. OOXML types come from
+/// `[Content_Types].xml` (an override, else the default for the extension);
+/// ODF types from the manifest.
+fn xml_part_names(format: Format, entries: &[Entry]) -> Result<HashSet<String>, TemplateError> {
+    let mut out: HashSet<String> = entries
+        .iter()
+        .filter(|e| is_xml_part(&e.name))
+        .map(|e| e.name.clone())
+        .collect();
+    let ooxml = matches!(format, Format::Docx | Format::Xlsx | Format::Pptx);
+    let listing = if ooxml {
+        entry_name(entries, "[Content_Types].xml")
+    } else {
+        Some(MANIFEST.to_string())
+    };
+    let Some(listing) = listing else {
+        return Ok(out);
+    };
+    let Some(src) = read_part(entries, &listing)? else {
+        return Ok(out);
+    };
+    let nodes = xml::parse(&src).map_err(|e| broken(&listing, e))?;
+    let Some(root) = xml::root(&nodes) else {
+        return Ok(out);
+    };
+    let mut named: HashMap<String, String> = HashMap::new();
+    let mut by_ext: HashMap<String, String> = HashMap::new();
+    for e in root.children.iter().filter_map(|n| match n {
+        Node::Elem(e) => Some(e),
+        _ => None,
+    }) {
+        match e.name.as_str() {
+            "Override" => {
+                if let (Some(p), Some(t)) = (e.attr("PartName"), e.attr("ContentType")) {
+                    named.insert(p.trim_start_matches('/').to_ascii_lowercase(), t);
+                }
+            }
+            "Default" => {
+                if let (Some(x), Some(t)) = (e.attr("Extension"), e.attr("ContentType")) {
+                    by_ext.insert(x.to_ascii_lowercase(), t);
+                }
+            }
+            "manifest:file-entry" => {
+                if let (Some(p), Some(t)) =
+                    (e.attr("manifest:full-path"), e.attr("manifest:media-type"))
+                {
+                    named.insert(p.to_ascii_lowercase(), t);
+                }
+            }
+            _ => {}
+        }
+    }
+    for e in entries.iter().filter(|e| !e.name.ends_with('/')) {
+        let lower = e.name.to_ascii_lowercase();
+        let ext = lower.rsplit_once('.').map_or("", |(_, x)| x);
+        let ty = named.get(&lower).or_else(|| by_ext.get(ext));
+        if ty.is_some_and(|t| is_xml_type(t)) {
+            out.insert(e.name.clone());
+        }
+    }
+    Ok(out)
+}
+
 /// Rewrites every XML part as UTF-8 with a UTF-8 declaration, so that what
 /// is checked is byte for byte what is written out, and refuses the package
 /// when one cannot be read as Office would read it.
-fn normalise_encodings(entries: &mut [Entry]) -> Result<(), TemplateError> {
-    for e in entries.iter_mut().filter(|e| is_xml_part(&e.name)) {
+fn normalise_encodings(entries: &mut [Entry], xml: &HashSet<String>) -> Result<(), TemplateError> {
+    for e in entries.iter_mut().filter(|e| xml.contains(&e.name)) {
         let text = decode(&e.data).map_err(|why| unreadable(&e.name, &why))?;
         if text.as_bytes() != e.data.as_slice() {
             e.data = text.into_bytes();
@@ -401,9 +480,10 @@ fn declare_utf8(text: String) -> String {
 /// The namespaces the sanitiser recognises markup by, with the prefixes
 /// Office and LibreOffice always give them. Elements are matched by these
 /// qualified names, so a part that binds one of these namespaces to another
-/// prefix (or makes it the default namespace when it has a prefix) is
-/// refused: it would otherwise hide a macro or link under a name that is not
-/// looked for.
+/// prefix (or makes it the default namespace when it has a prefix), or binds
+/// one of these prefixes to another namespace, is refused: either would let
+/// a name that is looked for mean something else, or hide a macro or link
+/// under a name that is not.
 /// The template engine reads the same fixed prefixes.
 const KNOWN_NAMESPACES: &[(&str, &str)] = &[
     (
@@ -462,6 +542,16 @@ const KNOWN_NAMESPACES: &[(&str, &str)] = &[
     ("xlink", "http://www.w3.org/1999/xlink"),
 ];
 
+/// Standard prefixes that real files bind to a namespace of their own, in
+/// parts that hold none of the markup the sanitiser matches.
+const ALLOWED_REBINDINGS: &[(&str, &str)] = &[
+    // SharePoint document properties in customXml/item*.xml.
+    (
+        "p",
+        "http://schemas.microsoft.com/office/2006/metadata/properties",
+    ),
+];
+
 static XMLNS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\sxmlns(?::([^\s=/>]+))?\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap()
 });
@@ -479,11 +569,18 @@ fn check_namespaces(part: &str, src: &str) -> Result<(), TemplateError> {
             .filter(|(_, u)| *u == uri)
             .map(|(p, _)| *p)
             .collect();
-        // A standard prefix bound to some other namespace is let be: what it
-        // names is not the markup Office acts on, so at worst the sanitiser
-        // edits something harmless. Parts such as SharePoint's custom XML
-        // bind `p` to their own namespace.
-        if !wanted.is_empty() && !wanted.contains(&prefix) {
+        // A standard prefix bound to a namespace of its own is refused too,
+        // except the few pairs real files write, such as SharePoint's
+        // custom XML binding `p` to its metadata namespace.
+        let uris: Vec<&str> = KNOWN_NAMESPACES
+            .iter()
+            .filter(|(p, _)| !p.is_empty() && *p == prefix)
+            .map(|(_, u)| *u)
+            .collect();
+        let foreign = !uris.is_empty()
+            && !uris.contains(&uri)
+            && !ALLOWED_REBINDINGS.contains(&(prefix, uri));
+        if (!wanted.is_empty() && !wanted.contains(&prefix)) || foreign {
             let shown = if prefix.is_empty() {
                 "the default namespace".to_string()
             } else {
@@ -682,10 +779,16 @@ fn field_threat(instr: &str, nested: bool, keep: Keep) -> Option<Why> {
         .to_ascii_uppercase();
     match word.as_str() {
         "HYPERLINK" if !keep.private_links => {
-            if nested {
+            // An escaped quote makes the target depend on how a reader
+            // splits the instruction: not checked, so not kept.
+            if nested || instr.contains("\\\"") {
                 return Some(Why::Private);
             }
-            let (target, bookmark) = hyperlink_target(instr.get(word.len()..).unwrap_or(""));
+            let Some((target, bookmark)) = hyperlink_target(instr.get(word.len()..).unwrap_or(""))
+            else {
+                // Read two ways, or not at all: it cannot be checked.
+                return Some(Why::Private);
+            };
             match target {
                 Some(t) if !t.trim().is_empty() => is_private_url(&t).then_some(Why::Private),
                 // A link to a bookmark in the document needs no target;
@@ -703,9 +806,11 @@ fn field_threat(instr: &str, nested: bool, keep: Keep) -> Option<Why> {
     }
 }
 
-/// The words of a field instruction: quoted arguments without their quotes,
-/// bare words and switches as written.
-fn field_tokens(rest: &str) -> Vec<(String, bool)> {
+/// The words of a field instruction, read as Word reads them: a quoted
+/// argument loses its quotes and takes `\"` and `\\` as a quote and a
+/// backslash; bare words and switches are kept as written. `None` when a
+/// quote is never closed, since what Word would make of it is not known.
+fn field_tokens(rest: &str) -> Option<Vec<(String, bool)>> {
     let mut out = Vec::new();
     let mut chars = rest.chars().peekable();
     while let Some(&c) = chars.peek() {
@@ -713,7 +818,17 @@ fn field_tokens(rest: &str) -> Vec<(String, bool)> {
             chars.next();
         } else if c == '"' {
             chars.next();
-            out.push((chars.by_ref().take_while(|c| *c != '"').collect(), true));
+            let mut word = String::new();
+            loop {
+                match chars.next()? {
+                    '"' => break,
+                    '\\' if matches!(chars.peek(), Some('"' | '\\')) => {
+                        word.extend(chars.next());
+                    }
+                    c => word.push(c),
+                }
+            }
+            out.push((word, true));
         } else {
             let mut word = String::new();
             while let Some(&c) = chars.peek() {
@@ -726,30 +841,31 @@ fn field_tokens(rest: &str) -> Vec<(String, bool)> {
             out.push((word, false));
         }
     }
-    out
+    Some(out)
 }
 
 /// The target of a `HYPERLINK` field, and whether it has `\l` (a bookmark
 /// in the document). Of its switches only `\l` (bookmark), `\o` (tip) and
 /// `\t` (target frame) take an argument; `\h`, `\m` and `\n` take none.
-fn hyperlink_target(rest: &str) -> (Option<String>, bool) {
-    let mut tokens = field_tokens(rest).into_iter();
+/// `None` when the instruction can be read more than one way: an unclosed
+/// quote, a switch missing its argument, or more than one target.
+fn hyperlink_target(rest: &str) -> Option<(Option<String>, bool)> {
+    let mut tokens = field_tokens(rest)?.into_iter();
     let (mut target, mut bookmark) = (None, false);
     while let Some((word, quoted)) = tokens.next() {
         match word.strip_prefix('\\').filter(|_| !quoted) {
             Some(switch) => {
                 let switch = switch.to_ascii_lowercase();
                 if matches!(switch.as_str(), "l" | "o" | "t") {
-                    tokens.next();
+                    tokens.next()?;
                 }
                 bookmark |= switch == "l";
             }
-            None => {
-                target.get_or_insert(word);
-            }
+            None if target.is_some() => return None,
+            None => target = Some(word),
         }
     }
-    (target, bookmark)
+    Some((target, bookmark))
 }
 
 /// Takes the complex fields `field_threat` picks out of a Word part: the
@@ -923,12 +1039,15 @@ struct Ooxml<'a> {
     entries: &'a mut Vec<Entry>,
     keep: Keep,
     removed: &'a mut Removed,
+    /// The parts that are XML, by name or by content type.
+    xml: &'a HashSet<String>,
 }
 
 fn ooxml(
     format: Format,
     entries: &mut Vec<Entry>,
     keep: Keep,
+    xml: &HashSet<String>,
     removed: &mut Removed,
 ) -> Result<(), TemplateError> {
     check_case(entries)?;
@@ -936,6 +1055,7 @@ fn ooxml(
         entries,
         keep,
         removed,
+        xml,
     };
     // 1. Relationships: drop those that must go, noting their ids and targets.
     // Every relationships file is read and checked, whatever its case, and
@@ -1110,7 +1230,9 @@ impl Ooxml<'_> {
     }
 
     fn edit_part(&mut self, part: &str, ids: &HashMap<String, Why>) -> Result<(), TemplateError> {
-        if !part.to_ascii_lowercase().ends_with(".xml") {
+        // A source that is not XML (a binary that lost a relationship)
+        // holds no markup to clean.
+        if !self.xml.contains(part) {
             return Ok(());
         }
         let Some(src) = checked_part(self.entries, part)? else {
@@ -1253,7 +1375,7 @@ impl Ooxml<'_> {
             .iter()
             .filter(|e| {
                 let lower = e.name.to_ascii_lowercase();
-                lower.ends_with(".xml") && lower != "[content_types].xml"
+                self.xml.contains(&e.name) && !is_rels(&lower) && lower != "[content_types].xml"
             })
             .map(|e| e.name.clone())
             .collect()
@@ -2102,18 +2224,17 @@ mod tests {
             "<o2:document-content xmlns:o2=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\"/>",
             "<document xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>",
             "<a><b xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/></a>",
+            // A standard prefix bound to a namespace of its own.
+            "<w:document xmlns:w=\"urn:not-word\"/>",
+            "<a xmlns:xlink='http://www.w3.org/1999/xlink2'/>",
+            "<p:properties xmlns:p=\"http://schemas.microsoft.com/office/2006/metadata/other\"/>",
         ] {
             let err = check_namespaces("p", bad).unwrap_err();
             assert!(err.message.contains("refused"), "{bad}: {err}");
         }
-        // A standard prefix for some other namespace names markup Office
-        // does not act on, as SharePoint's custom XML does with `p`.
-        for fine in [
-            "<p:properties xmlns:p=\"http://schemas.microsoft.com/office/2006/metadata/properties\"/>",
-            "<w:document xmlns:w=\"urn:not-word\"/>",
-        ] {
-            assert!(check_namespaces("p", fine).is_ok(), "{fine}");
-        }
+        // The one rebinding real files write: SharePoint's custom XML.
+        let sharepoint = "<p:properties xmlns:p=\"http://schemas.microsoft.com/office/2006/metadata/properties\"/>";
+        assert!(check_namespaces("p", sharepoint).is_ok());
     }
 
     #[test]
@@ -2146,7 +2267,8 @@ mod tests {
             },
             stored: false,
         }];
-        normalise_encodings(&mut entries).unwrap();
+        let xml = xml_part_names(Format::Odt, &entries).unwrap();
+        normalise_encodings(&mut entries, &xml).unwrap();
         assert_eq!(
             entries[0].data,
             b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><a/>"
@@ -2209,6 +2331,17 @@ mod tests {
             // No target and no bookmark: nothing to check, so it goes.
             (" HYPERLINK \\h ", Why::Private),
             (" HYPERLINK \\o \"tip only\" ", Why::Private),
+            // Quoting Word reads with escapes, or that reads two ways.
+            (
+                " HYPERLINK \"https://example.com\\\" \\\"http://10.0.0.1\" ",
+                Why::Private,
+            ),
+            (" HYPERLINK \"https://example.com ", Why::Private),
+            (
+                " HYPERLINK \"https://example.com\" \"http://10.0.0.1\" ",
+                Why::Private,
+            ),
+            (" HYPERLINK \\o ", Why::Private),
             (
                 " INCLUDEPICTURE \"http://example.com/a.png\" \\d",
                 Why::External,
@@ -2230,7 +2363,24 @@ mod tests {
             None
         );
         assert_eq!(field_threat(" HYPERLINK \\l \"intro\" ", false, none), None);
+        assert_eq!(
+            field_threat(
+                " HYPERLINK \"https://example.com/a\\\\b\" \\o \"tip\" ",
+                false,
+                none
+            ),
+            None
+        );
         assert_eq!(field_threat(" MERGEFIELD name ", false, none), None);
+        // Word's escapes inside quotes.
+        assert_eq!(
+            field_tokens(r#""a\"b\\c" d"#),
+            Some(vec![
+                ("a\"b\\c".to_string(), true),
+                ("d".to_string(), false)
+            ])
+        );
+        assert_eq!(field_tokens("\"open"), None);
         // A computed target cannot be checked.
         assert_eq!(field_threat(" HYPERLINK ", true, none), Some(Why::Private));
     }

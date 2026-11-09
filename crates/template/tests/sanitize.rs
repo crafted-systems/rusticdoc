@@ -1622,3 +1622,123 @@ fn a_part_declaring_another_encoding_is_refused_and_utf16_is_rewritten() {
     );
     assert!(text.contains("body"), "{text}");
 }
+
+// --- Third review: three more crafted files.
+
+/// Finding 1: a standard prefix bound to a namespace of its own.
+#[test]
+fn a_standard_prefix_bound_to_another_namespace_is_refused() {
+    let mut p = Pkg::open(&docx(&p("body")));
+    p.edit(
+        "word/document.xml",
+        "<w:body>",
+        "<w:body><w:p xmlns:w=\"urn:example:not-word\"><w:fldSimple w:instr=\" PAGE \"/></w:p>",
+    );
+    let message = refused(Format::Docx, &p.bytes());
+    assert!(message.contains("prefix \"w\""), "{message}");
+}
+
+/// Finding 2: an XML part was found by its `.xml` name only, so a sheet or
+/// header named otherwise, with an XML content type, was never scanned.
+#[test]
+fn xml_parts_are_found_by_content_type_not_name() {
+    let mut b = Pkg::open(&xlsx(&[row(1, &[cell("A1", "n", "1")])], &[]));
+    let sheet = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\"><f>WEBSERVICE(\"https://example.com/\")</f><v>0</v></c></row></sheetData></worksheet>";
+    b.set("xl/worksheets/sheet9.dat", utf16le(sheet));
+    b.rels(
+        "xl/_rels/workbook.xml.rels",
+        &[(
+            "rId30",
+            &format!("{REL}/worksheet"),
+            "worksheets/sheet9.dat",
+            false,
+        )],
+    );
+    b.types(
+        "<Override PartName=\"/xl/worksheets/sheet9.dat\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>",
+    );
+    let out = clean(Format::Xlsx, &b.bytes());
+    let written = String::from_utf8(bytes_of(&out, "xl/worksheets/sheet9.dat").unwrap())
+        .expect("rewritten as UTF-8");
+    assert!(
+        !written.contains("WEBSERVICE") && written.contains("<v>0</v>"),
+        "{written}"
+    );
+
+    // A header typed as XML by a default for its extension.
+    let mut p = Pkg::open(&docx(&p("body")));
+    p.set(
+        "word/hdr9.part",
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p>{}</w:p></w:hdr>",
+            complex_field(" INCLUDEPICTURE \"http://example.com/a.png\" ", "header picture")
+        ),
+    );
+    p.rels(
+        "word/_rels/document.xml.rels",
+        &[("rId30", &format!("{REL}/header"), "hdr9.part", false)],
+    );
+    p.types(
+        "<Default Extension=\"part\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml\"/>",
+    );
+    let out = clean(Format::Docx, &p.bytes());
+    let header = part(&out, "word/hdr9.part");
+    assert!(
+        !header.contains("INCLUDEPICTURE") && header.contains("header picture"),
+        "{header}"
+    );
+
+    // An XML part that declares another encoding is refused whatever its name.
+    let mut b = Pkg::open(&xlsx(&[row(1, &[cell("A1", "n", "1")])], &[]));
+    b.set(
+        "xl/worksheets/sheet9.dat",
+        "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><worksheet/>",
+    );
+    b.types(
+        "<Override PartName=\"/xl/worksheets/sheet9.dat\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>",
+    );
+    let message = refused(Format::Xlsx, &b.bytes());
+    assert!(message.contains("sheet9.dat"), "{message}");
+}
+
+/// Finding 3: Word reads `\"` inside a quoted argument as a quote, so a
+/// tokeniser that stopped at it read a different target from Word's.
+#[test]
+fn a_hyperlink_field_with_escaped_or_unbalanced_quotes_loses_its_link() {
+    let body = [
+        format!(
+            "<w:p>{}</w:p>",
+            complex_field(
+                " HYPERLINK \"https://example.com\\\" \\\"http://10.0.0.1\" ",
+                "escaped quotes"
+            )
+        ),
+        format!(
+            "<w:p>{}</w:p>",
+            complex_field(" HYPERLINK \"https://example.com ", "unclosed quote")
+        ),
+        format!(
+            "<w:p>{}</w:p>",
+            complex_field(
+                " HYPERLINK \"https://example.com/\" \"http://10.0.0.1/\" ",
+                "two targets"
+            )
+        ),
+        format!(
+            "<w:p>{}</w:p>",
+            complex_field(" HYPERLINK \"https://example.com/\" ", "plain")
+        ),
+    ]
+    .concat();
+    let out = clean(Format::Docx, &docx(&body));
+    let doc = part(&out, "word/document.xml");
+    assert_eq!(
+        doc.matches("HYPERLINK").count(),
+        1,
+        "only the plain link stays: {doc}"
+    );
+    assert!(!doc.contains("10.0.0.1"), "{doc}");
+    for words in ["escaped quotes", "unclosed quote", "two targets", "plain"] {
+        assert!(doc.contains(words), "{doc}");
+    }
+}
