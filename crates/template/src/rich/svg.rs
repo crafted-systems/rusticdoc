@@ -31,6 +31,8 @@ pub const MAX_SVG_BYTES: usize = 5 * 1024 * 1024;
 const MAX_NODES: u32 = 200_000;
 /// The most elements an SVG image may draw once its references are expanded.
 const MAX_EXPANDED: u64 = 1_000_000;
+/// The deepest elements may nest.
+const MAX_DEPTH: u32 = 256;
 /// The most pixels a picture embedded in an SVG may have.
 const MAX_EMBEDDED_PIXELS: u64 = 16_000_000;
 /// The longest side of the PNG drawn for readers without SVG.
@@ -221,8 +223,68 @@ fn render(tree: &usvg::Tree) -> Result<(Vec<u8>, (u32, u32)), String> {
     Ok((out, (w, h)))
 }
 
+/// The deepest the elements of `text` nest, read without parsing, so that
+/// no parser or walk sees nesting it cannot take. Comments, CDATA,
+/// processing instructions and quoted attribute values are skipped; a
+/// malformed document may count wrong, and the parser refuses it anyway.
+fn nesting(text: &str) -> u32 {
+    let b = text.as_bytes();
+    let (mut depth, mut deepest) = (0u32, 0u32);
+    let mut i = 0;
+    let skip_to = |from: usize, end: &[u8]| -> usize {
+        b[from..]
+            .windows(end.len())
+            .position(|w| w == end)
+            .map_or(b.len(), |p| from + p + end.len())
+    };
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = &b[i..];
+        if rest.starts_with(b"<!--") {
+            i = skip_to(i + 4, b"-->");
+        } else if rest.starts_with(b"<![CDATA[") {
+            i = skip_to(i + 9, b"]]>");
+        } else if rest.starts_with(b"<?") {
+            i = skip_to(i + 2, b"?>");
+        } else if rest.starts_with(b"<!") {
+            i = skip_to(i + 2, b">");
+        } else if rest.starts_with(b"</") {
+            depth = depth.saturating_sub(1);
+            i = skip_to(i + 2, b">");
+        } else {
+            // A start tag: find its end outside quotes.
+            let mut j = i + 1;
+            let mut quote = None;
+            while j < b.len() {
+                match (quote, b[j]) {
+                    (None, b'"' | b'\'') => quote = Some(b[j]),
+                    (Some(q), c) if c == q => quote = None,
+                    (None, b'>') => break,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if j > i && b.get(j - 1) != Some(&b'/') {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            i = j + 1;
+        }
+    }
+    deepest
+}
+
 /// Rebuilds the document from what may stay.
 pub fn sanitize(text: &str) -> Result<String, String> {
+    if nesting(text) > MAX_DEPTH {
+        return Err(format!(
+            "the SVG image nests elements more than {MAX_DEPTH} deep"
+        ));
+    }
+
     let opts = roxmltree::ParsingOptions {
         allow_dtd: false,
         nodes_limit: MAX_NODES,
@@ -233,13 +295,15 @@ pub fn sanitize(text: &str) -> Result<String, String> {
     if root.tag_name().name() != "svg" || root.tag_name().namespace() != Some(SVG_NS) {
         return Err("an SVG image must have an svg root element in the SVG namespace".into());
     }
+    check_structure(&doc)?;
     check_expansion(&doc)?;
     let mut out = String::with_capacity(text.len());
     element(root, &mut out, true)?;
     Ok(out)
 }
 
-/// The ids an element refers to: its `href` and every `url(#id)`.
+/// The ids an element refers to: its `href` and every `url(#id)`, in any
+/// case, as [`plain_value`] accepts it.
 fn references<'a>(node: roxmltree::Node<'a, 'a>) -> Vec<&'a str> {
     let mut out = Vec::new();
     for attr in node.attributes() {
@@ -250,69 +314,111 @@ fn references<'a>(node: roxmltree::Node<'a, 'a>) -> Vec<&'a str> {
             }
             continue;
         }
-        let mut rest = value;
-        while let Some(at) = rest.find("url(") {
-            let after = &rest[at + 4..];
-            let end = after.find(')').unwrap_or(after.len());
-            let inner = after[..end].trim().trim_matches(['"', '\'']);
+        // ASCII lower-casing keeps every byte where it was.
+        let lower = value.to_ascii_lowercase();
+        let mut from = 0;
+        while let Some(at) = lower[from..].find("url(").map(|p| p + from) {
+            let start = at + 4;
+            let end = value[start..].find(')').map_or(value.len(), |p| p + start);
+            let inner = value[start..end].trim().trim_matches(['"', '\'']);
             if let Some(id) = inner.strip_prefix('#') {
                 out.push(id);
             }
-            rest = &after[end..];
+            from = end;
         }
     }
     out
 }
 
+/// Refuses elements nested deeper than [`MAX_DEPTH`], which the recursive
+/// walks here and in the renderer could not take, and ids used twice, whose
+/// references a renderer may resolve to either element.
+fn check_structure(doc: &roxmltree::Document) -> Result<(), String> {
+    use std::collections::HashSet;
+    let mut depth = vec![0u32; doc.descendants().count() + 1];
+    let mut seen = HashSet::new();
+    for node in doc.descendants().filter(|n| n.is_element()) {
+        let parent = node.parent().map_or(0, |p| depth[p.id().get_usize()]);
+        let mine = parent + 1;
+        if mine > MAX_DEPTH {
+            return Err(format!(
+                "the SVG image nests elements more than {MAX_DEPTH} deep"
+            ));
+        }
+        depth[node.id().get_usize()] = mine;
+        if let Some(id) = node.attribute("id") {
+            if !seen.insert(id) {
+                return Err(format!("the SVG image has two elements with the id {id:?}"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Refuses a document whose references expand it past [`MAX_EXPANDED`]
 /// elements once every `use`, pattern, marker, filter, mask and clip path is
-/// drawn where it is referred to, as a renderer would.
+/// drawn where it is referred to, as a renderer would. The walk keeps its own
+/// stack, so a long chain of references cannot exhaust the thread's.
 fn check_expansion(doc: &roxmltree::Document) -> Result<(), String> {
-    use std::collections::HashMap;
-    let ids: HashMap<&str, roxmltree::NodeId> = doc
+    use roxmltree::NodeId;
+    use std::collections::{HashMap, HashSet};
+    let ids: HashMap<&str, NodeId> = doc
         .descendants()
         .filter(|n| n.is_element())
         .filter_map(|n| Some((n.attribute("id")?, n.id())))
         .collect();
-    let mut memo: HashMap<roxmltree::NodeId, u64> = HashMap::new();
-    let mut active = std::collections::HashSet::new();
-    fn cost<'a>(
-        node: roxmltree::Node<'a, 'a>,
-        doc: &'a roxmltree::Document<'a>,
-        ids: &HashMap<&str, roxmltree::NodeId>,
-        memo: &mut HashMap<roxmltree::NodeId, u64>,
-        active: &mut std::collections::HashSet<roxmltree::NodeId>,
-    ) -> u64 {
-        if let Some(found) = memo.get(&node.id()) {
-            return *found;
-        }
-        // A reference back into itself is a loop renderers refuse to draw.
-        if !active.insert(node.id()) {
-            return 0;
-        }
-        let mut total: u64 = 1;
-        for child in node.children().filter(|c| c.is_element()) {
-            total = total.saturating_add(cost(child, doc, ids, memo, active));
-            if total > MAX_EXPANDED {
-                break;
+    let deps = |id: NodeId| -> Vec<NodeId> {
+        let Some(node) = doc.get_node(id) else {
+            return Vec::new();
+        };
+        let mut out: Vec<NodeId> = node
+            .children()
+            .filter(|c| c.is_element())
+            .map(|c| c.id())
+            .collect();
+        out.extend(
+            references(node)
+                .into_iter()
+                .filter_map(|r| ids.get(r).copied()),
+        );
+        out
+    };
+    let mut memo: HashMap<NodeId, u64> = HashMap::new();
+    // On the current path: a reference back to one is a loop, which
+    // renderers refuse to draw, so it adds nothing.
+    let mut active: HashSet<NodeId> = HashSet::new();
+    let mut stack: Vec<(NodeId, Option<Vec<NodeId>>)> = vec![(doc.root_element().id(), None)];
+    while let Some((id, done)) = stack.pop() {
+        match done {
+            None => {
+                if memo.contains_key(&id) || !active.insert(id) {
+                    continue;
+                }
+                let next = deps(id);
+                let pending: Vec<NodeId> = next
+                    .iter()
+                    .copied()
+                    .filter(|d| !memo.contains_key(d) && !active.contains(d))
+                    .collect();
+                stack.push((id, Some(next)));
+                stack.extend(pending.into_iter().map(|d| (d, None)));
+            }
+            Some(next) => {
+                let total = next
+                    .iter()
+                    .map(|d| memo.get(d).copied().unwrap_or(0))
+                    .fold(1u64, u64::saturating_add)
+                    .min(MAX_EXPANDED + 1);
+                if total > MAX_EXPANDED {
+                    return Err(format!(
+                        "the SVG image expands to more than {MAX_EXPANDED} elements through \
+                         its references"
+                    ));
+                }
+                active.remove(&id);
+                memo.insert(id, total);
             }
         }
-        for id in references(node) {
-            if let Some(target) = ids.get(id).and_then(|i| doc.get_node(*i)) {
-                total = total.saturating_add(cost(target, doc, ids, memo, active));
-            }
-            if total > MAX_EXPANDED {
-                break;
-            }
-        }
-        active.remove(&node.id());
-        memo.insert(node.id(), total);
-        total
-    }
-    if cost(doc.root_element(), doc, &ids, &mut memo, &mut active) > MAX_EXPANDED {
-        return Err(format!(
-            "the SVG image expands to more than {MAX_EXPANDED} elements through its references"
-        ));
     }
     Ok(())
 }
@@ -701,6 +807,60 @@ mod tests {
         let looped = "<svg xmlns=\"http://www.w3.org/2000/svg\" \
             xmlns:xlink=\"http://www.w3.org/1999/xlink\"><g id=\"a\"><use xlink:href=\"#a\"/></g></svg>";
         assert!(sanitize(looped).is_ok());
+    }
+
+    #[test]
+    fn deep_nesting_and_long_chains_are_refused_not_a_crash() {
+        let open = "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+                    xmlns:xlink=\"http://www.w3.org/1999/xlink\">";
+        // Nesting far past what a recursive walk takes.
+        let deep = format!(
+            "{open}{}{}</svg>",
+            "<g>".repeat(90_000),
+            "</g>".repeat(90_000)
+        );
+        let err = sanitize(&deep).unwrap_err();
+        assert!(err.contains("nests elements more than"), "{err}");
+        let fine = format!("{open}{}{}</svg>", "<g>".repeat(200), "</g>".repeat(200));
+        assert!(sanitize(&fine).is_ok());
+        // A chain of 60,000 references, each to the next.
+        let mut chain = String::from(open);
+        chain.push_str("<defs>");
+        for i in 0..60_000 {
+            chain.push_str(&format!("<use id=\"u{i}\" xlink:href=\"#u{}\"/>", i + 1));
+        }
+        chain.push_str(
+            "<rect id=\"u60000\" width=\"1\" height=\"1\"/></defs><use xlink:href=\"#u0\"/></svg>",
+        );
+        // Walked without recursion. Each use counts what it points at, and
+        // defs count too, so this many is refused as an expansion rather
+        // than overflowing the stack.
+        match sanitize(&chain) {
+            Ok(_) => {}
+            Err(e) => assert!(e.contains("expands to more than"), "{e}"),
+        }
+    }
+
+    #[test]
+    fn duplicate_ids_and_upper_case_urls_cannot_hide_an_expansion() {
+        let dup = "<svg xmlns=\"http://www.w3.org/2000/svg\">\
+                   <rect id=\"a\"/><circle id=\"a\"/></svg>";
+        let err = sanitize(dup).unwrap_err();
+        assert!(err.contains("two elements with the id \"a\""), "{err}");
+        let mut svg = String::from(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><defs>\
+             <pattern id=\"p0\"><rect width=\"1\" height=\"1\"/></pattern>",
+        );
+        for level in 1..=7 {
+            svg.push_str(&format!("<pattern id=\"p{level}\">"));
+            for _ in 0..10 {
+                svg.push_str(&format!("<rect fill=\"URL(#p{})\"/>", level - 1));
+            }
+            svg.push_str("</pattern>");
+        }
+        svg.push_str("</defs><rect fill=\"Url( #p7 )\"/></svg>");
+        let err = sanitize(&svg).unwrap_err();
+        assert!(err.contains("expands to more than"), "{err}");
     }
 
     #[test]

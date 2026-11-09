@@ -86,7 +86,7 @@ The bytes decide the type, not a name or the `mime`.
 | WebP | Converted to PNG, since office suites do not all read WebP |
 | SVG | A cleaned copy of the drawing, with a PNG of it for readers that do not show SVG. DOCX, XLSX and PPTX carry the PNG as the picture and the SVG as Office's SVG extension; ODF frames list the SVG first and the PNG after it |
 
-An SVG is rebuilt from what draws, element by element. Scripts, event attributes such as `onload`, animation, `foreignObject`, `<style>` stylesheets, and links to other files or addresses are all removed. A `style` attribute keeps only presentation properties such as `fill`, `stroke` and `font-size`, which become attributes, and every value must be plain: no backslash escapes, comments or `@`, and no function but colours, transforms and `url(#id)` pointing inside the file. References are followed before anything is drawn, so `use` elements and patterns that draw each other cannot turn a small file into millions of shapes: past 1,000,000 elements the image is refused. A picture inside an SVG stays only as embedded PNG, JPEG or GIF data. A DTD is refused. The PNG beside it is drawn by the service, with the fonts of the machine it runs on, at up to 2000 pixels on the long side.
+An SVG is rebuilt from what draws, element by element. Scripts, event attributes such as `onload`, animation, `foreignObject`, `<style>` stylesheets, and links to other files or addresses are all removed. A `style` attribute keeps only presentation properties such as `fill`, `stroke` and `font-size`, which become attributes, and every value must be plain: no backslash escapes, comments or `@`, and no function but colours, transforms and `url(#id)` pointing inside the file. References are followed before anything is drawn, so `use` elements and patterns that draw each other cannot turn a small file into millions of shapes: past 1,000,000 elements the image is refused. Elements may nest at most 256 deep, and two elements may not share an `id`. A picture inside an SVG stays only as embedded PNG, JPEG or GIF data. A DTD is refused. The PNG beside it is drawn by the service, with the fonts of the machine it runs on, at up to 2000 pixels on the long side.
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -441,7 +441,7 @@ curl -F template=@tagged.pptx -F 'data={"_":1}' http://localhost:9027/v1/render 
 | What | Limit |
 |---|---|
 | One image | 20 MB |
-| One SVG image | 5 MB, 200,000 nodes, 1,000,000 elements once references are expanded, 19200 pixels a side |
+| One SVG image | 5 MB, 200,000 nodes nested at most 256 deep, 1,000,000 elements once references are expanded, 19200 pixels a side |
 | A picture inside an SVG | 16 megapixels |
 | One WebP image | 25 megapixels, 16384 pixels a side |
 | Images and barcodes in one render | 200 |
