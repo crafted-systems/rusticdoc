@@ -101,39 +101,75 @@ pub fn sanitize(
 // ---------------------------------------------------------------------------
 // Addresses.
 
-/// Whether a link points into the reader's own machine or network: `file:`
-/// and UNC paths, `localhost`, `.local` and `.internal` names, and loopback,
-/// private, link-local and unique-local addresses, however they are spelt.
+/// Schemes a browser parses with the WHATWG "special" rules: backslashes are
+/// slashes and the slashes after the colon may be missing or doubled.
+const SPECIAL_SCHEMES: &[&str] = &["http", "https", "ws", "wss", "ftp"];
+
+/// Whether a link points into the reader's own machine or network: `file:`,
+/// drive and UNC paths, `localhost`, `.local` and `.internal` names, and
+/// loopback, private, shared, link-local, unique-local, benchmark, multicast
+/// and reserved addresses, however they are spelt. Web addresses are read as
+/// a browser reads them (the WHATWG URL rules, through the `url` crate), so
+/// `http:\\10.0.0.1`, `http:/10.0.0.1`, tabs and line breaks inside the
+/// address, and IPv4 in decimal, octal or hex all count. An address that a
+/// browser would refuse to parse counts as private: what cannot be read is
+/// not let through.
 pub fn is_private_url(url: &str) -> bool {
-    let url = url.trim();
-    if url.starts_with("\\\\") {
+    // WHATWG removes these anywhere in the input, then trims C0 and spaces.
+    let cleaned: String = url
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let s = cleaned.trim_matches(|c: char| c <= ' ');
+    if s.starts_with("\\\\") || s.starts_with("/\\") || s.starts_with("\\/") {
+        // A UNC path: a share on the local network.
         return true;
     }
-    let Some(colon) = url.find(':') else {
+    if let Some(rest) = s.strip_prefix("//") {
+        // Scheme-relative: whatever scheme the reader assumes, the host counts.
+        return private_special(&format!("http://{rest}"));
+    }
+    let Some(colon) = s.find(':') else {
         return false;
     };
-    let scheme = &url[..colon];
-    if scheme.is_empty()
-        || !scheme
+    let scheme = &s[..colon];
+    let valid = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-    {
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !valid {
         return false;
     }
-    if scheme.eq_ignore_ascii_case("file") {
+    let scheme = scheme.to_ascii_lowercase();
+    // `C:\docs\x.docx`: a drive letter, so a local file.
+    if scheme == "file" || scheme.len() == 1 {
         return true;
     }
-    let Some(rest) = url[colon + 1..].strip_prefix("//") else {
-        return false;
-    };
-    let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
-    let host_port = authority.rsplit('@').next().unwrap_or("");
-    let host = if let Some(inner) = host_port.strip_prefix('[') {
-        inner.split(']').next().unwrap_or("")
-    } else {
-        host_port.split(':').next().unwrap_or("")
-    };
-    is_private_host(&percent_decode(host))
+    if SPECIAL_SCHEMES.contains(&scheme.as_str()) {
+        return private_special(s);
+    }
+    // Other schemes (`smb:`, `ldap:`) name a host only after `//`.
+    match url::Url::parse(s) {
+        Ok(u) => match u.host() {
+            Some(url::Host::Domain(d)) => is_private_host(&percent_decode(d)),
+            Some(url::Host::Ipv4(ip)) => private_v4(ip),
+            Some(url::Host::Ipv6(ip)) => private_v6(ip),
+            None => s[colon + 1..].starts_with("//"),
+        },
+        Err(_) => s[colon + 1..].starts_with("//"),
+    }
+}
+
+fn private_special(s: &str) -> bool {
+    match url::Url::parse(s) {
+        Ok(u) => match u.host() {
+            Some(url::Host::Domain(d)) => is_private_host(d),
+            Some(url::Host::Ipv4(ip)) => private_v4(ip),
+            Some(url::Host::Ipv6(ip)) => private_v6(ip),
+            None => true,
+        },
+        Err(_) => true,
+    }
 }
 
 fn is_private_host(host: &str) -> bool {
@@ -161,24 +197,42 @@ fn is_private_host(host: &str) -> bool {
 }
 
 fn private_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
-    a == 0
-        || a == 127
+    let [a, b, c, _] = ip.octets();
+    a == 0 // this network
         || a == 10
-        || (a == 172 && (16..32).contains(&b))
-        || (a == 192 && b == 168)
+        || a == 127
+        || (a == 100 && (64..128).contains(&b)) // shared address space
         || (a == 169 && b == 254)
+        || (a == 172 && (16..32).contains(&b))
+        || (a == 192 && b == 0 && c == 0) // protocol assignments
+        || (a == 192 && b == 168)
+        || (a == 198 && (b == 18 || b == 19)) // benchmarking
+        || a >= 224 // multicast, reserved and broadcast
 }
 
 fn private_v6(ip: Ipv6Addr) -> bool {
-    if let Some(v4) = ip.to_ipv4_mapped() {
-        return private_v4(v4);
+    let s = ip.segments();
+    let embedded = |hi: u16, lo: u16| {
+        let [a, b] = hi.to_be_bytes();
+        let [c, d] = lo.to_be_bytes();
+        Ipv4Addr::new(a, b, c, d)
+    };
+    // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96) addresses.
+    if s[..5] == [0; 5] && (s[5] == 0xffff || s[5] == 0) {
+        return ip.is_loopback() || ip.is_unspecified() || private_v4(embedded(s[6], s[7]));
     }
-    let first = ip.segments()[0];
-    ip.is_loopback()
-        || ip.is_unspecified()
-        || (first & 0xfe00) == 0xfc00
-        || (first & 0xffc0) == 0xfe80
+    // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) carry an IPv4 address.
+    if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0; 4] {
+        return private_v4(embedded(s[6], s[7]));
+    }
+    if s[0] == 0x2002 {
+        return private_v4(embedded(s[1], s[2]));
+    }
+    (s[0] & 0xfe00) == 0xfc00 // unique local
+        || (s[0] & 0xffc0) == 0xfe80 // link local
+        || (s[0] & 0xffc0) == 0xfec0 // site local
+        || (s[0] & 0xff00) == 0xff00 // multicast
+        || (s[0] == 0x100 && s[1..4] == [0; 3]) // discard
 }
 
 /// An IPv4 address as browsers read one: `127.1`, `2130706433` and
@@ -233,6 +287,243 @@ fn percent_decode(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Reading parts. The sanitiser fails closed: a part it must look at but
+// cannot read refuses the document rather than passing it through unseen.
+
+/// A part's text, read as Office reads it: UTF-8, or UTF-16 with or without
+/// a byte-order mark. Its XML declaration is made to say UTF-8, since that is
+/// what any rewritten part is. `None` when the part does not exist.
+fn read_part(entries: &[Entry], name: &str) -> Result<Option<String>, TemplateError> {
+    let Some(e) = entries.iter().find(|e| e.name == name) else {
+        return Ok(None);
+    };
+    decode(&e.data).map(Some).ok_or_else(|| {
+        TemplateError::new(format!(
+            "{name}: the part is neither UTF-8 nor UTF-16 text, so it cannot be checked \
+             for macros, objects and links; the document is refused"
+        ))
+    })
+}
+
+fn decode(b: &[u8]) -> Option<String> {
+    let utf16 = |le: bool, rest: &[u8]| -> Option<String> {
+        let (pairs, odd) = rest.as_chunks::<2>();
+        if !odd.is_empty() {
+            return None;
+        }
+        let units: Vec<u16> = pairs
+            .iter()
+            .map(|c| {
+                if le {
+                    u16::from_le_bytes(*c)
+                } else {
+                    u16::from_be_bytes(*c)
+                }
+            })
+            .collect();
+        String::from_utf16(&units).ok()
+    };
+    let text = if let Some(rest) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        String::from_utf8(rest.to_vec()).ok()?
+    } else if let Some(rest) = b.strip_prefix(&[0xFF, 0xFE]) {
+        utf16(true, rest)?
+    } else if let Some(rest) = b.strip_prefix(&[0xFE, 0xFF]) {
+        utf16(false, rest)?
+    } else if b.starts_with(&[b'<', 0]) {
+        utf16(true, b)?
+    } else if b.starts_with(&[0, b'<']) {
+        utf16(false, b)?
+    } else {
+        String::from_utf8(b.to_vec()).ok()?
+    };
+    Some(declare_utf8(text))
+}
+
+static ENCODING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^(<\?xml[^>]*?encoding\s*=\s*)("[^"]*"|'[^']*')"#).unwrap());
+
+fn declare_utf8(text: String) -> String {
+    match ENCODING_RE.captures(&text) {
+        Some(c) if !c[2].eq_ignore_ascii_case("\"utf-8\"") => {
+            let end = c.get(0).map_or(0, |m| m.end());
+            format!("{}\"UTF-8\"{}", &c[1], &text[end..])
+        }
+        _ => text,
+    }
+}
+
+/// The namespaces the sanitiser recognises markup by, with the prefixes
+/// Office and LibreOffice always give them. Elements are matched by these
+/// qualified names, so a part that binds one of these namespaces to another
+/// prefix, or one of these prefixes to another namespace, is refused: it
+/// would otherwise hide a macro or link under a name that is not looked for.
+/// The template engine reads the same fixed prefixes.
+const KNOWN_NAMESPACES: &[(&str, &str)] = &[
+    (
+        "",
+        "http://schemas.openxmlformats.org/package/2006/relationships",
+    ),
+    (
+        "",
+        "http://schemas.openxmlformats.org/package/2006/content-types",
+    ),
+    (
+        "",
+        "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+    ),
+    ("", "http://purl.oclc.org/ooxml/spreadsheetml/main"),
+    (
+        "r",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    ),
+    (
+        "r",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships",
+    ),
+    (
+        "w",
+        "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    ),
+    ("w", "http://purl.oclc.org/ooxml/wordprocessingml/main"),
+    ("a", "http://schemas.openxmlformats.org/drawingml/2006/main"),
+    ("a", "http://purl.oclc.org/ooxml/drawingml/main"),
+    (
+        "p",
+        "http://schemas.openxmlformats.org/presentationml/2006/main",
+    ),
+    ("p", "http://purl.oclc.org/ooxml/presentationml/main"),
+    ("v", "urn:schemas-microsoft-com:vml"),
+    ("o", "urn:schemas-microsoft-com:office:office"),
+    ("office", "urn:oasis:names:tc:opendocument:xmlns:office:1.0"),
+    ("text", "urn:oasis:names:tc:opendocument:xmlns:text:1.0"),
+    ("table", "urn:oasis:names:tc:opendocument:xmlns:table:1.0"),
+    ("draw", "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"),
+    ("style", "urn:oasis:names:tc:opendocument:xmlns:style:1.0"),
+    (
+        "svg",
+        "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
+    ),
+    ("script", "urn:oasis:names:tc:opendocument:xmlns:script:1.0"),
+    (
+        "presentation",
+        "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0",
+    ),
+    (
+        "manifest",
+        "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0",
+    ),
+    ("xlink", "http://www.w3.org/1999/xlink"),
+];
+
+static XMLNS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\sxmlns(?::([^\s=/>]+))?\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap()
+});
+
+/// Refuses a part whose namespace declarations would let markup hide from
+/// the names the sanitiser looks for.
+fn check_namespaces(part: &str, src: &str) -> Result<(), TemplateError> {
+    for c in XMLNS_RE.captures_iter(src) {
+        let prefix = c.get(1).map_or("", |m| m.as_str());
+        let raw = c.get(2).or(c.get(3)).map_or("", |m| m.as_str());
+        let uri = xml::unescape(raw);
+        let uri = uri.trim();
+        let wanted: Vec<&str> = KNOWN_NAMESPACES
+            .iter()
+            .filter(|(_, u)| *u == uri)
+            .map(|(p, _)| *p)
+            .collect();
+        let uris: Vec<&str> = KNOWN_NAMESPACES
+            .iter()
+            .filter(|(p, _)| !p.is_empty() && *p == prefix)
+            .map(|(_, u)| *u)
+            .collect();
+        let bad_uri = !wanted.is_empty() && !wanted.contains(&prefix);
+        let bad_prefix = !uris.is_empty() && !uris.contains(&uri);
+        if bad_uri || bad_prefix {
+            let shown = if prefix.is_empty() {
+                "the default namespace".to_string()
+            } else {
+                format!("the prefix \"{prefix}\"")
+            };
+            return Err(TemplateError::new(format!(
+                "{part}: {shown} is bound to {uri}, which Office and LibreOffice never write; \
+                 the sanitiser reads the standard prefixes only, so the document is refused"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A part read and checked: its text, decoded, with standard prefixes.
+fn checked_part(entries: &[Entry], name: &str) -> Result<Option<String>, TemplateError> {
+    let Some(src) = read_part(entries, name)? else {
+        return Ok(None);
+    };
+    check_namespaces(name, &src)?;
+    Ok(Some(src))
+}
+
+/// Refuses a package with two entries whose names differ only in case:
+/// OPC part names are case-insensitive, so which one a reader takes is not
+/// known, and the sanitiser could clean the other.
+fn check_case(entries: &[Entry]) -> Result<(), TemplateError> {
+    let mut seen: HashSet<String> = HashSet::new();
+    for e in entries {
+        if !seen.insert(e.name.to_ascii_lowercase()) {
+            return Err(TemplateError::new(format!(
+                "{}: two parts have this name in different cases; the document is refused",
+                e.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The entry with this name, compared without case.
+fn entry_name(entries: &[Entry], name: &str) -> Option<String> {
+    entries
+        .iter()
+        .find(|e| e.name.eq_ignore_ascii_case(name))
+        .map(|e| e.name.clone())
+}
+
+/// `(type, target, external)` of each relationship in a relationships file,
+/// internal targets resolved against `base` and in lower case.
+fn relationships(
+    entries: &[Entry],
+    rels: &str,
+    base: &str,
+) -> Result<Vec<(String, String, bool)>, TemplateError> {
+    let Some(src) = checked_part(entries, rels)? else {
+        return Ok(Vec::new());
+    };
+    let nodes = xml::parse(&src).map_err(|e| broken(rels, e))?;
+    let Some(root) = xml::root(&nodes) else {
+        return Ok(Vec::new());
+    };
+    Ok(root
+        .children_named("Relationship")
+        .filter_map(|r| {
+            let ty = r.attr("Type")?;
+            let target = r.attr("Target")?;
+            let external = r
+                .attr("TargetMode")
+                .is_some_and(|m| m.eq_ignore_ascii_case("External"));
+            let target = if external {
+                target
+            } else {
+                package::resolve(base, &target).to_ascii_lowercase()
+            };
+            Some((ty, target, external))
+        })
+        .collect())
+}
+
+fn is_rels(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".rels")
+}
+
+// ---------------------------------------------------------------------------
 // OOXML.
 
 const VBA_TYPES: &[&str] = &[
@@ -283,18 +574,225 @@ const MACRO_MAIN_TYPES: &[(&str, &str)] = &[
 ];
 const VBA_CONTENT_TYPE: &str = "application/vnd.ms-office.vbaProject";
 
-static EXTERNAL_REF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\d+\]").unwrap());
+/// A reference into a linked workbook, `[1]Sheet1!A1`, as XLSX stores one.
+/// A table reference such as `Table1[[#This Row],[2019]]` is followed by `]`
+/// or `:` and is not one.
+static EXTERNAL_REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\d+\]([^\]:]|$)").unwrap());
+/// A reference into another file in ODF: `['file:///x.ods'#$Sheet1.A1]`.
+static ODF_EXTERNAL_REF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"'[^']*'#").unwrap());
+/// Functions that reach outside the file or run code.
+static OUTSIDE_FN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(^|[^A-Za-z0-9_.])(WEBSERVICE|RTD|CALL|REGISTER|REGISTER\.ID|EXEC|DDE|IMPORTDATA|IMPORTXML|IMPORTHTML|IMPORTFEED|IMPORTRANGE)\s*\(").unwrap()
+});
+/// A DDE reference, `cmd|'/c calc'!A0`: the pipe appears nowhere else
+/// outside strings.
+static DDE_REF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\|").unwrap());
 static HYPERLINK_FN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?i)HYPERLINK\(\s*"([^"]*)""#).unwrap());
-static FIELD_URL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?i)^\s*HYPERLINK\s+"([^"]*)""#).unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)(^|[^A-Za-z0-9_.])HYPERLINK\s*\(").unwrap());
+static STRING_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""(?:[^"]|"")*""#).unwrap());
+static LITERAL_ARG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^\s*"((?:[^"]|"")*)"\s*[,;)]"#).unwrap());
+
+/// Why a formula must go, if it must. Function names are looked for outside
+/// string literals; a `HYPERLINK` passes only with a plain, public literal.
+fn formula_threat(formula: &str, keep: Keep) -> Option<Why> {
+    let code = STRING_RE.replace_all(formula, "\"\"");
+    if !keep.external_links
+        && (EXTERNAL_REF_RE.is_match(&code)
+            || ODF_EXTERNAL_REF_RE.is_match(formula)
+            || OUTSIDE_FN_RE.is_match(&code)
+            || DDE_REF_RE.is_match(&code))
+    {
+        return Some(Why::External);
+    }
+    if !keep.private_links {
+        for m in HYPERLINK_FN_RE.find_iter(&code) {
+            // The same place in the original, where the literal still is.
+            let rest = &formula[m.end()..];
+            match LITERAL_ARG_RE.captures(rest) {
+                Some(c) if !is_private_url(&c[1].replace("\"\"", "\"")) => {}
+                _ => return Some(Why::Private),
+            }
+        }
+    }
+    None
+}
+
+/// Why a Word field must go, if it must. `nested` says the instruction held
+/// another field, so its target is computed and cannot be checked.
+fn field_threat(instr: &str, nested: bool, keep: Keep) -> Option<Why> {
+    let instr = instr.trim();
+    let word: String = instr
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != '"')
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match word.as_str() {
+        "HYPERLINK" if !keep.private_links => {
+            if nested {
+                return Some(Why::Private);
+            }
+            let target = field_argument(&instr[word.len()..]);
+            match target {
+                Some(t) if is_private_url(&t) => Some(Why::Private),
+                _ => None,
+            }
+        }
+        "INCLUDEPICTURE" | "INCLUDETEXT" | "INCLUDE" | "IMPORT" | "LINK" | "DDE" | "DDEAUTO"
+            if !keep.external_links =>
+        {
+            Some(Why::External)
+        }
+        _ => None,
+    }
+}
+
+/// The first argument of a field that is not a switch, quoted or bare.
+fn field_argument(rest: &str) -> Option<String> {
+    let mut chars = rest.trim_start().chars().peekable();
+    loop {
+        match chars.peek()? {
+            '"' => {
+                chars.next();
+                return Some(chars.take_while(|c| *c != '"').collect());
+            }
+            '\\' => {
+                // A switch and, for `\l`, `\o` and the like, its argument:
+                // a bookmark or tip, not the target.
+                chars.next();
+                let _: String = chars.by_ref().take_while(|c| !c.is_whitespace()).collect();
+                while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                    chars.next();
+                }
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    let _: String = chars.by_ref().take_while(|c| *c != '"').collect();
+                }
+            }
+            c if c.is_whitespace() => {
+                chars.next();
+            }
+            _ => return Some(chars.take_while(|c| !c.is_whitespace()).collect()),
+        }
+    }
+}
+
+/// Takes the complex fields `field_threat` picks out of a Word part: the
+/// field characters and instruction runs go, the result runs stay. Fields
+/// nested in the instruction go with it. Runs are only emptied, never
+/// removed, so the paths found first stay good.
+fn complex_fields(nodes: &mut [Node], keep: Keep) -> Vec<Why> {
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    collect_runs(nodes, &mut Vec::new(), &mut runs);
+    struct Field {
+        begin: (usize, usize),
+        separate: Option<(usize, usize)>,
+        code: String,
+        nested: bool,
+    }
+    /// A child of a run: `(run, child)` indexes.
+    type At = (usize, usize);
+    let mut open: Vec<Field> = Vec::new();
+    // `(from, to, end)` positions to clear for each field that must go.
+    let mut doomed: Vec<(At, At, At)> = Vec::new();
+    let mut found = Vec::new();
+    for (ri, path) in runs.iter().enumerate() {
+        let Some(run) = xml::elem_at(nodes, path) else {
+            continue;
+        };
+        for (ci, child) in run.children.iter().enumerate() {
+            let Node::Elem(c) = child else { continue };
+            match c.name.as_str() {
+                "w:fldChar" => match c.attr("w:fldCharType").as_deref() {
+                    Some("begin") => {
+                        if let Some(top) = open.last_mut() {
+                            if top.separate.is_none() {
+                                top.nested = true;
+                            }
+                        }
+                        open.push(Field {
+                            begin: (ri, ci),
+                            separate: None,
+                            code: String::new(),
+                            nested: false,
+                        });
+                    }
+                    Some("separate") => {
+                        if let Some(top) = open.last_mut() {
+                            top.separate.get_or_insert((ri, ci));
+                        }
+                    }
+                    Some("end") => {
+                        if let Some(f) = open.pop() {
+                            if let Some(why) = field_threat(&f.code, f.nested, keep) {
+                                found.push(why);
+                                doomed.push((f.begin, f.separate.unwrap_or((ri, ci)), (ri, ci)));
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                "w:instrText" => {
+                    if let Some(top) = open.last_mut() {
+                        if top.separate.is_none() {
+                            top.code.push_str(&c.text_content());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let clear = |at: (usize, usize)| {
+        doomed
+            .iter()
+            .any(|(from, to, end)| (at >= *from && at <= *to) || at == *end)
+    };
+    // Last first: a run inside a text box sits under an earlier run, and
+    // emptying that one first would move it.
+    for (ri, path) in runs.iter().enumerate().rev() {
+        let Some(run) = xml::elem_at_mut(nodes, path) else {
+            continue;
+        };
+        let mut ci = 0;
+        run.children.retain(|n| {
+            let here = (ri, ci);
+            ci += 1;
+            let keep_it = matches!(n, Node::Elem(e) if e.name == "w:rPr") || !clear(here);
+            keep_it || matches!(n, Node::Text(_))
+        });
+    }
+    found
+}
+
+/// Paths of every `w:r`, in document order.
+fn collect_runs(nodes: &[Node], path: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
+    for (i, n) in nodes.iter().enumerate() {
+        if let Node::Elem(e) = n {
+            path.push(i);
+            if e.name == "w:r" {
+                out.push(path.clone());
+            }
+            collect_runs(&e.children, path, out);
+            path.pop();
+        }
+    }
+}
 
 /// The part a relationships file belongs to: `word/_rels/document.xml.rels`
 /// is `word/document.xml`'s, `_rels/.rels` the package's (an empty name).
+/// Part names are compared without case, as OPC says.
 fn source_of(rels: &str) -> Option<String> {
     let (dir, file) = rels.rsplit_once('/')?;
-    let file = file.strip_suffix(".rels")?;
-    let dir = dir.strip_suffix("_rels")?.trim_end_matches('/');
+    if file.len() < 5 || !file[file.len() - 5..].eq_ignore_ascii_case(".rels") {
+        return None;
+    }
+    let file = &file[..file.len() - 5];
+    if dir.len() < 5 || !dir[dir.len() - 5..].eq_ignore_ascii_case("_rels") {
+        return None;
+    }
+    let dir = dir[..dir.len() - 5].trim_end_matches('/');
     Some(if dir.is_empty() {
         file.to_string()
     } else {
@@ -310,9 +808,18 @@ fn last_segment(ty: &str) -> &str {
     ty.rsplit('/').next().unwrap_or(ty)
 }
 
-/// Why a relationship must go, if it must.
+/// Relationship types the sanitiser cannot clean safely, so a package that
+/// holds one is refused unless the caller keeps that kind: Excel 4.0 macro
+/// and dialog sheets (removing one renumbers the sheets formulas point at),
+/// and data connections with their query tables.
+const REFUSED_MACRO_TYPES: &[&str] = &["xlmacrosheet", "xlintlmacrosheet", "dialogsheet"];
+const REFUSED_LINK_TYPES: &[&str] = &["connections", "querytable"];
+
+/// Why a relationship must go, if it must. Types are compared without case.
 fn classify(ty: &str, target: &str, external: bool, source: &str, keep: Keep) -> Option<Why> {
-    let kind = last_segment(ty);
+    let kind = last_segment(ty).to_ascii_lowercase();
+    let kind = kind.as_str();
+    let source = source.to_ascii_lowercase();
     if external {
         if kind == "hyperlink" {
             // LibreOffice writes a link that runs a Basic macro as a hyperlink.
@@ -323,14 +830,16 @@ fn classify(ty: &str, target: &str, external: bool, source: &str, keep: Keep) ->
         }
         return (!keep.external_links).then_some(Why::External);
     }
-    if kind == "externalLink" {
+    if kind == "externallink" {
         return (!keep.external_links).then_some(Why::External);
     }
-    if VBA_TYPES.contains(&kind) {
+    if VBA_TYPES.iter().any(|t| t.eq_ignore_ascii_case(kind)) {
         return (!keep.macros).then_some(Why::Macro);
     }
     // A chart's own workbook is its data, not an object on the page.
-    if OBJECT_TYPES.contains(&kind) && !(kind == "package" && source.contains("/charts/")) {
+    if OBJECT_TYPES.iter().any(|t| t.eq_ignore_ascii_case(kind))
+        && !(kind == "package" && source.contains("/charts/"))
+    {
         return (!keep.objects).then_some(Why::Object);
     }
     None
@@ -348,29 +857,34 @@ fn ooxml(
     keep: Keep,
     removed: &mut Removed,
 ) -> Result<(), TemplateError> {
+    check_case(entries)?;
     let mut ctx = Ooxml {
         entries,
         keep,
         removed,
     };
     // 1. Relationships: drop those that must go, noting their ids and targets.
+    // Every relationships file is read and checked, whatever its case, and
+    // one that cannot be read refuses the document.
     let mut lost: HashMap<String, HashMap<String, Why>> = HashMap::new();
     let mut doomed: BTreeSet<String> = BTreeSet::new();
-    let mut external_data = false;
     let mut dropped: Vec<(String, Why)> = Vec::new();
+    let mut refused: Option<String> = None;
     let rels_files: Vec<String> = ctx
         .entries
         .iter()
-        .filter(|e| e.name.ends_with(".rels"))
+        .filter(|e| is_rels(&e.name))
         .map(|e| e.name.clone())
         .collect();
     for rels in &rels_files {
+        let Some(src) = checked_part(ctx.entries, rels)? else {
+            continue;
+        };
         let Some(source) = source_of(rels) else {
             continue;
         };
-        let Some(src) = package::text_of(ctx.entries, rels) else {
-            continue;
-        };
+        // The source as the package names it, so that edits reach it.
+        let source = entry_name(ctx.entries, &source).unwrap_or(source);
         let mut nodes = xml::parse(&src).map_err(|e| broken(rels, e))?;
         let Some(root) = xml::root_mut(&mut nodes) else {
             continue;
@@ -387,49 +901,71 @@ fn ooxml(
             else {
                 return true;
             };
+            let kind = last_segment(&ty).to_ascii_lowercase();
+            if (!keep.macros && REFUSED_MACRO_TYPES.contains(&kind.as_str()))
+                || (!keep.external_links && REFUSED_LINK_TYPES.contains(&kind.as_str()))
+            {
+                refused.get_or_insert(format!(
+                    "{rels}: the package holds a {} relationship, which the sanitiser cannot \
+                     take out safely; the document is refused",
+                    last_segment(&ty)
+                ));
+            }
             let external = r
                 .attr("TargetMode")
                 .is_some_and(|m| m.eq_ignore_ascii_case("External"));
             let Some(why) = classify(&ty, &target, external, &source, keep) else {
                 return true;
             };
-            if last_segment(&ty) == "externalLink" {
-                external_data = true;
-            }
             dropped.push((source.clone(), why));
             lost.entry(source.clone()).or_default().insert(id, why);
             if !external {
-                doomed.insert(package::resolve(&base, &target));
+                doomed.insert(package::resolve(&base, &target).to_ascii_lowercase());
             }
             changed = true;
             false
         });
+        if let Some(message) = refused.take() {
+            return Err(TemplateError::new(message));
+        }
         if changed {
             package::set(ctx.entries, rels, xml::to_xml(&nodes).into_bytes());
         }
     }
+    // A macro project nothing points at still goes, found by name or type.
+    if !keep.macros {
+        for e in ctx.entries.iter() {
+            if e.name.to_ascii_lowercase().ends_with("vbaproject.bin") {
+                doomed.insert(e.name.to_ascii_lowercase());
+            }
+        }
+        doomed.extend(ctx.macro_parts()?);
+    }
 
     // 2. Parts nothing points at any more go, with what only they point at.
-    let gone = ctx.drop_parts(doomed);
+    let gone = ctx.drop_parts(doomed)?;
     // A part that went with another, such as an ActiveX control's binary,
     // is not counted again.
     for (source, why) in dropped {
-        if !gone.contains(&source) {
+        if !gone.contains(&source.to_ascii_lowercase()) {
             ctx.removed.count(why);
         }
     }
 
     // 3. Markup that named a dropped relationship.
-    let mut sources: Vec<&String> = lost.keys().filter(|s| !gone.contains(*s)).collect();
+    let mut sources: Vec<&String> = lost
+        .keys()
+        .filter(|s| !gone.contains(&s.to_ascii_lowercase()))
+        .collect();
     sources.sort();
     for source in sources {
         ctx.edit_part(source, &lost[source])?;
     }
-    if format == Format::Docx && !keep.private_links {
+    if format == Format::Docx && (!keep.private_links || !keep.external_links) {
         ctx.word_fields()?;
     }
-    if format == Format::Xlsx {
-        ctx.sheet_formulas(external_data)?;
+    if format == Format::Xlsx && (!keep.private_links || !keep.external_links) {
+        ctx.sheet_formulas()?;
     }
 
     // 4. Content types.
@@ -440,22 +976,30 @@ fn ooxml(
 impl Ooxml<'_> {
     /// Removes the doomed parts that no remaining relationship names, then
     /// whatever only those parts named, until nothing more goes.
-    fn drop_parts(&mut self, mut doomed: BTreeSet<String>) -> HashSet<String> {
+    /// Part names in the sets are lower case, since OPC compares them so.
+    fn drop_parts(
+        &mut self,
+        mut doomed: BTreeSet<String>,
+    ) -> Result<HashSet<String>, TemplateError> {
         let mut gone: HashSet<String> = HashSet::new();
         loop {
             // Targets named from parts still there. A doomed part's own
             // targets join the doomed only once it is gone.
             let mut named: HashSet<String> = HashSet::new();
-            for e in self.entries.iter().filter(|e| e.name.ends_with(".rels")) {
-                let Some(source) = source_of(&e.name) else {
+            let rels_files: Vec<String> = self
+                .entries
+                .iter()
+                .filter(|e| is_rels(&e.name))
+                .map(|e| e.name.clone())
+                .collect();
+            for rels in rels_files {
+                let Some(source) = source_of(&rels) else {
                     continue;
                 };
-                if gone.contains(&source) {
+                if gone.contains(&source.to_ascii_lowercase()) {
                     continue;
                 }
-                for (_, _, target) in
-                    package::relationships(self.entries, &e.name, base_of(&source))
-                {
+                for (_, target, _) in relationships(self.entries, &rels, base_of(&source))? {
                     named.insert(target);
                 }
             }
@@ -469,27 +1013,33 @@ impl Ooxml<'_> {
             }
             for part in now {
                 let rels = package::rels_name(&part);
-                for (_, ty, target) in package::relationships(self.entries, &rels, base_of(&part)) {
-                    // A part's own hyperlinks are not parts.
-                    if self.entries.iter().any(|e| e.name == target)
-                        && last_segment(&ty) != "hyperlink"
+                if let Some(rels_entry) = entry_name(self.entries, &rels) {
+                    for (ty, target, external) in
+                        relationships(self.entries, &rels_entry, base_of(&part))?
                     {
-                        doomed.insert(target);
+                        // A part's own hyperlinks are not parts.
+                        if !external && !last_segment(&ty).eq_ignore_ascii_case("hyperlink") {
+                            doomed.insert(target);
+                        }
                     }
                 }
-                self.entries.retain(|e| e.name != part && e.name != rels);
+                let rels = rels.to_ascii_lowercase();
+                self.entries.retain(|e| {
+                    let lower = e.name.to_ascii_lowercase();
+                    lower != part && lower != rels
+                });
                 gone.insert(part.clone());
                 gone.insert(rels);
             }
         }
-        gone
+        Ok(gone)
     }
 
     fn edit_part(&mut self, part: &str, ids: &HashMap<String, Why>) -> Result<(), TemplateError> {
-        if !part.ends_with(".xml") {
+        if !part.to_ascii_lowercase().ends_with(".xml") {
             return Ok(());
         }
-        let Some(src) = package::text_of(self.entries, part) else {
+        let Some(src) = checked_part(self.entries, part)? else {
             return Ok(());
         };
         let mut nodes = xml::parse(&src).map_err(|e| broken(part, e))?;
@@ -528,105 +1078,95 @@ impl Ooxml<'_> {
         Ok(())
     }
 
-    /// `HYPERLINK` fields written as simple fields keep their text and lose
-    /// the field when they point into a private network.
+    /// Word fields that link out or pull content in: `HYPERLINK` to a private
+    /// address, and `INCLUDEPICTURE`, `INCLUDETEXT`, `LINK`, `DDE` and
+    /// `DDEAUTO`, whether written as simple fields or as complex ones (field
+    /// characters around instruction runs). The field goes and its last
+    /// result stays as plain text.
     fn word_fields(&mut self) -> Result<(), TemplateError> {
         let names: Vec<String> = self
             .entries
             .iter()
             .filter(|e| {
-                e.name.starts_with("word/")
-                    && e.name.ends_with(".xml")
-                    && contains(&e.data, b"w:fldSimple")
+                let lower = e.name.to_ascii_lowercase();
+                lower.starts_with("word/") && lower.ends_with(".xml")
             })
             .map(|e| e.name.clone())
             .collect();
+        let keep = self.keep;
         for name in names {
-            let Some(src) = package::text_of(self.entries, &name) else {
+            let Some(src) = checked_part(self.entries, &name)? else {
                 continue;
             };
+            if !src.contains("w:fldSimple") && !src.contains("w:fldChar") {
+                continue;
+            }
             let mut nodes = xml::parse(&src).map_err(|e| broken(&name, e))?;
-            let mut count = 0;
+            let mut found: Vec<Why> = Vec::new();
             unwrap_where(&mut nodes, &mut |e| {
-                let private = e.name == "w:fldSimple"
-                    && e.attr("w:instr").is_some_and(|i| {
-                        FIELD_URL_RE
-                            .captures(&i)
-                            .is_some_and(|c| is_private_url(&c[1]))
-                    });
-                count += usize::from(private);
-                private
+                if e.name != "w:fldSimple" {
+                    return false;
+                }
+                let why = e
+                    .attr("w:instr")
+                    .and_then(|i| field_threat(&i, false, keep));
+                found.extend(why);
+                why.is_some()
             });
-            if count > 0 {
-                self.removed.private_links += count;
+            found.extend(complex_fields(&mut nodes, keep));
+            if !found.is_empty() {
+                for why in found {
+                    self.removed.count(why);
+                }
                 package::set(self.entries, &name, xml::to_xml(&nodes).into_bytes());
             }
         }
         Ok(())
     }
 
-    /// A formula that reads a linked workbook, once the link is gone, or one
-    /// that builds a private hyperlink, loses its formula. The cell keeps
-    /// the value it last showed, where the package still holds one (rendering
-    /// drops cached values so that Excel recomputes them).
-    fn sheet_formulas(&mut self, external_data: bool) -> Result<(), TemplateError> {
-        let check_links = !self.keep.private_links;
-        if !external_data && !check_links {
-            return Ok(());
-        }
+    /// Formulas that reach outside the workbook keep only their last value
+    /// (rendering drops cached values so that Excel recomputes them, so a
+    /// rendered cell is left empty): references into linked workbooks,
+    /// `WEBSERVICE`, `RTD`, `CALL` and `REGISTER`, DDE references, and
+    /// `HYPERLINK` to a private address or to anything but a plain text
+    /// literal, which could build one.
+    fn sheet_formulas(&mut self) -> Result<(), TemplateError> {
+        let keep = self.keep;
         let names: Vec<String> = self
             .entries
             .iter()
             .filter(|e| {
-                (e.name.starts_with("xl/worksheets/") && e.name.ends_with(".xml")
-                    || e.name == "xl/workbook.xml")
-                    && (external_data || contains(&e.data, b"HYPERLINK("))
+                let lower = e.name.to_ascii_lowercase();
+                lower.starts_with("xl/") && lower.ends_with(".xml") && !lower.contains("/_rels/")
             })
             .map(|e| e.name.clone())
             .collect();
         for name in names {
-            let Some(src) = package::text_of(self.entries, &name) else {
+            let Some(src) = checked_part(self.entries, &name)? else {
                 continue;
             };
+            if !src.contains("<f") && !src.contains("<definedName") {
+                continue;
+            }
             let mut nodes = xml::parse(&src).map_err(|e| broken(&name, e))?;
             let mut shared_gone: HashSet<String> = HashSet::new();
-            let mut count = (0, 0);
-            let doomed = |text: &str| -> Option<Why> {
-                if external_data && EXTERNAL_REF_RE.is_match(text) {
-                    return Some(Why::External);
-                }
-                if check_links
-                    && HYPERLINK_FN_RE
-                        .captures_iter(text)
-                        .any(|c| is_private_url(&c[1]))
-                {
-                    return Some(Why::Private);
-                }
-                None
-            };
+            let mut found: Vec<Why> = Vec::new();
             // Shared formulas: the first cell holds the text, the others its
             // index, so the others go with it.
             remove_where(&mut nodes, &mut |e| {
                 if e.name != "f" && e.name != "definedName" {
                     return false;
                 }
-                let why = doomed(&e.text_content());
-                match why {
-                    Some(why) => {
-                        if e.attr("t").as_deref() == Some("shared") {
-                            if let Some(si) = e.attr("si") {
-                                shared_gone.insert(si);
-                            }
-                        }
-                        if why == Why::External {
-                            count.0 += 1;
-                        } else {
-                            count.1 += 1;
-                        }
-                        true
+                let Some(why) = formula_threat(&e.text_content(), keep) else {
+                    return false;
+                };
+                if e.attr("t").as_deref() == Some("shared") {
+                    if let Some(si) = e.attr("si") {
+                        shared_gone.insert(si);
                     }
-                    None => false,
                 }
+                found.push(why);
+                true
             });
             if !shared_gone.is_empty() {
                 remove_where(&mut nodes, &mut |e| {
@@ -635,12 +1175,11 @@ impl Ooxml<'_> {
                         && e.attr("si").is_some_and(|si| shared_gone.contains(&si))
                 });
             }
-            if count != (0, 0) {
-                // Counted with the link they used, not again.
-                self.removed.private_links += count.1;
-                if name == "xl/workbook.xml" {
-                    remove_empty(&mut nodes, &["definedNames"]);
+            if !found.is_empty() {
+                for why in found {
+                    self.removed.count(why);
                 }
+                remove_empty(&mut nodes, &["definedNames"]);
                 package::set(self.entries, &name, xml::to_xml(&nodes).into_bytes());
             }
         }
@@ -648,39 +1187,45 @@ impl Ooxml<'_> {
     }
 
     fn content_types(&mut self, gone: &HashSet<String>) -> Result<(), TemplateError> {
-        const TYPES: &str = "[Content_Types].xml";
-        let Some(src) = package::text_of(self.entries, TYPES) else {
+        let Some(types) = entry_name(self.entries, "[Content_Types].xml") else {
             return Ok(());
         };
-        let mut nodes = xml::parse(&src).map_err(|e| broken(TYPES, e))?;
+        let Some(src) = checked_part(self.entries, &types)? else {
+            return Ok(());
+        };
+        let mut nodes = xml::parse(&src).map_err(|e| broken(&types, e))?;
         let Some(root) = xml::root_mut(&mut nodes) else {
             return Ok(());
         };
         let before = xml::to_xml(std::slice::from_ref(&Node::Elem(root.clone())));
-        let names: HashSet<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
+        let names: HashSet<String> = self
+            .entries
+            .iter()
+            .map(|e| e.name.to_ascii_lowercase())
+            .collect();
         let overridden: HashSet<String> = root
             .children_named("Override")
             .filter_map(|o| o.attr("PartName"))
-            .map(|p| p.trim_start_matches('/').to_string())
+            .map(|p| p.trim_start_matches('/').to_ascii_lowercase())
             .collect();
         let macros_gone = !self.keep.macros;
         root.children.retain(|n| {
             let Node::Elem(e) = n else { return true };
             match e.name.as_str() {
                 "Override" => e.attr("PartName").is_none_or(|p| {
-                    let p = p.trim_start_matches('/');
-                    !gone.contains(p) && names.contains(p)
+                    let p = p.trim_start_matches('/').to_ascii_lowercase();
+                    !gone.contains(&p) && names.contains(&p)
                 }),
                 // A default for macro projects stays only while a part uses it.
                 "Default"
                     if macros_gone
-                        && e.attr("ContentType").as_deref() == Some(VBA_CONTENT_TYPE) =>
+                        && e.attr("ContentType")
+                            .is_some_and(|t| t.trim().eq_ignore_ascii_case(VBA_CONTENT_TYPE)) =>
                 {
                     let ext = e.attr("Extension").unwrap_or_default().to_ascii_lowercase();
-                    names.iter().any(|n| {
-                        n.to_ascii_lowercase().ends_with(&format!(".{ext}"))
-                            && !overridden.contains(*n)
-                    })
+                    names
+                        .iter()
+                        .any(|n| n.ends_with(&format!(".{ext}")) && !overridden.contains(n))
                 }
                 _ => true,
             }
@@ -694,16 +1239,62 @@ impl Ooxml<'_> {
                 let Some(ct) = e.attr("ContentType") else {
                     continue;
                 };
-                if let Some((_, plain)) = MACRO_MAIN_TYPES.iter().find(|(m, _)| *m == ct) {
+                let ct = ct.trim();
+                if let Some((_, plain)) = MACRO_MAIN_TYPES
+                    .iter()
+                    .find(|(m, _)| m.eq_ignore_ascii_case(ct))
+                {
                     e.set_attr("ContentType", plain);
                 }
             }
         }
         let after = xml::to_xml(std::slice::from_ref(&Node::Elem(root.clone())));
         if before != after {
-            package::set(self.entries, TYPES, xml::to_xml(&nodes).into_bytes());
+            package::set(self.entries, &types, xml::to_xml(&nodes).into_bytes());
         }
         Ok(())
+    }
+
+    /// Parts the content types call macro projects, whatever their name.
+    fn macro_parts(&self) -> Result<Vec<String>, TemplateError> {
+        let Some(types) = entry_name(self.entries, "[Content_Types].xml") else {
+            return Ok(Vec::new());
+        };
+        let Some(src) = checked_part(self.entries, &types)? else {
+            return Ok(Vec::new());
+        };
+        let nodes = xml::parse(&src).map_err(|e| broken(&types, e))?;
+        let Some(root) = xml::root(&nodes) else {
+            return Ok(Vec::new());
+        };
+        let is_vba = |e: &Elem| {
+            e.attr("ContentType")
+                .is_some_and(|t| t.trim().eq_ignore_ascii_case(VBA_CONTENT_TYPE))
+        };
+        let mut out: Vec<String> = root
+            .children_named("Override")
+            .filter(|e| is_vba(e))
+            .filter_map(|e| e.attr("PartName"))
+            .map(|p| p.trim_start_matches('/').to_ascii_lowercase())
+            .collect();
+        let overridden: HashSet<String> = root
+            .children_named("Override")
+            .filter_map(|e| e.attr("PartName"))
+            .map(|p| p.trim_start_matches('/').to_ascii_lowercase())
+            .collect();
+        for d in root.children_named("Default").filter(|e| is_vba(e)) {
+            let ext = format!(
+                ".{}",
+                d.attr("Extension").unwrap_or_default().to_ascii_lowercase()
+            );
+            out.extend(
+                self.entries
+                    .iter()
+                    .map(|e| e.name.to_ascii_lowercase())
+                    .filter(|n| n.ends_with(&ext) && !overridden.contains(n)),
+            );
+        }
+        Ok(out)
     }
 }
 
@@ -876,10 +1467,6 @@ fn collect_named(e: &Elem, name: &str, out: &mut Vec<Node>) {
     }
 }
 
-fn contains(data: &[u8], needle: &[u8]) -> bool {
-    data.windows(needle.len()).any(|w| w == needle)
-}
-
 /// Removes every element `pred` picks, at any depth.
 fn remove_where(nodes: &mut Vec<Node>, pred: &mut dyn FnMut(&Elem) -> bool) {
     nodes.retain_mut(|n| match n {
@@ -940,17 +1527,30 @@ const KEPT_OBJECT_TYPES: &[&str] = &[
     "application/vnd.oasis.opendocument.formula",
 ];
 
+/// An `xlink:href` with what readers ignore taken out.
+fn clean_href(href: &str) -> String {
+    let s: String = href
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    s.trim_matches(|c: char| c <= ' ').to_string()
+}
+
 /// Whether an `xlink:href` in ODF points outside the package.
 fn outside(href: &str) -> bool {
-    let href = href.trim();
-    if href.starts_with("../") || href.starts_with('/') || href.starts_with("\\\\") {
+    let href = clean_href(href);
+    if href.starts_with("../")
+        || href.starts_with("..\\")
+        || href.starts_with('/')
+        || href.starts_with('\\')
+    {
         return true;
     }
     match href.find(':') {
         Some(colon) => {
             let scheme = &href[..colon];
             !scheme.is_empty()
-                && href[..colon]
+                && scheme
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
                 && !scheme.eq_ignore_ascii_case("vnd.sun.star.package")
@@ -960,47 +1560,80 @@ fn outside(href: &str) -> bool {
 }
 
 fn is_macro_url(href: &str) -> bool {
-    let h = href.trim().to_ascii_lowercase();
+    let h = clean_href(href).to_ascii_lowercase();
     h.starts_with("vnd.sun.star.script:") || h.starts_with("macro:")
 }
 
-fn package_path(href: &str) -> String {
-    let h = href.trim();
-    let h = h.strip_prefix("vnd.sun.star.package:").unwrap_or(h);
-    h.trim_start_matches("./").trim_end_matches('/').to_string()
+/// The package path an internal `xlink:href` names, from the directory of
+/// the part that holds it (`Object 1/` for an embedded object's content).
+fn package_path(base: &str, href: &str) -> String {
+    let h = clean_href(href);
+    let h = h.strip_prefix("vnd.sun.star.package:").unwrap_or(&h);
+    let h = h.trim_start_matches("./").trim_end_matches('/');
+    format!("{base}{h}")
+}
+
+/// Whether a path lies in a script library at any depth: `Basic/`,
+/// `Scripts/` or `Dialogs/`, in any case.
+fn in_script_dir(path: &str) -> bool {
+    path.split('/').rev().skip(1).any(|dir| {
+        SCRIPT_DIRS
+            .iter()
+            .any(|d| d.trim_end_matches('/').eq_ignore_ascii_case(dir))
+    })
 }
 
 fn odf(entries: &mut Vec<Entry>, keep: Keep, removed: &mut Removed) -> Result<(), TemplateError> {
     let mut gone: Vec<String> = Vec::new();
     if !keep.macros {
-        for dir in SCRIPT_DIRS {
-            if entries.iter().any(|e| e.name.starts_with(dir)) {
-                removed.macros += 1;
-                entries.retain(|e| !e.name.starts_with(dir));
-                gone.push(dir.trim_end_matches('/').to_string());
-            }
+        let dirs: BTreeSet<String> = entries
+            .iter()
+            .filter(|e| in_script_dir(&e.name))
+            .map(|e| e.name.clone())
+            .collect();
+        if !dirs.is_empty() {
+            removed.macros += 1;
+            entries.retain(|e| !dirs.contains(&e.name));
+            gone.extend(dirs);
         }
     }
-    let object_types = manifest_types(entries);
-    for part in ["content.xml", "styles.xml"] {
-        let Some(src) = package::text_of(entries, part) else {
+    let object_types = manifest_types(entries)?;
+    let kept_objects = verified_objects(entries, &object_types)?;
+    // The document's own parts and those of every embedded document left.
+    let parts: Vec<String> = entries
+        .iter()
+        .map(|e| e.name.clone())
+        .filter(|n| {
+            let file = n.rsplit('/').next().unwrap_or(n);
+            file == "content.xml" || file == "styles.xml"
+        })
+        .collect();
+    for part in parts {
+        if gone.iter().any(|g| part.starts_with(&format!("{g}/"))) {
+            continue;
+        }
+        let Some(src) = checked_part(entries, &part)? else {
             continue;
         };
         if !odf_needs_work(&src, keep) {
             continue;
         }
-        let mut nodes = xml::parse(&src).map_err(|e| broken(part, e))?;
+        let base = part
+            .rsplit_once('/')
+            .map_or(String::new(), |(d, _)| format!("{d}/"));
+        let mut nodes = xml::parse(&src).map_err(|e| broken(&part, e))?;
         let mut walk = OdfWalk {
             keep,
             removed: &mut *removed,
-            object_types: &object_types,
+            kept_objects: &kept_objects,
+            base,
             dropped: Vec::new(),
             changed: false,
         };
         walk.children(&mut nodes);
         let dropped = std::mem::take(&mut walk.dropped);
         if walk.changed {
-            package::set(entries, part, xml::to_xml(&nodes).into_bytes());
+            package::set(entries, &part, xml::to_xml(&nodes).into_bytes());
         }
         for path in dropped {
             let prefix = format!("{path}/");
@@ -1009,7 +1642,7 @@ fn odf(entries: &mut Vec<Entry>, keep: Keep, removed: &mut Removed) -> Result<()
         }
     }
     if !gone.is_empty() {
-        if let Some(src) = package::text_of(entries, MANIFEST) {
+        if let Some(src) = checked_part(entries, MANIFEST)? {
             let mut nodes = xml::parse(&src).map_err(|e| broken(MANIFEST, e))?;
             remove_where(&mut nodes, &mut |e| {
                 e.name == "manifest:file-entry"
@@ -1025,15 +1658,13 @@ fn odf(entries: &mut Vec<Entry>, keep: Keep, removed: &mut Removed) -> Result<()
     Ok(())
 }
 
-/// The media type the manifest gives each directory, such as `Object 1`.
-fn manifest_types(entries: &[Entry]) -> HashMap<String, String> {
+/// The media type the manifest gives each path, such as `Object 1`.
+fn manifest_types(entries: &[Entry]) -> Result<HashMap<String, String>, TemplateError> {
     let mut out = HashMap::new();
-    let Some(src) = package::text_of(entries, MANIFEST) else {
-        return out;
+    let Some(src) = checked_part(entries, MANIFEST)? else {
+        return Ok(out);
     };
-    let Ok(nodes) = xml::parse(&src) else {
-        return out;
-    };
+    let nodes = xml::parse(&src).map_err(|e| broken(MANIFEST, e))?;
     if let Some(root) = xml::root(&nodes) {
         for e in root.children_named("manifest:file-entry") {
             if let (Some(path), Some(ty)) =
@@ -1043,34 +1674,84 @@ fn manifest_types(entries: &[Entry]) -> HashMap<String, String> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
-static HREF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"xlink:href="([^"]*)""#).unwrap());
+const MATHML: &str = "http://www.w3.org/1998/Math/MathML";
+
+/// The embedded documents that are charts or formulas by what they hold, not
+/// only by what the manifest, which the template's author wrote, says: a
+/// chart's content has an `office:chart` body, a formula's root is MathML.
+fn verified_objects(
+    entries: &[Entry],
+    types: &HashMap<String, String>,
+) -> Result<HashSet<String>, TemplateError> {
+    let mut out = HashSet::new();
+    for (path, ty) in types {
+        let ty = ty.trim();
+        let chart = ty.eq_ignore_ascii_case(KEPT_OBJECT_TYPES[0]);
+        let formula = ty.eq_ignore_ascii_case(KEPT_OBJECT_TYPES[1]);
+        if !chart && !formula {
+            continue;
+        }
+        let Some(src) = checked_part(entries, &format!("{path}/content.xml"))? else {
+            continue;
+        };
+        let Ok(nodes) = xml::parse(&src) else {
+            continue;
+        };
+        let Some(root) = xml::root(&nodes) else {
+            continue;
+        };
+        let agrees = if chart {
+            root.name == "office:document-content"
+                && root
+                    .child("office:body")
+                    .is_some_and(|b| b.child("office:chart").is_some())
+                && root.child("office:body").is_some_and(|b| {
+                    b.children.iter().all(|n| match n {
+                        Node::Elem(e) => e.name == "office:chart",
+                        _ => true,
+                    })
+                })
+        } else {
+            let local = root.name.rsplit(':').next().unwrap_or(&root.name);
+            let key = match root.name.split_once(':') {
+                Some((p, _)) => format!("xmlns:{p}"),
+                None => "xmlns".to_string(),
+            };
+            local == "math" && root.attr(&key).as_deref() == Some(MATHML)
+        };
+        if agrees {
+            out.insert(path.clone());
+        }
+    }
+    Ok(out)
+}
 
 /// A cheap look for anything the walk would change, since most parts hold
-/// nothing of the kind and parsing a large one costs.
+/// nothing of the kind and parsing a large one costs. The part's prefixes
+/// were checked first, so these names are the only spellings.
 fn odf_needs_work(src: &str, keep: Keep) -> bool {
     let has = |s: &str| src.contains(s);
     (!keep.macros
         && (has("<office:scripts")
             || has("script:event-listener")
             || has("text:execute-macro")
-            || has("vnd.sun.star.script")
-            || has("macro:")))
+            || has("presentation:event-listener")
+            || has("xlink:href")))
         || (!keep.objects && (has("<draw:object") || has("<draw:applet") || has("<draw:plugin")))
-        || (!keep.external_links && has("dde-"))
-        || ((!keep.external_links || !keep.private_links)
-            && HREF_RE.captures_iter(src).any(|c| {
-                let href = xml::unescape(&c[1]).into_owned();
-                outside(&href)
-            }))
+        || (!keep.external_links && (has("dde") || has("xlink:href") || has("formula")))
+        || (!keep.private_links && (has("xlink:href") || has("formula")))
 }
 
 struct OdfWalk<'a> {
     keep: Keep,
     removed: &'a mut Removed,
-    object_types: &'a HashMap<String, String>,
+    /// Embedded documents shown to be charts or formulas.
+    kept_objects: &'a HashSet<String>,
+    /// The directory of the part being walked, for its relative links.
+    base: String,
     /// Package paths of objects taken out.
     dropped: Vec<String>,
     changed: bool,
@@ -1108,11 +1789,28 @@ impl OdfWalk<'_> {
         Action::Remove
     }
 
+    /// Formulas in sheets and text tables that reach outside the file lose
+    /// the formula and keep their value.
+    fn formulas(&mut self, e: &mut Elem) {
+        for attr in ["table:formula", "table:expression"] {
+            if let Some(f) = e.attr(attr) {
+                if let Some(why) = formula_threat(&f, self.keep) {
+                    self.removed.count(why);
+                    self.changed = true;
+                    e.remove_attr(attr);
+                }
+            }
+        }
+    }
+
     fn element(&mut self, e: &mut Elem) -> Action {
         let href = e.attr("xlink:href");
         let keep = self.keep;
         let name = e.name.clone();
         let name = name.as_str();
+        if !keep.external_links || !keep.private_links {
+            self.formulas(e);
+        }
         if !keep.macros {
             match name {
                 "office:scripts" | "script:event-listener" => return self.take(Why::Macro),
@@ -1139,17 +1837,13 @@ impl OdfWalk<'_> {
             let object = match name {
                 "draw:object-ole" | "draw:applet" | "draw:plugin" => true,
                 "draw:object" => href.as_deref().is_some_and(|h| {
-                    !outside(h)
-                        && !self
-                            .object_types
-                            .get(&package_path(h))
-                            .is_some_and(|t| KEPT_OBJECT_TYPES.contains(&t.as_str()))
+                    !outside(h) && !self.kept_objects.contains(&package_path(&self.base, h))
                 }),
                 _ => false,
             };
             if object {
                 if let Some(h) = href.as_deref().filter(|h| !outside(h)) {
-                    self.dropped.push(package_path(h));
+                    self.dropped.push(package_path(&self.base, h));
                 }
                 return self.take(Why::Object);
             }
@@ -1245,6 +1939,39 @@ mod tests {
             "FILE://server/share",
             "\\\\server\\share\\doc.docx",
             "smb://192.168.0.2/share",
+            // As a browser reads them: slashes, backslashes, controls.
+            "http:\\\\10.0.0.1\\admin",
+            "http:/10.0.0.1",
+            "http:10.0.0.1",
+            "https:\\/10.0.0.1",
+            "h\tttp://10.0.0.1",
+            "http://10.0.\n0.1",
+            "  http://10.0.0.1  ",
+            "HTTP://LocalHost",
+            "//10.0.0.1/x",
+            "\\\\?\\UNC\\server\\share",
+            "C:\\Users\\ada\\secret.docx",
+            "http://１２７.０.０.１/",
+            "http://0x0a.0.0.1",
+            "http://012.0.0.1",
+            "http://167772161",
+            // Ranges beyond the private ones.
+            "http://100.64.0.1",
+            "http://198.18.0.1",
+            "http://192.0.0.8",
+            "http://224.0.0.251",
+            "http://255.255.255.255",
+            "http://[::ffff:10.0.0.1]",
+            "http://[::ffff:a00:1]",
+            "http://[::10.0.0.1]",
+            "http://[64:ff9b::a00:1]",
+            "http://[2002:a00:1::]",
+            "http://[fec0::1]",
+            "http://[ff02::1]",
+            "http://[::]",
+            // What a browser cannot parse is not let through.
+            "http://1.2.3.4.5",
+            "http://[zz]/",
         ] {
             assert!(is_private_url(url), "{url} is private");
         }
@@ -1253,16 +1980,126 @@ mod tests {
             "http://172.32.0.1",
             "http://172.15.0.1",
             "http://11.0.0.1",
+            "http://100.128.0.1",
             "http://[2001:db8::1]",
+            "http://[::ffff:8.8.8.8]",
             "mailto:a@localhost",
+            "tel:+254700000000",
             "#bookmark",
             "doc.docx",
             "http://localhost.example.com",
             "http://192.169.0.1",
-            "http://1.2.3.4.5",
+            "https://example.com/?next=http://10.0.0.1",
         ] {
             assert!(!is_private_url(url), "{url} is public");
         }
+    }
+
+    #[test]
+    fn utf16_parts_are_read_and_unreadable_ones_refused() {
+        let text = "<?xml version=\"1.0\" encoding=\"UTF-16\"?><a>é</a>";
+        let mut le = vec![0xFF, 0xFE];
+        le.extend(text.encode_utf16().flat_map(|u| u.to_le_bytes()));
+        let mut be = vec![0xFE, 0xFF];
+        be.extend(text.encode_utf16().flat_map(|u| u.to_be_bytes()));
+        let no_bom: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        for bytes in [le, be, no_bom] {
+            assert_eq!(
+                decode(&bytes).unwrap(),
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><a>é</a>"
+            );
+        }
+        assert_eq!(decode(b"\xEF\xBB\xBF<a/>").unwrap(), "<a/>");
+        assert!(decode(b"<a>\xFF</a>").is_none());
+        let entries = vec![Entry {
+            name: "word/_rels/document.xml.rels".into(),
+            data: b"<a>\xFF</a>".to_vec(),
+            stored: false,
+        }];
+        let err = read_part(&entries, "word/_rels/document.xml.rels").unwrap_err();
+        assert!(err.message.contains("refused"), "{err}");
+    }
+
+    #[test]
+    fn namespaces_bound_to_other_prefixes_are_refused() {
+        let ok = "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:x14=\"urn:other\"/>";
+        assert!(check_namespaces("p", ok).is_ok());
+        for bad in [
+            "<pr:Relationships xmlns:pr=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>",
+            "<o2:document-content xmlns:o2=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\"/>",
+            "<document xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>",
+            "<w:document xmlns:w=\"urn:not-word\"/>",
+            "<a xmlns:xlink='http://www.w3.org/1999/xlink2'/>",
+            "<a><b xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/></a>",
+        ] {
+            let err = check_namespaces("p", bad).unwrap_err();
+            assert!(err.message.contains("refused"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn formulas_that_reach_outside_are_found() {
+        let none = Keep::default();
+        for (f, why) in [
+            ("[1]Sheet1!A1*2", Why::External),
+            ("SUM([2]S!A1:A3)", Why::External),
+            ("WEBSERVICE(\"https://example.com\")", Why::External),
+            ("webservice (A1)", Why::External),
+            ("RTD(\"x\",,\"y\")", Why::External),
+            ("cmd|' /c calc'!A0", Why::External),
+            ("['file:///srv/x.ods'#$Sheet1.A1]", Why::External),
+            ("HYPERLINK(A1)", Why::Private),
+            ("HYPERLINK(\"http://\"&A1)", Why::Private),
+            ("HYPERLINK(\"http://10.0.0.1\",\"x\")", Why::Private),
+            ("IF(1,HYPERLINK(\"http:\\\\10.0.0.1\"),0)", Why::Private),
+        ] {
+            assert_eq!(formula_threat(f, none), Some(why), "{f}");
+        }
+        for f in [
+            "SUM(A1:A3)",
+            "Table1[[#This Row],[2019]]",
+            "\"a|b\"&\"WEBSERVICE(\"",
+            "HYPERLINK(\"https://example.com\",\"site\")",
+        ] {
+            assert_eq!(formula_threat(f, none), None, "{f}");
+        }
+        assert_eq!(formula_threat("[1]S!A1", Keep::ALL), None);
+    }
+
+    #[test]
+    fn fields_that_link_out_are_found() {
+        let none = Keep::default();
+        for (instr, why) in [
+            (" HYPERLINK \"http://10.0.0.1/\" ", Why::Private),
+            ("HYPERLINK http://localhost", Why::Private),
+            (
+                " HYPERLINK \\o \"tip\" \"http://192.168.0.1\"",
+                Why::Private,
+            ),
+            (
+                " INCLUDEPICTURE \"http://example.com/a.png\" \\d",
+                Why::External,
+            ),
+            ("includetext \"c:\\\\x.docx\"", Why::External),
+            (
+                " LINK Excel.Sheet.12 \"C:\\\\a.xlsx\" \"\" \\a ",
+                Why::External,
+            ),
+            (
+                " DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe \"/k calc\" ",
+                Why::External,
+            ),
+        ] {
+            assert_eq!(field_threat(instr, false, none), Some(why), "{instr}");
+        }
+        assert_eq!(
+            field_threat(" HYPERLINK \"https://example.com\" ", false, none),
+            None
+        );
+        assert_eq!(field_threat(" HYPERLINK \\l \"intro\" ", false, none), None);
+        assert_eq!(field_threat(" MERGEFIELD name ", false, none), None);
+        // A computed target cannot be checked.
+        assert_eq!(field_threat(" HYPERLINK ", true, none), Some(Why::Private));
     }
 
     #[test]

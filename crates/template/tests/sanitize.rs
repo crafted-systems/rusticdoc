@@ -1082,3 +1082,381 @@ fn libreoffice_opens_every_sanitised_output() {
         );
     }
 }
+
+// --- Bypasses: each test is a file crafted to slip past a naive sanitiser.
+
+const PKG_RELS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+fn clean(format: Format, bytes: &[u8]) -> Vec<u8> {
+    sanitize(format, bytes, Keep::default())
+        .expect("sanitises")
+        .0
+}
+
+fn refused(format: Format, bytes: &[u8]) -> String {
+    let err = sanitize(format, bytes, Keep::default()).expect_err("must be refused");
+    assert!(err.message.contains("refused"), "{err}");
+    err.message
+}
+
+/// A small DOCX whose body links to `target` and whose relationships also
+/// hold a VBA project, for tests that then disguise the relationships.
+fn docx_with_link(target: &str) -> Pkg {
+    let mut p = Pkg::open(&docx(&format!(
+        "<w:p><w:hyperlink r:id=\"rId9\"><w:r><w:t>linked words</w:t></w:r></w:hyperlink></w:p>{}",
+        p("plain")
+    )));
+    p.set("word/vbaProject.bin", CFB);
+    p.rels(
+        "word/_rels/document.xml.rels",
+        &[
+            (
+                "rId8",
+                &format!("{MS_REL}/vbaProject"),
+                "vbaProject.bin",
+                false,
+            ),
+            ("rId9", &format!("{REL}/hyperlink"), target, true),
+        ],
+    );
+    p.types(
+        "<Override PartName=\"/word/vbaProject.bin\" ContentType=\"application/vnd.ms-office.vbaProject\"/>",
+    );
+    p
+}
+
+fn utf16le(text: &str) -> Vec<u8> {
+    let mut out = vec![0xFF, 0xFE];
+    out.extend(text.encode_utf16().flat_map(|u| u.to_le_bytes()));
+    out
+}
+
+/// Finding 1: a relationships file in UTF-16 was skipped as unreadable.
+#[test]
+fn a_utf16_relationships_file_is_read_not_skipped() {
+    let mut p = docx_with_link("http://10.0.0.1/");
+    let rels = p.text("word/_rels/document.xml.rels").replacen(
+        "encoding=\"UTF-8\"",
+        "encoding=\"UTF-16\"",
+        1,
+    );
+    p.set("word/_rels/document.xml.rels", utf16le(&rels));
+    let types = p.text("[Content_Types].xml");
+    p.set("[Content_Types].xml", utf16le(&types));
+    let out = clean(Format::Docx, &p.bytes());
+    assert!(!names(&out).iter().any(|n| n.contains("vbaProject")));
+    let rels = part(&out, "word/_rels/document.xml.rels");
+    assert!(
+        !rels.contains("10.0.0.1") && !rels.contains("vbaProject"),
+        "{rels}"
+    );
+    assert!(rels.contains("encoding=\"UTF-8\""), "{rels}");
+    let doc = part(&out, "word/document.xml");
+    assert!(
+        !doc.contains("w:hyperlink") && doc.contains("linked words"),
+        "{doc}"
+    );
+    assert!(!part(&out, "[Content_Types].xml").contains("vbaProject"));
+    assert_ooxml_consistent(&out);
+}
+
+#[test]
+fn a_part_that_cannot_be_read_refuses_the_document() {
+    let mut p = docx_with_link("http://10.0.0.1/");
+    let mut rels = p.text("word/_rels/document.xml.rels").into_bytes();
+    rels.extend_from_slice(b"<!-- \xFF -->");
+    p.set("word/_rels/document.xml.rels", rels);
+    let message = refused(Format::Docx, &p.bytes());
+    assert!(
+        message.contains("word/_rels/document.xml.rels"),
+        "{message}"
+    );
+
+    let mut odt_pkg = Pkg::open(&odt("<text:p>x</text:p>"));
+    odt_pkg.set("content.xml", b"<office:document-content \xFE/>".to_vec());
+    refused(Format::Odt, &odt_pkg.bytes());
+}
+
+/// Finding 2: the standard namespaces bound to other prefixes hid
+/// relationships, scripts and links from names matched literally.
+#[test]
+fn standard_namespaces_under_other_prefixes_are_refused() {
+    let mut p = docx_with_link("http://10.0.0.1/");
+    p.set(
+        "word/_rels/document.xml.rels",
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<pr:Relationships xmlns:pr=\"{PKG_RELS}\"><pr:Relationship Id=\"rId8\" Type=\"{MS_REL}/vbaProject\" Target=\"vbaProject.bin\"/><pr:Relationship Id=\"rId9\" Type=\"{REL}/hyperlink\" Target=\"http://10.0.0.1/\" TargetMode=\"External\"/></pr:Relationships>"
+        ),
+    );
+    let message = refused(Format::Docx, &p.bytes());
+    assert!(message.contains("prefix \"pr\""), "{message}");
+
+    // The Word namespace as the default one around a hyperlink.
+    let mut p = docx_with_link("http://10.0.0.1/");
+    p.edit(
+        "word/document.xml",
+        "<w:p><w:hyperlink",
+        "<w:p><hyperlink xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" r:id=\"rId9\"><r><t>x</t></r></hyperlink><w:hyperlink",
+    );
+    refused(Format::Docx, &p.bytes());
+
+    // Office scripts and an xlink under other prefixes in ODF.
+    let mut o = Pkg::open(&odt("<text:p>x</text:p>"));
+    o.edit(
+        "content.xml",
+        "<office:body>",
+        "<o2:scripts xmlns:o2=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\"><o2:event-listeners/></o2:scripts><office:body>",
+    );
+    let message = refused(Format::Odt, &o.bytes());
+    assert!(message.contains("o2"), "{message}");
+    let o = Pkg::open(&odt(
+        "<text:p><text:a xmlns:l=\"http://www.w3.org/1999/xlink\" l:href=\"http://10.0.0.1\">x</text:a></text:p>",
+    ));
+    refused(Format::Odt, &o.bytes());
+}
+
+/// Finding 3: an embedded document whose manifest entry says chart was kept
+/// whatever it held, and a kept chart's own content was never looked at.
+#[test]
+fn an_object_that_only_claims_to_be_a_chart_goes_and_real_charts_are_walked() {
+    let mut o = Pkg::open(&odt(
+        "<text:p><draw:frame draw:name=\"A\" text:anchor-type=\"as-char\" svg:width=\"2cm\" svg:height=\"1cm\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><draw:object xlink:href=\"./Object 1\"/><draw:image xlink:href=\"./ObjectReplacements/Object 1\"/></draw:frame><draw:frame draw:name=\"B\" text:anchor-type=\"as-char\" svg:width=\"2cm\" svg:height=\"1cm\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><draw:object xlink:href=\"./Object 2\"/></draw:frame></text:p>",
+    ));
+    let doc = |body: &str| {
+        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" xmlns:chart=\"urn:oasis:names:tc:opendocument:xmlns:chart:1.0\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" office:version=\"1.3\"><office:body>{body}</office:body></office:document-content>")
+    };
+    // A spreadsheet that the manifest calls a chart.
+    o.set(
+        "Object 1/content.xml",
+        doc("<office:spreadsheet><table:table table:name=\"S\"/></office:spreadsheet>"),
+    );
+    o.set("ObjectReplacements/Object 1", png(10, 10));
+    // A real chart, with a private link hidden in its title.
+    o.set(
+        "Object 2/content.xml",
+        doc("<office:chart><chart:chart><chart:title><text:p><text:a xlink:href=\"http://192.168.1.1/\">title</text:a></text:p></chart:title></chart:chart></office:chart>"),
+    );
+    o.edit(
+        "META-INF/manifest.xml",
+        "</manifest:manifest>",
+        "<manifest:file-entry manifest:full-path=\"Object 1/\" manifest:media-type=\"application/vnd.oasis.opendocument.chart\"/><manifest:file-entry manifest:full-path=\"Object 1/content.xml\" manifest:media-type=\"text/xml\"/><manifest:file-entry manifest:full-path=\"ObjectReplacements/Object 1\" manifest:media-type=\"image/png\"/><manifest:file-entry manifest:full-path=\"Object 2/\" manifest:media-type=\"application/vnd.oasis.opendocument.chart\"/><manifest:file-entry manifest:full-path=\"Object 2/content.xml\" manifest:media-type=\"text/xml\"/></manifest:manifest>",
+    );
+    let out = clean(Format::Odt, &o.bytes());
+    let all = names(&out);
+    assert!(!all.iter().any(|n| n.starts_with("Object 1/")), "{all:?}");
+    assert!(all.iter().any(|n| n == "Object 2/content.xml"), "{all:?}");
+    let content = part(&out, "content.xml");
+    assert!(!content.contains("./Object 1\""), "{content}");
+    assert!(
+        content.contains("./ObjectReplacements/Object 1"),
+        "{content}"
+    );
+    assert!(content.contains("./Object 2\""), "{content}");
+    let chart = part(&out, "Object 2/content.xml");
+    assert!(
+        !chart.contains("192.168") && chart.contains("title"),
+        "{chart}"
+    );
+    assert_odf_consistent(&out);
+}
+
+fn complex_field(instr: &str, result: &str) -> String {
+    format!(
+        "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">{instr}</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>{result}</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+    )
+}
+
+/// Finding 4: only simple fields were looked at, and only for hyperlinks.
+#[test]
+fn word_fields_that_link_out_lose_their_codes_and_keep_their_results() {
+    let nested = format!(
+        "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> HYPERLINK \"</w:instrText></w:r>{}<w:r><w:instrText>\" </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>computed link</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>",
+        complex_field(" MERGEFIELD url ", "http://x")
+    );
+    let body = [
+        format!("<w:p>{}</w:p>", complex_field(" INCLUDEPICTURE \"http://example.com/a.png\" \\d ", "picture text")),
+        format!("<w:p>{}</w:p>", complex_field(" HYPERLINK \"http://10.0.0.1/\" ", "private link")),
+        format!("<w:p>{}</w:p>", complex_field(" DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe \"/k calc\" ", "dde result")),
+        format!("<w:p>{}</w:p>", complex_field(" HYPERLINK \"https://example.com/\" ", "public link")),
+        format!("<w:p>{}</w:p>", complex_field(" PAGE ", "1")),
+        format!("<w:p>{nested}</w:p>"),
+        "<w:p><w:fldSimple w:instr=\" INCLUDETEXT &quot;\\\\\\\\server\\\\x.docx&quot; \"><w:r><w:t>included</w:t></w:r></w:fldSimple></w:p>".to_string(),
+    ]
+    .concat();
+    let out = clean(Format::Docx, &docx(&body));
+    let doc = part(&out, "word/document.xml");
+    for gone in [
+        "INCLUDEPICTURE",
+        "10.0.0.1",
+        "DDEAUTO",
+        "MERGEFIELD",
+        "INCLUDETEXT",
+    ] {
+        assert!(!doc.contains(gone), "{gone} stayed: {doc}");
+    }
+    for kept in [
+        "picture text",
+        "private link",
+        "dde result",
+        "public link",
+        "computed link",
+        "included",
+        "https://example.com/",
+        " PAGE ",
+    ] {
+        assert!(doc.contains(kept), "{kept} went: {doc}");
+    }
+    // Two fields stay whole: the public link and the page number.
+    assert_eq!(doc.matches("w:fldCharType=\"begin\"").count(), 2, "{doc}");
+    assert_eq!(doc.matches("w:fldCharType=\"end\"").count(), 2, "{doc}");
+    assert_ooxml_consistent(&out);
+}
+
+#[test]
+fn spreadsheet_formulas_that_reach_outside_lose_their_formulas() {
+    let book = xlsx(
+        &[row(
+            1,
+            &[
+                cell("A1", "f", "WEBSERVICE(\"https://example.com/\")"),
+                cell("B1", "f", "HYPERLINK(C1,\"go\")"),
+                cell("C1", "f", "HYPERLINK(\"http:\\\\10.0.0.1\",\"go\")"),
+                cell("D1", "f", "[1]Sheet1!A1"),
+                cell("E1", "f", "SUM(1,2)"),
+                cell("F1", "f", "HYPERLINK(\"https://example.com/\",\"go\")"),
+            ],
+        )],
+        &[],
+    );
+    let out = clean(Format::Xlsx, &book);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    let formulas: Vec<String> = Regex::new("<f>([^<]*)</f>")
+        .unwrap()
+        .captures_iter(&sheet)
+        .map(|c| unescape(&c[1]))
+        .collect();
+    assert_eq!(
+        formulas,
+        ["SUM(1,2)", "HYPERLINK(\"https://example.com/\",\"go\")"],
+        "{sheet}"
+    );
+
+    let sheet = ods(
+        "<table:table table:name=\"S\"><table:table-row><table:table-cell table:formula=\"of:=['file:///srv/x.ods'#$Sheet1.A1]\" office:value-type=\"float\" office:value=\"4\"><text:p>4</text:p></table:table-cell><table:table-cell table:formula=\"of:=WEBSERVICE(&quot;https://example.com&quot;)\" office:value-type=\"string\"><text:p>w</text:p></table:table-cell><table:table-cell table:formula=\"of:=1+1\" office:value-type=\"float\" office:value=\"2\"><text:p>2</text:p></table:table-cell></table:table-row></table:table>",
+    );
+    let out = clean(Format::Ods, &sheet);
+    let content = part(&out, "content.xml");
+    assert_eq!(content.matches("table:formula").count(), 1, "{content}");
+    assert!(
+        content.contains("of:=1+1") && content.contains("office:value=\"4\""),
+        "{content}"
+    );
+}
+
+/// Finding 5: addresses written as a browser accepts them passed for public.
+#[test]
+fn browser_spellings_of_private_addresses_lose_their_links() {
+    let targets = [
+        "http:\\\\10.0.0.1\\admin",
+        "http:/10.0.0.1",
+        "h&#9;ttp://10.0.0.1",
+        "http://１２７.０.０.１/",
+        "http://0x7f.1/",
+        "http://100.64.1.1/",
+        "http://[::ffff:a00:1]/",
+        "https://example.com/",
+    ];
+    let mut body = String::new();
+    let mut items: Vec<(String, String, String, bool)> = Vec::new();
+    for (i, t) in targets.iter().enumerate() {
+        let id = format!("rId{}", 20 + i);
+        body.push_str(&format!(
+            "<w:p><w:hyperlink r:id=\"{id}\"><w:r><w:t>link {i}</w:t></w:r></w:hyperlink></w:p>"
+        ));
+        items.push((id, format!("{REL}/hyperlink"), t.to_string(), true));
+    }
+    let mut p = Pkg::open(&docx(&body));
+    let refs: Vec<(&str, &str, &str, bool)> = items
+        .iter()
+        .map(|(a, b, c, d)| (a.as_str(), b.as_str(), c.as_str(), *d))
+        .collect();
+    p.rels("word/_rels/document.xml.rels", &refs);
+    let (out, removed) = sanitize(Format::Docx, &p.bytes(), Keep::default()).unwrap();
+    assert_eq!(removed.private_links, targets.len() - 1, "{removed:?}");
+    assert_eq!(hyperlink_targets(&out), ["https://example.com/"]);
+    let doc = part(&out, "word/document.xml");
+    assert_eq!(doc.matches("<w:hyperlink").count(), 1, "{doc}");
+    for i in 0..targets.len() {
+        assert!(doc.contains(&format!("link {i}")), "{doc}");
+    }
+}
+
+/// Finding 6: part names differing only in case slipped past exact matches.
+#[test]
+fn part_names_are_compared_without_case() {
+    let mut p = docx_with_link("http://10.0.0.1/");
+    let rels = p
+        .text("word/_rels/document.xml.rels")
+        .replace("Target=\"vbaProject.bin\"", "Target=\"VBAPROJECT.BIN\"");
+    p.0.retain(|(n, _)| n != "word/_rels/document.xml.rels");
+    p.set("word/_RELS/Document.XML.RELS", rels);
+    p.edit(
+        "[Content_Types].xml",
+        "/word/vbaProject.bin",
+        "/WORD/VBAPROJECT.BIN",
+    );
+    let out = clean(Format::Docx, &p.bytes());
+    let all = names(&out);
+    assert!(
+        !all.iter()
+            .any(|n| n.to_ascii_lowercase().contains("vbaproject")),
+        "{all:?}"
+    );
+    let rels = part(&out, "word/_RELS/Document.XML.RELS");
+    assert!(
+        !rels.contains("10.0.0.1") && !rels.contains("VBAPROJECT"),
+        "{rels}"
+    );
+    assert!(!part(&out, "[Content_Types].xml")
+        .to_ascii_lowercase()
+        .contains("vbaproject"));
+    assert!(!part(&out, "word/document.xml").contains("w:hyperlink"));
+
+    // Two parts whose names differ only in case: which one a reader takes
+    // is not known.
+    let mut p = docx_with_link("https://example.com/");
+    p.set("word/VBAPROJECT.BIN", CFB);
+    let message = refused(Format::Docx, &p.bytes());
+    assert!(message.contains("different cases"), "{message}");
+}
+
+/// Macro sheets and data connections cannot be taken out cleanly, so a
+/// package holding one is refused rather than passed through.
+#[test]
+fn what_cannot_be_cleaned_safely_is_refused() {
+    let mut p = Pkg::open(&xlsx(&[row(1, &[cell("A1", "n", "1")])], &[]));
+    p.set(
+        "xl/macrosheets/sheet1.xml",
+        "<xm:macrosheet xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\"/>",
+    );
+    p.rels(
+        "xl/_rels/workbook.xml.rels",
+        &[(
+            "rId9",
+            &format!("{MS_REL}/xlMacrosheet"),
+            "macrosheets/sheet1.xml",
+            false,
+        )],
+    );
+    let message = refused(Format::Xlsx, &p.bytes());
+    assert!(message.contains("xlMacrosheet"), "{message}");
+    let kept = sanitize(
+        Format::Xlsx,
+        &p.bytes(),
+        Keep {
+            macros: true,
+            ..Keep::default()
+        },
+    );
+    assert!(kept.is_ok(), "{kept:?}");
+}

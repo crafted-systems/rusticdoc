@@ -188,9 +188,17 @@ OLE objects, ActiveX controls, applets and plugins, leaving their preview
 picture (charts and formulas stay); external relationships other than
 hyperlinks, XLSX `externalLink` parts and the formulas that used them, and
 ODF linked images, sections and DDE links; and hyperlinks to private or
-local addresses, which keep their text. Dangling relationships, overrides
-and manifest entries go with what they named. `Compiled::render_with` takes
-a `Keep`; the free function `sanitize` cleans any package.
+local addresses, which keep their text; Word fields that link out or pull
+content in (simple and complex), and formulas that reach outside. Dangling
+relationships, overrides and manifest entries go with what they named.
+`Compiled::render_with` takes a `Keep`; the free function `sanitize` cleans
+any package. It fails closed: parts it must read are decoded as UTF-8 or
+UTF-16 and refused otherwise, the namespaces it matches must carry their
+standard prefixes, OPC names compare without case and a package with two
+names differing only in case is refused, an embedded ODF object is kept as
+a chart or formula only when its own content is one (and is then walked
+too), and addresses are parsed by the WHATWG rules (`url` crate) with
+unparseable ones counted as private.
 
 ## Validation
 
@@ -212,8 +220,8 @@ sample data holds, and bad values in the sample data like any other error.
 - Tags inside DOCX text boxes nested in drawings are read, but a block
   cannot span a text box and the body.
 - Editing a chart's data in Word or PowerPoint.
-- Sanitising Excel 4.0 macro sheets, data connections and query tables, and
-  Word `HYPERLINK` field codes (simple fields are handled).
+- Sanitising Excel 4.0 macro sheets, data connections and query tables:
+  a package holding one is refused unless the request keeps that kind.
 - A picture in a PPTX placeholder that inherits its position from the layout
   lands at the slide's origin: the offset is read from the shape itself.
 - `html` inside a DOCX hyperlink or content control, and native structure for
