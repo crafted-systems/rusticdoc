@@ -157,7 +157,9 @@ function verified(headers, body) {
   const event = headers['x-rusticdoc-event'];
   const requestId = headers['x-request-id'];
   const signature = headers['x-rusticdoc-signature'];
-  if (!timestamp || !event || !requestId || !signature?.startsWith('v1=')) return false;
+  if (!timestamp || !event || !requestId || !signature?.startsWith('v1=')) {
+    return false;
+  }
 
   const age = Math.abs(Date.now() / 1000 - Number(timestamp));
   if (!(age <= MAX_AGE_SECONDS)) return false;
@@ -177,7 +179,12 @@ createServer((req, res) => {
   req.on('end', () => {
     const body = Buffer.concat(chunks);
     const ok = verified(req.headers, body);
-    console.log(ok ? 'verified' : 'REJECTED', req.headers['x-rusticdoc-event'], req.headers['x-request-id'], body.length);
+    console.log(
+      ok ? 'verified' : 'REJECTED',
+      req.headers['x-rusticdoc-event'],
+      req.headers['x-request-id'],
+      body.length,
+    );
     res.statusCode = ok ? 204 : 401;
     res.end();
   });
@@ -205,7 +212,8 @@ def verified(headers, body):
     event = headers.get("X-Rusticdoc-Event", "")
     request_id = headers.get("X-Request-Id", "")
     signature = headers.get("X-Rusticdoc-Signature", "")
-    if not (timestamp.isdigit() and event and request_id and signature.startswith("v1=")):
+    if not (timestamp.isdigit() and event and request_id
+            and signature.startswith("v1=")):
         return False
 
     if abs(time.time() - int(timestamp)) > MAX_AGE_SECONDS:
@@ -220,13 +228,15 @@ class Receiver(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         ok = verified(self.headers, body)
-        print("verified" if ok else "REJECTED", self.headers.get("X-Rusticdoc-Event"),
+        print("verified" if ok else "REJECTED",
+              self.headers.get("X-Rusticdoc-Event"),
               self.headers.get("X-Request-Id"), len(body), flush=True)
         self.send_response(204 if ok else 401)
         self.end_headers()
 
 
-ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("PORT", 8000))), Receiver).serve_forever()
+port = int(os.environ.get("PORT", 8000))
+ThreadingHTTPServer(("0.0.0.0", port), Receiver).serve_forever()
 ```
 
 ### Try them
@@ -240,7 +250,8 @@ docker run -d --name rd-webhooks -p 127.0.0.1:9028:9027 \
   -e RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true \
   ghcr.io/vmosoti/rusticdoc:0.1.0
 
-export RUSTICDOC_SIGNING_KEY=$(docker exec rd-webhooks rusticdoc webhook-secret --api-key my-key)
+export RUSTICDOC_SIGNING_KEY=$(docker exec rd-webhooks \
+  rusticdoc webhook-secret --api-key my-key)
 PORT=8000 node receiver.mjs &
 
 curl -H "X-Api-Key: my-key" \

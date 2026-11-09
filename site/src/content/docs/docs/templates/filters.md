@@ -22,7 +22,8 @@ Using a filter where it does not exist is a `422`:
 
 ```bash test=fail
 printf '{{ logo | image }}\n' > logo.txt
-curl -F template=@logo.txt -F 'data={"logo":"x"}' http://localhost:9027/v1/render
+curl -F template=@logo.txt -F 'data={"logo":"x"}' \
+  http://localhost:9027/v1/render
 ```
 
 The [rich content filters](/docs/templates/rich-content/) have their own page.
@@ -63,7 +64,9 @@ Without a language, it prints a number with two decimals, commas between thousan
 | `2` | `currency("")` | `2.00` |
 
 ```bash test
-printf '{{ a | currency("USD") }}|{{ b | currency }}|{{ c | currency("EUR") }}' > money.txt
+cat > money.txt <<'EOF'
+{{ a | currency("USD") }}|{{ b | currency }}|{{ c | currency("EUR") }}
+EOF
 curl -F template=@money.txt -F 'data={"a":1234.5,"b":0.5,"c":999.999}' \
   http://localhost:9027/v1/render -o out.txt
 test "$(cat out.txt)" = 'USD 1,234.50|0.50|EUR 1,000.00'
@@ -81,7 +84,8 @@ With a language, the symbol goes where the language puts it, and the amount has 
 
 ```bash test
 printf '{{ 1500 | currency("EUR") }}|{{ 1500 | currency("JPY") }}' > money.txt
-curl -F template=@money.txt -F lang=de http://localhost:9027/v1/render -o out.txt
+curl -F template=@money.txt -F lang=de \
+  http://localhost:9027/v1/render -o out.txt
 # The no-break spaces CLDR puts before the symbol, shown here as _.
 test "$(perl -CSD -pe 's/\x{a0}/_/g' out.txt)" = '1.500,00_€|1.500_¥'
 ```
@@ -109,7 +113,8 @@ Prints a number with separators between thousands: up to three decimals with tra
 
 ```bash test
 printf '{{ a | number }}|{{ a | number(2) }}' > n.txt
-curl -F template=@n.txt -F 'data={"a":1234.5}' -F lang=de http://localhost:9027/v1/render -o out.txt
+curl -F template=@n.txt -F 'data={"a":1234.5}' -F lang=de \
+  http://localhost:9027/v1/render -o out.txt
 test "$(cat out.txt)" = '1.234,5|1.234,50'
 ```
 
@@ -155,7 +160,8 @@ With a language, `%B`, `%b`, `%A`, `%a`, `%p` and `%P` print CLDR's names in it,
 
 ```bash test
 printf '{{ d | date("%%A %%d %%B %%Y") }}|{{ d | date("%%B %%Y") }}' > dated.txt
-curl -F template=@dated.txt -F 'data={"d":"2026-01-05"}' -F lang=ru http://localhost:9027/v1/render -o out.txt
+curl -F template=@dated.txt -F 'data={"d":"2026-01-05"}' -F lang=ru \
+  http://localhost:9027/v1/render -o out.txt
 test "$(cat out.txt)" = 'понедельник 05 января 2026|январь 2026'
 ```
 
@@ -164,9 +170,13 @@ test "$(cat out.txt)" = 'понедельник 05 января 2026|январ�
 The time zone is an offset such as `+02:00` or `-05:00`, or an IANA zone such as `Europe/Paris` or `America/New_York`, which follows daylight saving. The default is UTC. It changes only values that are a moment: those with a zone, and unix seconds. A value with no zone prints as written.
 
 ```bash test
-printf '{{ "2026-03-28T12:00:00Z" | date("%%H:%%M") }} {{ "2026-03-30T12:00:00Z" | date("%%H:%%M") }}' > tz.txt
-curl -F template=@tz.txt -F timezone=Europe/Paris http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = '13:00 14:00'
+cat > tz.txt <<'EOF'
+{{ "2026-03-28T12:00:00Z" | date("%H:%M") }}
+{{ "2026-03-30T12:00:00Z" | date("%H:%M") }}
+EOF
+curl -F template=@tz.txt -F timezone=Europe/Paris \
+  http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = "$(printf '13:00\n14:00')"
 ```
 
 A zone that is neither is refused: `timezone "Mars/Olympus" is neither an offset like +02:00 nor an IANA zone like Europe/Paris`. As a request field that is a `400`; in a template setting, a `422` when `date` runs.
@@ -174,8 +184,10 @@ A zone that is neither is refused: `timezone "Mars/Olympus" is neither an offset
 The sample invoice uses `date` in its issue and payment lines:
 
 ```bash test
-curl -F template=@invoice.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o invoice-filled.docx
-unzip -p invoice-filled.docx word/document.xml | grep -o 'Issued 06 November 2026'
+curl -F template=@invoice.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o invoice-filled.docx
+unzip -p invoice-filled.docx word/document.xml |
+  grep -o 'Issued 06 November 2026'
 ```
 
 ## t
@@ -273,10 +285,18 @@ These are the ones to use for totals. For `o` = `[{"a":1},{"a":0}]`:
 
 ```bash test
 cat > total.txt <<'EOF'
-{% set total = items | sum(attribute="price") %}{{ items | map(attribute="name") | join(", ") }}: {{ total | currency("EUR") }}
+{% set total = items | sum(attribute="price") -%}
+{{ items | map(attribute="name") | join(", ") }}: {{ total | currency("EUR") }}
 EOF
-curl -F template=@total.txt \
-  -F 'data={"items":[{"name":"Lamp","price":19.5},{"name":"Plug","price":0.5}]}' \
+cat > items.json <<'EOF'
+{
+  "items": [
+    {"name": "Lamp", "price": 19.5},
+    {"name": "Plug", "price": 0.5}
+  ]
+}
+EOF
+curl -F template=@total.txt -F data=@items.json \
   http://localhost:9027/v1/render -o out.txt
 grep -x 'Lamp, Plug: EUR 20.00' out.txt
 ```
@@ -341,9 +361,23 @@ Fill text out to `width` characters, with spaces or the one character you pass. 
 The width must be between 0 and 10,000, and the fill exactly one character. Anything else is an error, such as `pad_left: the width must be between 0 and 10000, got 100000`.
 
 ```bash test
-printf '[{{ t | truncate(9) }}][{{ t | truncate(9, words=true) }}][{{ t | unaccent }}][{{ n | pad_left(6, "0") }}][{{ "é" | pad_right(3, ".") }}]' > text.txt
-curl -F template=@text.txt -F 'data={"t":"crème brûlée au café","n":42}' http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = '[crème br…][crème…][creme brulee au cafe][000042][é..]'
+cat > text.txt <<'EOF'
+[{{ t | truncate(9) }}]
+[{{ t | truncate(9, words=true) }}]
+[{{ t | unaccent }}]
+[{{ n | pad_left(6, "0") }}]
+[{{ "é" | pad_right(3, ".") }}]
+EOF
+curl -F template=@text.txt -F 'data={"t":"crème brûlée au café","n":42}' \
+  http://localhost:9027/v1/render -o out.txt
+cat > expected.txt <<'EOF'
+[crème br…]
+[crème…]
+[creme brulee au cafe]
+[000042]
+[é..]
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 ## Number helpers
@@ -398,9 +432,21 @@ Spells a number out.
 - The value must be a number; text such as `"12"` is an error. Convert it with `| int` or `| float`.
 
 ```bash test
-printf '{{ 1234 | words }}|{{ 21 | words(ordinal=true) }}|{{ 1250.5 | words(currency="EUR") }}|{{ 81 | words(lang="fr") }}' > words.txt
-curl -F template=@words.txt -F 'data={}' http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = 'one thousand two hundred thirty-four|twenty-first|one thousand two hundred fifty euros and fifty cents|quatre-vingt-un'
+cat > words.txt <<'EOF'
+{{ 1234 | words }}
+{{ 21 | words(ordinal=true) }}
+{{ 1250.5 | words(currency="EUR") }}
+{{ 81 | words(lang="fr") }}
+EOF
+curl -F template=@words.txt -F 'data={}' \
+  http://localhost:9027/v1/render -o out.txt
+cat > expected.txt <<'EOF'
+one thousand two hundred thirty-four
+twenty-first
+one thousand two hundred fifty euros and fifty cents
+quatre-vingt-un
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 ## Date helpers
@@ -424,9 +470,15 @@ These work in every template. They read dates as [`date`](#what-it-accepts) does
 - A result out of range is an error, `date_add: the date is out of range`, and so is an unknown unit.
 
 ```bash test
-printf '{{ d | date_add(1, "month") }}|{{ d | end_of("month") }}|{{ "2026-12-25" | date_diff("2026-11-06", "weeks") }}|{{ 5400000 | duration }}' > dates.txt
-curl -F template=@dates.txt -F 'data={"d":"2028-01-31"}' http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = '2028-02-29|2028-01-31|7|2 hours'
+cat > dates.txt <<'EOF'
+{{ d | date_add(1, "month") }}
+{{ d | end_of("month") }}
+{{ "2026-12-25" | date_diff("2026-11-06", "weeks") }}
+{{ 5400000 | duration }}
+EOF
+curl -F template=@dates.txt -F 'data={"d":"2028-01-31"}' \
+  http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = "$(printf '2028-02-29\n2028-01-31\n7\n2 hours')"
 ```
 
 ### duration
@@ -455,6 +507,8 @@ With a unit, `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` o
 
 ```bash test
 printf '{{ now() }}|{{ now() | date_add(30) }}' > now.txt
-curl -F template=@now.txt -F 'data={}' -F 'ctx={"now":"2026-11-06T10:20:00Z"}' http://localhost:9027/v1/render -o out.txt
+curl -F template=@now.txt -F 'data={}' \
+  -F 'ctx={"now":"2026-11-06T10:20:00Z"}' \
+  http://localhost:9027/v1/render -o out.txt
 test "$(cat out.txt)" = '2026-11-06T10:20:00Z|2026-12-06T10:20:00Z'
 ```

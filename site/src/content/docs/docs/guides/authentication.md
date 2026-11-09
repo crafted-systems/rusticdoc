@@ -17,8 +17,10 @@ RUSTICDOC_API_KEYS=first-key,second-key
 Callers send a key in either header:
 
 ```bash
-curl -H "X-Api-Key: $KEY" -F files=@report.docx http://localhost:9027/v1/convert -o report.pdf
-curl -H "Authorization: Bearer $KEY" -F files=@report.docx http://localhost:9027/v1/convert -o report.pdf
+curl -H "X-Api-Key: $KEY" -F files=@report.docx \
+  http://localhost:9027/v1/convert -o report.pdf
+curl -H "Authorization: Bearer $KEY" -F files=@report.docx \
+  http://localhost:9027/v1/convert -o report.pdf
 ```
 
 Write `Bearer` with that capital for an API key: `bearer` gets `401`. If both headers are present, the `Authorization` one is tried. An OpenID Connect token takes the scheme in any case.

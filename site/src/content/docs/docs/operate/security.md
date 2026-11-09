@@ -42,7 +42,8 @@ An OWASP review found 20 issues, 6 of them High, and all are fixed. A review of 
 You can try the first one. It fails with `413`, and the next request works:
 
 ```bash test=fail
-python3 -c 'print("{% set x = \"aaaaaaaa\" %}" + "{% set x = x ~ x %}" * 40 + "{{ x | length }}")' > bomb.txt
+python3 -c 'print("{% set x = \"aaaaaaaa\" %}"
+  + "{% set x = x ~ x %}" * 40 + "{{ x | length }}")' > bomb.txt
 curl -F template=@bomb.txt -F 'data={"a":1}' http://localhost:9027/v1/render
 ```
 

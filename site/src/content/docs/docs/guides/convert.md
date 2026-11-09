@@ -24,7 +24,8 @@ head -c4 report.pdf | grep -q %PDF
 | `html`, `txt` | Web page, plain text. `txt` is for word processing files: a spreadsheet or presentation gets `500 engine_failed` |
 
 ```bash test
-curl -F files=@sheet.xlsx -F to=ods http://localhost:9027/v1/convert -o sheet.ods
+curl -F files=@sheet.xlsx -F to=ods \
+  http://localhost:9027/v1/convert -o sheet.ods
 head -c2 sheet.ods | grep -q PK
 ```
 
@@ -33,7 +34,8 @@ Any other value of `to`, such as `rtf` or `png`, is a `400`.
 A conversion that writes more than `RUSTICDOC_LIBREOFFICE_MAX_DISK` to disk, 512 MB by default, is stopped and answers `400`, so one document cannot fill the temporary directory. The other conversions carry on.
 
 ```bash test
-curl -F files=@invoice.docx -F to=txt http://localhost:9027/v1/convert -o invoice.txt
+curl -F files=@invoice.docx -F to=txt \
+  http://localhost:9027/v1/convert -o invoice.txt
 grep -q 'Total due' invoice.txt
 ```
 
@@ -63,7 +65,8 @@ A request with one file has the usual time limit, `RUSTICDOC_API_TIMEOUT`, 30 se
 `merge=true` converts each file to PDF, then joins them in the order sent.
 
 ```bash test
-curl -F files=@report.docx -F files=@deck.pptx -F merge=true -F outputFilename=bundle \
+curl -F files=@report.docx -F files=@deck.pptx \
+  -F merge=true -F outputFilename=bundle \
   http://localhost:9027/v1/convert -D headers.txt -o bundle.pdf
 head -c4 bundle.pdf | grep -q %PDF
 grep -qi 'filename="bundle.pdf"' headers.txt

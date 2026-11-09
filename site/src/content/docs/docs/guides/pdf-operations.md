@@ -42,7 +42,8 @@ This route also runs the finishing fields listed in [Convert documents](/docs/gu
 One output comes back as a PDF. Several come back as a ZIP of `<name>_1.pdf`, `<name>_2.pdf` and so on.
 
 ```bash test
-curl -F files=@a.pdf -F files=@b.pdf http://localhost:9027/v1/pdf/merge -o two.pdf
+curl -F files=@a.pdf -F files=@b.pdf \
+  http://localhost:9027/v1/pdf/merge -o two.pdf
 curl -F files=@two.pdf -F splitMode=intervals -F splitSpan=1 \
   http://localhost:9027/v1/pdf/split -o parts.zip
 head -c2 parts.zip | grep -q PK
@@ -59,7 +60,8 @@ Lays the second PDF over the first, page by page.
 | `files` | Yes | Exactly two PDFs: the base, then the overlay |
 
 ```bash test
-curl -F files=@a.pdf -F files=@b.pdf http://localhost:9027/v1/pdf/overlay -o laid.pdf
+curl -F files=@a.pdf -F files=@b.pdf \
+  http://localhost:9027/v1/pdf/overlay -o laid.pdf
 head -c4 laid.pdf | grep -q %PDF
 ```
 
@@ -76,7 +78,8 @@ head -c4 laid.pdf | grep -q %PDF
 This route reads `rotation` and `pages`. `rotateAngle` and `rotatePages` are the names on `/v1/render`, and here they have no effect.
 
 ```bash test
-curl -F files=@a.pdf -F rotation=180 http://localhost:9027/v1/pdf/rotate -o turned.pdf
+curl -F files=@a.pdf -F rotation=180 \
+  http://localhost:9027/v1/pdf/rotate -o turned.pdf
 head -c4 turned.pdf | grep -q %PDF
 ```
 
@@ -97,7 +100,8 @@ head -c4 turned.pdf | grep -q %PDF
 | `pages` | No | A page selection. All pages when absent |
 
 ```bash test
-curl -F files=@a.pdf -F text=DRAFT -F opacity=0.3 -F rotation=45 -F fontSize=48 -F colour=#ff0000 \
+curl -F files=@a.pdf -F text=DRAFT -F opacity=0.3 -F rotation=45 \
+  -F fontSize=48 -F colour=#ff0000 \
   http://localhost:9027/v1/pdf/watermark -o draft.pdf
 curl -F files=@a.pdf -F files=@logo.png -F position=top-right -F scale=0.2 \
   http://localhost:9027/v1/pdf/stamp -o branded.pdf
@@ -246,7 +250,8 @@ Exports existing PDFs as PDF/A or PDF/UA through LibreOffice. LibreOffice re-imp
 | `pdfua` | One of the two | `true` for PDF/UA |
 
 ```bash test
-curl -F files=@a.pdf -F pdfa=PDF/A-2b http://localhost:9027/v1/pdf/convert -o archive.pdf
+curl -F files=@a.pdf -F pdfa=PDF/A-2b \
+  http://localhost:9027/v1/pdf/convert -o archive.pdf
 grep -aq pdfaid archive.pdf
 ```
 
@@ -260,7 +265,10 @@ Embeds Factur-X invoice XML and marks the PDF for it. The service does not check
 | `profile` | No | `MINIMUM`, `BASIC_WL`, `BASIC`, `EN16931` (default) or `EXTENDED` |
 
 ```bash test
-printf '<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"/>' > factur-x.xml
+cat > factur-x.xml <<'EOF'
+<rsm:CrossIndustryInvoice
+  xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"/>
+EOF
 curl -F files=@a.pdf -F files=@factur-x.xml -F profile=EN16931 \
   http://localhost:9027/v1/pdf/factur-x -o invoice.pdf
 grep -aq factur-x.xml invoice.pdf
@@ -275,7 +283,8 @@ Attaches files.
 | `files` | Yes | The PDF first, then at least one file to attach |
 
 ```bash test
-curl -F files=@a.pdf -F files=@invoice.json http://localhost:9027/v1/pdf/embed -o attached.pdf
+curl -F files=@a.pdf -F files=@invoice.json \
+  http://localhost:9027/v1/pdf/embed -o attached.pdf
 grep -aq invoice.json attached.pdf
 ```
 
@@ -299,7 +308,8 @@ Answers JSON, keyed by file name.
 ```bash test
 curl -F files=@a.pdf -F 'metadata={"Title":"Invoice","Author":"Ada"}' \
   http://localhost:9027/v1/pdf/metadata/write -o titled.pdf
-curl -F files=@titled.pdf http://localhost:9027/v1/pdf/metadata/read -o meta.json
+curl -F files=@titled.pdf \
+  http://localhost:9027/v1/pdf/metadata/read -o meta.json
 jq -e '."titled.pdf".Title == "Invoice"' meta.json
 ```
 
@@ -321,9 +331,15 @@ Replaces the outline.
 | `bookmarks` | Yes | A JSON array of `{"title", "page", "children"}`. `page` counts from 1, and `children` is optional |
 
 ```bash test
-curl -F files=@a.pdf -F 'bookmarks=[{"title":"Start","page":1,"children":[{"title":"Detail","page":1}]}]' \
+cat > bookmarks.json <<'EOF'
+[
+  {"title": "Start", "page": 1, "children": [{"title": "Detail", "page": 1}]}
+]
+EOF
+curl -F files=@a.pdf -F bookmarks=@bookmarks.json \
   http://localhost:9027/v1/pdf/bookmarks/write -o marked.pdf
-curl -F files=@marked.pdf http://localhost:9027/v1/pdf/bookmarks/read -o outline.json
+curl -F files=@marked.pdf \
+  http://localhost:9027/v1/pdf/bookmarks/read -o outline.json
 jq -e '."marked.pdf"[0].children[0].title == "Detail"' outline.json
 ```
 
@@ -359,9 +375,11 @@ Fills form fields from JSON, and applies any tags in annotations.
 | `stripAnnotations` | No | `false` keeps the annotations that held tags. Default is to remove them |
 
 ```bash test
-curl -F files=@form.pdf -F 'data={"name":"Ada","date":"2026-11-06","agree":true}' \
+curl -F files=@form.pdf \
+  -F 'data={"name":"Ada","date":"2026-11-06","agree":true}' \
   http://localhost:9027/v1/pdf/forms/fill -o filled.pdf
-curl -F files=@filled.pdf http://localhost:9027/v1/pdf/forms/fields -o fields.json
+curl -F files=@filled.pdf \
+  http://localhost:9027/v1/pdf/forms/fields -o fields.json
 jq -e '.[0].value == "Ada" and .[2].value == "Yes"' fields.json
 ```
 

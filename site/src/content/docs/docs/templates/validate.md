@@ -132,7 +132,8 @@ A text template reports only its first error, with no location. The message hold
 printf 'line one\n{{ nobody }}\n' > missing.txt
 curl -F template=@missing.txt -F 'data={"a":1}' \
   http://localhost:9027/v1/templates/validate -o result.json
-jq -e '.ok == false and .engine == "text" and .diagnostics[0].location == null' result.json
+jq -e '.ok == false and .engine == "text"
+  and .diagnostics[0].location == null' result.json
 jq -e '.error | contains("line 2")' result.json
 ```
 

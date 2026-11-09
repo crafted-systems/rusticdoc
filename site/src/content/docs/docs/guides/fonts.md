@@ -152,7 +152,8 @@ To get the serif faces back, add `NotoSerifCJK-Regular.ttc` and `NotoSerifCJK-Bo
 [Validation](/docs/templates/validate/) lists the fonts a DOCX, XLSX, PPTX, ODT, ODS or ODP template names that the service can neither find nor substitute, in `missing_fonts`, with a warning for each:
 
 ```bash
-curl -F template=@letter.docx http://localhost:9027/v1/templates/validate | jq .missing_fonts
+curl -F template=@letter.docx \
+  http://localhost:9027/v1/templates/validate | jq .missing_fonts
 ```
 
 ```json

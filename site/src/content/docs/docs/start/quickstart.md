@@ -10,7 +10,8 @@ On this page you start the service, send it a Word template and some JSON, and g
 ## Start the service
 
 ```bash
-docker run -d --name rusticdoc --read-only --cap-drop ALL --security-opt no-new-privileges \
+docker run -d --name rusticdoc \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 \
   -p 127.0.0.1:9027:9027 ghcr.io/vmosoti/rusticdoc:0.1.0
 ```

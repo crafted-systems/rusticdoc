@@ -14,14 +14,17 @@ Replicas that receive their templates in the request need no store, because they
 Stored templates and uploaded fonts need somewhere every container can reach, so you have to name it. Until you do, those routes answer `501` and the service stores nothing.
 
 ```bash
-RUSTICDOC_STORE=s3://my-bucket/rusticdoc   # AWS S3, or a store compatible with it
-RUSTICDOC_STORE=file:///data/rusticdoc     # a volume every replica mounts
+# AWS S3, or a store compatible with it
+RUSTICDOC_STORE=s3://my-bucket/rusticdoc
+# a volume every replica mounts
+RUSTICDOC_STORE=file:///data/rusticdoc
 ```
 
 Once it is set, one template behaves the same from any replica:
 
 ```bash test
-id=$(curl -F file=@invoice.docx http://localhost:9027/v1/templates | sed -E 's/.*"id":"([^"]+)".*/\1/')
+id=$(curl -F file=@invoice.docx http://localhost:9027/v1/templates |
+  sed -E 's/.*"id":"([^"]+)".*/\1/')
 curl -F templateId="$id" -F "data=<invoice.json" -F steps=convert \
   http://localhost:9027/v1/render -o invoice.pdf
 curl -X DELETE "http://localhost:9027/v1/templates/$id"

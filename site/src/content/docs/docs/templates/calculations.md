@@ -21,9 +21,17 @@ You can also do the sums in your application and send the results in `data`. Doi
 | `( )` | Group | `{{ (a + b) * c }}` | |
 
 ```bash test
-printf '{{ (a + b) * c }}|{{ a + b * c }}|{{ 10 / 4 }}|{{ 10 // 3 }}|{{ 10 %% 3 }}|{{ 2 ** 10 }}' > math.txt
-curl -F template=@math.txt -F 'data={"a":1,"b":2,"c":3}' http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = '9|7|2.5|3|1|1024'
+cat > math.txt <<'EOF'
+{{ (a + b) * c }}
+{{ a + b * c }}
+{{ 10 / 4 }}
+{{ 10 // 3 }}
+{{ 10 % 3 }}
+{{ 2 ** 10 }}
+EOF
+curl -F template=@math.txt -F 'data={"a":1,"b":2,"c":3}' \
+  http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = "$(printf '9\n7\n2.5\n3\n1\n1024')"
 ```
 
 ### Precedence
@@ -49,8 +57,11 @@ Three of these surprise people:
 When in doubt, add brackets.
 
 ```bash test
-printf '{{ "INV-" ~ (n + 1) }}|{{ (a * b) | round(1) }}|{{ 2 ** 3 ** 2 }}' > order.txt
-curl -F template=@order.txt -F 'data={"n":41,"a":2,"b":3.33}' http://localhost:9027/v1/render -o out.txt
+cat > order.txt <<'EOF'
+{{ "INV-" ~ (n + 1) }}|{{ (a * b) | round(1) }}|{{ 2 ** 3 ** 2 }}
+EOF
+curl -F template=@order.txt -F 'data={"n":41,"a":2,"b":3.33}' \
+  http://localhost:9027/v1/render -o out.txt
 test "$(cat out.txt)" = 'INV-42|6.7|64'
 ```
 
@@ -73,16 +84,31 @@ Dividing by zero stops the render with `unable to calculate 1 / 0`. Guard it wit
 `round` always gives a decimal, and sends a half to the even neighbour: `{{ 2.5 | round }}` prints `2.0`, `{{ 3.5 | round }}` prints `4.0`, and `{{ 0.125 | round(2) }}` prints `0.12`. `currency` sends a half away from zero instead, so `{{ 0.125 | currency }}` prints `0.13`. Use the same one for every figure on a document, or totals may differ by a cent.
 
 ```bash test
-printf '{{ 2.567 | round(2) }}|{{ 2.561 | round(2, "ceil") }}|{{ 2.569 | round(2, "floor") }}|{{ -2.1 | ceil }}|{{ -2.1 | floor }}|{{ 2.5 | round }}|{{ 3.5 | round }}|{{ 0.125 | round(2) }}|{{ 0.125 | currency }}' > round.txt
-curl -F template=@round.txt -F 'data={}' http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = '2.57|2.57|2.56|-2|-3|2.0|4.0|0.12|0.13'
+cat > round.txt <<'EOF'
+{{ 2.567 | round(2) }}
+{{ 2.561 | round(2, "ceil") }}
+{{ 2.569 | round(2, "floor") }}
+{{ -2.1 | ceil }}
+{{ -2.1 | floor }}
+{{ 2.5 | round }}
+{{ 3.5 | round }}
+{{ 0.125 | round(2) }}
+{{ 0.125 | currency }}
+EOF
+curl -F template=@round.txt -F 'data={}' \
+  http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = \
+  "$(printf '%s\n' 2.57 2.57 2.56 -2 -3 2.0 4.0 0.12 0.13)"
 ```
 
 `ceil` and `floor` give a whole number, which prints without `.0`, so use them for counts such as the boxes needed for 25 items, 12 to a box:
 
 ```bash test
-printf '{{ (items / per_box) | ceil }} boxes, {{ items // per_box }} full' > boxes.txt
-curl -F template=@boxes.txt -F 'data={"items":25,"per_box":12}' http://localhost:9027/v1/render -o out.txt
+cat > boxes.txt <<'EOF'
+{{ (items / per_box) | ceil }} boxes, {{ items // per_box }} full
+EOF
+curl -F template=@boxes.txt -F 'data={"items":25,"per_box":12}' \
+  http://localhost:9027/v1/render -o out.txt
 test "$(cat out.txt)" = '3 boxes, 2 full'
 ```
 
@@ -108,12 +134,25 @@ For a list of objects, name the attribute to add up. For these examples `lines` 
 
 ```bash test
 cat > totals.txt <<'EOF'
-{{ lines | sum(attribute="price") }}|{{ lines | avg(attribute="price") | round(2) }}|{{ lines | map(attribute="price") | min }}-{{ lines | map(attribute="price") | max }}|{{ (lines | max(attribute="price")).name }}|{{ lines | length }}
+{{ lines | sum(attribute="price") }}
+{{ lines | avg(attribute="price") | round(2) }}
+{{ lines | map(attribute="price") | min }}
+{{ lines | map(attribute="price") | max }}
+{{ (lines | max(attribute="price")).name }}
+{{ lines | length }}
 EOF
-curl -F template=@totals.txt \
-  -F 'data={"lines":[{"name":"Lamp","group":"Home","qty":2,"price":19.5},{"name":"Tea","group":"Food","qty":3,"price":4},{"name":"Rice","group":"Food","qty":1,"price":2.5}]}' \
+cat > lines.json <<'EOF'
+{
+  "lines": [
+    {"name": "Lamp", "group": "Home", "qty": 2, "price": 19.5},
+    {"name": "Tea", "group": "Food", "qty": 3, "price": 4},
+    {"name": "Rice", "group": "Food", "qty": 1, "price": 2.5}
+  ]
+}
+EOF
+curl -F template=@totals.txt -F data=@lines.json \
   http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = '26.0|8.67|2.5-19.5|Lamp|3'
+test "$(cat out.txt)" = "$(printf '26.0\n8.67\n2.5\n19.5\nLamp\n3')"
 ```
 
 - A list of plain numbers needs no attribute: `{{ [1, 2, 4] | sum }}`, `{{ [1, 2, 4] | avg }}`.
@@ -128,7 +167,11 @@ test "$(cat out.txt)" = '26.0|8.67|2.5-19.5|Lamp|3'
 
 ```bash test
 cat > net.txt <<'EOF'
-{% set ns = namespace(total=0) %}{% for l in lines %}{% set ns.total = ns.total + l.qty * l.price %}{% endfor %}{{ ns.total | currency("EUR") }}
+{% set ns = namespace(total=0) -%}
+{% for l in lines -%}
+  {% set ns.total = ns.total + l.qty * l.price -%}
+{% endfor -%}
+{{ ns.total | currency("EUR") }}
 EOF
 curl -F template=@net.txt \
   -F 'data={"lines":[{"qty":2,"price":19.5},{"qty":3,"price":4}]}' \
@@ -148,12 +191,29 @@ grep -x 'EUR 51.00' out.txt
 
 ```bash test
 cat > counts.txt <<'EOF'
-{{ lines | length }} lines, {{ lines | selectattr("qty", "gt", 1) | list | length }} with more than one, {{ lines | map(attribute="group") | unique | list | length }} groups: {{ lines | map(attribute="group") | unique | sort | join(", ") }}
+{{ lines | length }} lines
+{{ lines | selectattr("qty", "gt", 1) | list | length }} with more than one
+{{ lines | map(attribute="group") | unique | list | length }} groups
+{{ lines | map(attribute="group") | unique | sort | join(", ") }}
 EOF
-curl -F template=@counts.txt \
-  -F 'data={"lines":[{"group":"Home","qty":2},{"group":"Food","qty":3},{"group":"Food","qty":1}]}' \
+cat > lines.json <<'EOF'
+{
+  "lines": [
+    {"group": "Home", "qty": 2},
+    {"group": "Food", "qty": 3},
+    {"group": "Food", "qty": 1}
+  ]
+}
+EOF
+curl -F template=@counts.txt -F data=@lines.json \
   http://localhost:9027/v1/render -o out.txt
-grep -x '3 lines, 2 with more than one, 2 groups: Food, Home' out.txt
+cat > expected.txt <<'EOF'
+3 lines
+2 with more than one
+2 groups
+Food, Home
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 `selectattr(attribute, test, value)` keeps the items that pass a [test](/docs/templates/conditions/#tests). The comparison tests are `eq`, `ne`, `lt`, `le`, `gt` and `ge`, and `in` checks a value against a list. `rejectattr` keeps the others.
@@ -171,13 +231,30 @@ To get a total for each group, `groupby` splits the list by an attribute. Each g
 
 ```bash test
 cat > groups.txt <<'EOF'
-{% for g in lines | groupby("group") %}{{ g.grouper }}: {{ g.list | length }} lines, {{ g.list | sum(attribute="price") }}
-{% endfor %}Food only: {{ lines | selectattr("group", "eq", "Food") | sum(attribute="price") }}
+{% for g in lines | groupby("group") -%}
+  {% set total = g.list | sum(attribute="price") -%}
+  {{ g.grouper }}: {{ g.list | length }} lines, {{ total }}
+{% endfor -%}
+{% set food = lines | selectattr("group", "eq", "Food") -%}
+Food only: {{ food | sum(attribute="price") }}
 EOF
-curl -F template=@groups.txt \
-  -F 'data={"lines":[{"group":"Home","price":19.5},{"group":"Food","price":4},{"group":"Food","price":2.5}]}' \
+cat > lines.json <<'EOF'
+{
+  "lines": [
+    {"group": "Home", "price": 19.5},
+    {"group": "Food", "price": 4},
+    {"group": "Food", "price": 2.5}
+  ]
+}
+EOF
+curl -F template=@groups.txt -F data=@lines.json \
   http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = "$(printf 'Food: 2 lines, 6.5\nHome: 1 lines, 19.5\nFood only: 6.5')"
+cat > expected.txt <<'EOF'
+Food: 2 lines, 6.5
+Home: 1 lines, 19.5
+Food only: 6.5
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 In an Office template, put the group loop around a table and the line loop on a table row, as [Office formats](/docs/templates/office/#what-a-block-repeats) explains.
@@ -190,26 +267,48 @@ Keep it in a namespace, which a loop can change:
 
 ```text
 {% set ns = namespace(balance=0) %}
-{% for t in moves %}{% set ns.balance = ns.balance + t.amount %}{{ t.label }} {{ ns.balance }}{% endfor %}
+{% for t in moves -%}
+  {% set ns.balance = ns.balance + t.amount -%}
+  {{ t.label }} {{ ns.balance }}
+{%- endfor %}
 ```
 
 Or add up the lines so far, with a slice of the list. `moves[:loop.index]` is every line up to this one:
 
 ```text
-{% for t in moves %}{{ t.label }} {{ moves[:loop.index] | sum(attribute="amount") }}{% endfor %}
+{% for t in moves -%}
+  {{ t.label }} {{ moves[:loop.index] | sum(attribute="amount") }}
+{%- endfor %}
 ```
 
 The namespace is quicker on long lists, because the slice adds every earlier line again on each row.
 
 ```bash test
 cat > balance.txt <<'EOF'
-{% set ns = namespace(balance=100) %}{% for t in moves %}{% set ns.balance = ns.balance + t.amount %}{{ t.label }} {{ t.amount }} {{ ns.balance }} {{ moves[:loop.index] | sum(attribute="amount") }}
+{% set ns = namespace(balance=100) -%}
+{% for t in moves -%}
+  {% set ns.balance = ns.balance + t.amount -%}
+  {% set so_far = moves[:loop.index] | sum(attribute="amount") -%}
+  {{ t.label }} {{ t.amount }} {{ ns.balance }} {{ so_far }}
 {% endfor %}
 EOF
-curl -F template=@balance.txt \
-  -F 'data={"moves":[{"label":"Rent","amount":-80},{"label":"Sale","amount":250},{"label":"Fee","amount":-5}]}' \
+cat > moves.json <<'EOF'
+{
+  "moves": [
+    {"label": "Rent", "amount": -80},
+    {"label": "Sale", "amount": 250},
+    {"label": "Fee", "amount": -5}
+  ]
+}
+EOF
+curl -F template=@balance.txt -F data=@moves.json \
   http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = "$(printf 'Rent -80 20 -80\nSale 250 270 170\nFee -5 265 165')"
+cat > expected.txt <<'EOF'
+Rent -80 20 -80
+Sale 250 270 170
+Fee -5 265 165
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 `loop.previtem` and `loop.nextitem` give the neighbouring items, to show a change from the line before: `{{ t.amount - loop.previtem.amount if not loop.first }}`.
@@ -226,12 +325,22 @@ A comma between attributes sorts by the first, then by the second within it. Tex
 
 ```bash test
 cat > sorted.txt <<'EOF'
-{{ lines | sort(attribute="group,price") | map(attribute="name") | join(", ") }}|{{ (lines | sort(attribute="price", reverse=true))[:2] | map(attribute="name") | join(", ") }}
+{% set top = (lines | sort(attribute="price", reverse=true))[:2] -%}
+{{ lines | sort(attribute="group,price") | map(attribute="name") | join(", ") }}
+{{ top | map(attribute="name") | join(", ") }}
 EOF
-curl -F template=@sorted.txt \
-  -F 'data={"lines":[{"name":"Lamp","group":"Home","price":19.5},{"name":"Tea","group":"Food","price":4},{"name":"Rice","group":"Food","price":2.5}]}' \
+cat > lines.json <<'EOF'
+{
+  "lines": [
+    {"name": "Lamp", "group": "Home", "price": 19.5},
+    {"name": "Tea", "group": "Food", "price": 4},
+    {"name": "Rice", "group": "Food", "price": 2.5}
+  ]
+}
+EOF
+curl -F template=@sorted.txt -F data=@lines.json \
   http://localhost:9027/v1/render -o out.txt
-grep -x 'Rice, Tea, Lamp|Lamp, Tea' out.txt
+test "$(cat out.txt)" = "$(printf 'Rice, Tea, Lamp\nLamp, Tea')"
 ```
 
 ## Lookups and joins between lists
@@ -240,13 +349,32 @@ When one list refers to another by an id, find the matching item with `selectatt
 
 ```bash test
 cat > join.txt <<'EOF'
-{% for o in orders %}{% set c = customers | selectattr("id", "eq", o.customer) | first %}{{ o.number }}: {{ c.name if c is defined else "unknown customer" }}
+{% for o in orders -%}
+  {% set c = customers | selectattr("id", "eq", o.customer) | first -%}
+  {{ o.number }}: {{ c.name if c is defined else "unknown customer" }}
 {% endfor %}
 EOF
-curl -F template=@join.txt \
-  -F 'data={"customers":[{"id":7,"name":"Ada"},{"id":9,"name":"Grace"}],"orders":[{"number":"A-1","customer":9},{"number":"A-2","customer":7},{"number":"A-3","customer":4}]}' \
+cat > orders.json <<'EOF'
+{
+  "customers": [
+    {"id": 7, "name": "Ada"},
+    {"id": 9, "name": "Grace"}
+  ],
+  "orders": [
+    {"number": "A-1", "customer": 9},
+    {"number": "A-2", "customer": 7},
+    {"number": "A-3", "customer": 4}
+  ]
+}
+EOF
+curl -F template=@join.txt -F data=@orders.json \
   http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = "$(printf 'A-1: Grace\nA-2: Ada\nA-3: unknown customer')"
+cat > expected.txt <<'EOF'
+A-1: Grace
+A-2: Ada
+A-3: unknown customer
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 `first` of an empty list is undefined, so test it with `is defined` before reading from it.
@@ -271,9 +399,16 @@ A `set` inside a loop lasts only for that pass of the loop. A value set before t
 
 ```bash test
 cat > scope.txt <<'EOF'
-{% set count = 0 %}{% set ns = namespace(count=0) %}{% for i in items %}{% set count = count + 1 %}{% set ns.count = ns.count + 1 %}{% endfor %}{{ count }} {{ ns.count }}
+{% set count = 0 -%}
+{% set ns = namespace(count=0) -%}
+{% for i in items -%}
+  {% set count = count + 1 -%}
+  {% set ns.count = ns.count + 1 -%}
+{% endfor -%}
+{{ count }} {{ ns.count }}
 EOF
-curl -F template=@scope.txt -F 'data={"items":[1,2,3]}' http://localhost:9027/v1/render -o out.txt
+curl -F template=@scope.txt -F 'data={"items":[1,2,3]}' \
+  http://localhost:9027/v1/render -o out.txt
 grep -x '0 3' out.txt
 ```
 
@@ -301,9 +436,17 @@ A macro returns text. To use its result in arithmetic, `{{ net(l) | float }}` tu
 [`words`](/docs/templates/filters/#words) spells a number in English, French or Ukrainian, following the template's `lang` setting. Amounts on cheques and contracts use it:
 
 ```bash test
-printf '{{ total | currency("EUR") }} ({{ total | words(currency="EUR") }})|{{ rank | words(ordinal=true) }}' > words.txt
-curl -F template=@words.txt -F 'data={"total":1250.5,"rank":3}' http://localhost:9027/v1/render -o out.txt
-grep -x 'EUR 1,250.50 (one thousand two hundred fifty euros and fifty cents)|third' out.txt
+cat > words.txt <<'EOF'
+{{ total | currency("EUR") }} ({{ total | words(currency="EUR") }})
+{{ rank | words(ordinal=true) }}
+EOF
+curl -F template=@words.txt -F 'data={"total":1250.5,"rank":3}' \
+  http://localhost:9027/v1/render -o out.txt
+cat > expected.txt <<'EOF'
+EUR 1,250.50 (one thousand two hundred fifty euros and fifty cents)
+third
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 ## Dates
@@ -323,11 +466,23 @@ The units are `year`, `quarter`, `month`, `week`, `day`, `hour`, `minute` and `s
 
 ```bash test
 cat > dates.txt <<'EOF'
-{{ issued | date_add(30) }}|{{ issued | date_add(1, "month") }}|{{ issued | end_of("month") }}|{{ due | date_diff(issued) }}|{{ issued | date_add(36, "hours") }}
+{{ issued | date_add(30) }}
+{{ issued | date_add(1, "month") }}
+{{ issued | end_of("month") }}
+{{ due | date_diff(issued) }}
+{{ issued | date_add(36, "hours") }}
 EOF
-curl -F template=@dates.txt -F 'data={"issued":"2028-01-31","due":"2028-03-01"}' \
+curl -F template=@dates.txt \
+  -F 'data={"issued":"2028-01-31","due":"2028-03-01"}' \
   http://localhost:9027/v1/render -o out.txt
-grep -x '2028-03-01|2028-02-29|2028-01-31|30|2028-02-01T12:00:00' out.txt
+cat > expected.txt <<'EOF'
+2028-03-01
+2028-02-29
+2028-01-31
+30
+2028-02-01T12:00:00
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 What each one does:
@@ -347,10 +502,20 @@ A result outside the years chrono can hold, about 262,000 years either side of y
 Output that uses `now()` changes on every run, which breaks comparisons with a saved file. Send `ctx.now` to fix it for one request:
 
 ```bash test
-printf 'Printed {{ now() }}, valid until {{ now() | date_add(14) }}, {{ due | date_diff(now()) }} days left' > today.txt
-curl -F template=@today.txt -F 'data={"due":"2026-12-01"}' -F 'ctx={"now":"2026-11-06T10:20:00Z"}' \
+cat > today.txt <<'EOF'
+Printed {{ now() }}
+valid until {{ now() | date_add(14) }}
+{{ due | date_diff(now()) }} days left
+EOF
+curl -F template=@today.txt -F 'data={"due":"2026-12-01"}' \
+  -F 'ctx={"now":"2026-11-06T10:20:00Z"}' \
   http://localhost:9027/v1/render -o out.txt
-grep -x 'Printed 2026-11-06T10:20:00Z, valid until 2026-11-20T10:20:00Z, 24 days left' out.txt
+cat > expected.txt <<'EOF'
+Printed 2026-11-06T10:20:00Z
+valid until 2026-11-20T10:20:00Z
+24 days left
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 `ctx.now` accepts anything `date` accepts. A date with no time, such as `2026-11-06`, makes `now()` a date too. A value that cannot be read is an error naming `ctx.now`. As with any `ctx` key, a `ctx` object inside `data` wins.
@@ -361,12 +526,16 @@ In an Office template, print a calculated date with `date`:
 
 ```bash test
 mkdir t && cd t && unzip -q ../report.docx
-perl -pi -e 's{A document with no tags in it.}{Pay by {{ issued | date_add(30) | date("%d %B %Y") }}, {{ issued | date_diff(start, "weeks") }} weeks in.}' word/document.xml
+export TAG='Pay by {{ issued | date_add(30) | date("%d %B %Y") }},'
+TAG+=' {{ issued | date_diff(start, "weeks") }} weeks in.'
+perl -pi -e 's{A document with no tags in it.}{$ENV{TAG}}' word/document.xml
 zip -qr ../dated.docx . && cd ..
 
-curl -F template=@dated.docx -F 'data={"issued":"2026-11-06","start":"2026-09-01"}' \
+curl -F template=@dated.docx \
+  -F 'data={"issued":"2026-11-06","start":"2026-09-01"}' \
   http://localhost:9027/v1/render -o out.docx
-unzip -p out.docx word/document.xml | grep -o 'Pay by 06 December 2026, 9 weeks in.'
+unzip -p out.docx word/document.xml |
+  grep -o 'Pay by 06 December 2026, 9 weeks in.'
 ```
 
 ### Durations
@@ -382,9 +551,15 @@ unzip -p out.docx word/document.xml | grep -o 'Pay by 06 December 2026, 9 weeks 
 | `"P2W"` | `duration("days")` | `14` |
 
 ```bash test
-printf '{{ ms | duration }}|{{ ms | duration("minutes") }}|{{ iso | duration }}|{{ iso | duration("hours") | round(1) }}' > took.txt
-curl -F template=@took.txt -F 'data={"ms":5400000,"iso":"P1DT12H"}' http://localhost:9027/v1/render -o out.txt
-grep -x '2 hours|90|2 days|36' out.txt
+cat > took.txt <<'EOF'
+{{ ms | duration }}
+{{ ms | duration("minutes") }}
+{{ iso | duration }}
+{{ iso | duration("hours") | round(1) }}
+EOF
+curl -F template=@took.txt -F 'data={"ms":5400000,"iso":"P1DT12H"}' \
+  http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = "$(printf '2 hours\n90\n2 days\n36')"
 ```
 
 The units are `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` and `milliseconds` (or `ms`). In an ISO duration, and for the `months` and `years` units, a month counts 30 days and a year 365. The words are in English, rounded the way people say them: `5 minutes`, `an hour`, `3 days`, `a month`, `2 years`. The sign is ignored, so `-7200000` is also `2 hours`.
@@ -398,7 +573,8 @@ This invoice groups its lines, shows a subtotal for each group and a running bal
 ```bash test
 cat > invoice.txt <<'EOF'
 {%- set ns = namespace(balance=0) -%}
-Invoice {{ number | pad_left(6, "0") }}, issued {{ issued }}, due {{ issued | date_add(30) }}
+{%- set due = issued | date_add(30) -%}
+Invoice {{ number | pad_left(6, "0") }}, issued {{ issued }}, due {{ due }}
 {% for g in lines | groupby("group") %}
 {{ g.grouper | upper }}
 {%- set sub = namespace(total=0) %}
@@ -406,16 +582,27 @@ Invoice {{ number | pad_left(6, "0") }}, issued {{ issued }}, due {{ issued | da
 {%- set amount = l.qty * l.price %}
 {%- set sub.total = sub.total + amount %}
 {%- set ns.balance = ns.balance + amount %}
-  {{ l.name | pad_right(14) }}{{ l.qty | pad_left(4) }} x {{ "%7.2f" | format(l.price) }} {{ "%9.2f" | format(amount) }} {{ "%9.2f" | format(ns.balance) }}
+{%- set name = l.name | pad_right(14) %}
+{%- set qty = l.qty | pad_left(4) %}
+{%- set price = "%7.2f" | format(l.price) %}
+{%- set cost = "%9.2f" | format(amount) %}
+{%- set balance = "%9.2f" | format(ns.balance) %}
+  {{ name }}{{ qty }} x {{ price }} {{ cost }} {{ balance }}
 {%- endfor %}
   {{ "Subtotal" | pad_right(29) }}{{ "%9.2f" | format(sub.total) }}
 {% endfor %}
 {%- set tax = (ns.balance * vat) | round(2) %}
+{%- set total = ns.balance + tax %}
 Net   {{ ns.balance | currency("KES") }}
 VAT   {{ tax | currency("KES") }} ({{ (vat * 100) | round | int }}%)
-Total {{ (ns.balance + tax) | currency("KES") }}
-{{ (ns.balance + tax) | words(currency="DOLLAR") | replace("dollar", "shilling") | capitalize }}.
-{% if paid is not empty %}Paid {{ paid | sum(attribute="amount") | currency("KES") }} on {{ paid | map(attribute="date") | join(", ") }}.{% endif %}
+Total {{ total | currency("KES") }}
+{{ total | words(currency="DOLLAR")
+         | replace("dollar", "shilling")
+         | capitalize }}.
+{% if paid is not empty -%}
+  {% set paid_total = paid | sum(attribute="amount") | currency("KES") -%}
+  Paid {{ paid_total }} on {{ paid | map(attribute="date") | join(", ") }}.
+{%- endif %}
 EOF
 cat > invoice-data.json <<'EOF'
 {
@@ -431,7 +618,8 @@ cat > invoice-data.json <<'EOF'
   "paid": [{"date": "2026-11-10", "amount": 500}]
 }
 EOF
-curl -F template=@invoice.txt -F "data=<invoice-data.json" http://localhost:9027/v1/render -o out.txt
+curl -F template=@invoice.txt -F "data=<invoice-data.json" \
+  http://localhost:9027/v1/render -o out.txt
 cat > expected.txt <<'EOF'
 Invoice 000042, issued 2026-11-06, due 2026-12-06
 

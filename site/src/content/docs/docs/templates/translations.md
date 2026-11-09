@@ -47,7 +47,8 @@ curl -F template=@label.txt \
   -F 'translations={"de": {"total": "Summe"}}' \
   http://localhost:9027/v1/render -o out.txt
 # The no-break space CLDR puts before the euro sign, shown here as _.
-test "$(perl -CSD -pe 's/\x{a0}/_/g' out.txt)" = 'Summe: 1.500,00_€, 01 Juli 2026 12:00'
+test "$(perl -CSD -pe 's/\x{a0}/_/g' out.txt)" = \
+  'Summe: 1.500,00_€, 01 Juli 2026 12:00'
 ```
 
 A field that cannot be used is a `400` that names it, so a typing mistake is not silently ignored:
@@ -77,15 +78,23 @@ This example puts the settings in the sample invoice:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
-perl -pi -e 's/Billed to/{% settings lang="fr" currency="EUR" timezone="+02:00" t.billed.fr="Facturé à" t.billed.de="Rechnung an" %}{{ "billed" | t }}, {{ 5 | currency }}, {{ "2026-11-06T23:30:00Z" | date("%d\/%m %H:%M") }}/' word/document.xml
+export TAG='{% settings lang="fr" currency="EUR" timezone="+02:00"'
+TAG+=' t.billed.fr="Facturé à" t.billed.de="Rechnung an" %}'
+TAG+='{{ "billed" | t }}, {{ 5 | currency }},'
+TAG+=' {{ "2026-11-06T23:30:00Z" | date("%d/%m %H:%M") }}'
+perl -pi -e 's/Billed to/$ENV{TAG}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
-unzip -p out.docx word/document.xml | perl -CSD -pe 's/\x{a0}/_/g' | grep -o 'Facturé à, 5,00_€, 07/11 01:30'
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
+unzip -p out.docx word/document.xml | perl -CSD -pe 's/\x{a0}/_/g' |
+  grep -o 'Facturé à, 5,00_€, 07/11 01:30'
 
 # The request's language wins over the template's.
-curl -F template=@tagged.docx -F "data=<invoice.json" -F lang=de http://localhost:9027/v1/render -o out.docx
-unzip -p out.docx word/document.xml | perl -CSD -pe 's/\x{a0}/_/g' | grep -o 'Rechnung an, 5,00_€, 07/11 01:30'
+curl -F template=@tagged.docx -F "data=<invoice.json" -F lang=de \
+  http://localhost:9027/v1/render -o out.docx
+unzip -p out.docx word/document.xml | perl -CSD -pe 's/\x{a0}/_/g' |
+  grep -o 'Rechnung an, 5,00_€, 07/11 01:30'
 ```
 
 :::note
@@ -108,12 +117,20 @@ mkdir t && cd t && unzip -q ../invoice.docx
 mkdir -p docProps
 cat > docProps/custom.xml <<'EOF'
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="currency"><vt:lpwstr>EUR</vt:lpwstr></property></Properties>
+<Properties
+  xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
+  xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2"
+            name="currency">
+    <vt:lpwstr>EUR</vt:lpwstr>
+  </property>
+</Properties>
 EOF
 perl -pi -e 's/Billed to/{{ 5 | currency }}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -p out.docx word/document.xml | grep -o 'EUR 5.00'
 ```
 
@@ -130,7 +147,8 @@ So a more exact language beats a higher source: a template's `t.total.fr-ca` win
 
 ```bash test
 cat > t.txt <<'EOF'
-{% settings t.total="Total" t.tax.fr-ca="TPS" t.note="Note" %}{{ "total" | t }}|{{ "tax" | t }}|{{ "note" | t }}|{{ "other" | t }}
+{% settings t.total="Total" t.tax.fr-ca="TPS" t.note="Note" %}
+{{- "total" | t }}|{{ "tax" | t }}|{{ "note" | t }}|{{ "other" | t }}
 EOF
 curl -F template=@t.txt -F lang=fr-CA \
   -F 'translations={"fr": {"total": "Montant", "tax": "Taxe"}}' \
@@ -176,9 +194,13 @@ The result is a dictionary ready for `RUSTICDOC_TRANSLATIONS_DIR`. `rusticdoc re
 
 ```bash test
 printf '{{ "total" | t }} {{ "due" | t }}' > v.txt
-curl -F template=@v.txt -F lang=fr -F 'translations={"fr": {"total": "Montant"}}' \
+curl -F template=@v.txt -F lang=fr \
+  -F 'translations={"fr": {"total": "Montant"}}' \
   http://localhost:9027/v1/templates/validate -o v.json
-jq -e '.ok and (.diagnostics | length == 1) and (.diagnostics[0].message | startswith("no fr translation for \"due\""))' v.json
+jq -e '.ok
+  and (.diagnostics | length == 1)
+  and (.diagnostics[0].message | startswith("no fr translation for \"due\""))
+' v.json
 ```
 
 `rusticdoc validate --lang fr` does the same on the command line.

@@ -86,8 +86,14 @@ A render by id has no files to send, so `/v1/render`, `/v1/render/batch` and `/v
 curl -F template=@letter.txt http://localhost:9027/v1/templates -o stored.json
 ID=$(jq -r .id stored.json)
 
-curl -H "Content-Type: application/json" \
-  -d "{\"templateId\":\"$ID\",\"data\":{\"customer\":{\"name\":\"Ada\"},\"total\":1500},\"outputFilename\":\"ada\"}" \
+cat > body.json <<EOF
+{
+  "templateId": "$ID",
+  "data": {"customer": {"name": "Ada"}, "total": 1500},
+  "outputFilename": "ada"
+}
+EOF
+curl -H "Content-Type: application/json" -d @body.json \
   http://localhost:9027/v1/render -o ada.txt
 grep -q "Dear Ada" ada.txt
 
@@ -121,8 +127,10 @@ curl -F template=@letter.txt http://localhost:9027/v1/templates -o one.json
 curl -F template=@letter.txt http://localhost:9027/v1/templates -o two.json
 
 curl "http://localhost:9027/v1/templates?limit=1" -o page.json
-jq -e '(.templates | length) == 1 and (.nextCursor | type) == "string"' page.json
-curl "http://localhost:9027/v1/templates?limit=1&cursor=$(jq -r .nextCursor page.json)" -o next.json
+jq -e '(.templates | length) == 1
+  and (.nextCursor | type) == "string"' page.json
+cursor=$(jq -r .nextCursor page.json)
+curl "http://localhost:9027/v1/templates?limit=1&cursor=$cursor" -o next.json
 jq -e '.templates | type == "array"' next.json
 
 curl -X DELETE "http://localhost:9027/v1/templates/$(jq -r .id one.json)"
@@ -173,18 +181,25 @@ An alias is a name for a template, such as `invoice`, that your application rend
 curl -F template=@letter.txt http://localhost:9027/v1/templates -o one.json
 curl -F template=@letter.txt http://localhost:9027/v1/templates -o two.json
 
-curl -X PUT -H "Content-Type: application/json" -d "{\"templateId\":\"$(jq -r .id one.json)\"}" \
+cat > alias.json <<EOF
+{"templateId": "$(jq -r .id one.json)"}
+EOF
+curl -X PUT -H "Content-Type: application/json" -d @alias.json \
   http://localhost:9027/v1/aliases/letter -o v1.json
 jq -e '.version == 1' v1.json
-curl -X PUT -F templateId="$(jq -r .id two.json)" http://localhost:9027/v1/aliases/letter -o v2.json
+curl -X PUT -F templateId="$(jq -r .id two.json)" \
+  http://localhost:9027/v1/aliases/letter -o v2.json
 jq -e '.version == 2' v2.json
 
-curl -F templateId=letter -F "data=<letter.json" http://localhost:9027/v1/render -o now.txt
-curl -F templateId=letter@1 -F "data=<letter.json" http://localhost:9027/v1/render -o before.txt
+curl -F templateId=letter -F "data=<letter.json" \
+  http://localhost:9027/v1/render -o now.txt
+curl -F templateId=letter@1 -F "data=<letter.json" \
+  http://localhost:9027/v1/render -o before.txt
 grep -q "Dear Ada" now.txt && grep -q "Dear Ada" before.txt
 
 curl http://localhost:9027/v1/aliases/letter -o history.json
-jq -e '(.versions | length) == 2 and .templateId == "'"$(jq -r .id two.json)"'"' history.json
+jq -e --arg id "$(jq -r .id two.json)" \
+  '(.versions | length) == 2 and .templateId == $id' history.json
 
 curl -X DELETE http://localhost:9027/v1/aliases/letter
 curl -X DELETE "http://localhost:9027/v1/templates/$(jq -r .id one.json)"

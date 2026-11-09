@@ -19,10 +19,14 @@ cat > customers.json <<'EOF'
   ]
 }
 EOF
-printf 'Dear {{ item.name }},\nYou owe {{ company }} {{ item.total | currency("KES") }}.\n({{ batch.index }} of {{ batch.count }})\n' > letter-one.txt
+cat > letter-one.txt <<'EOF'
+Dear {{ item.name }},
+You owe {{ company }} {{ item.total | currency("KES") }}.
+({{ batch.index }} of {{ batch.count }})
+EOF
 
-curl -F template=@letter-one.txt -F "data=<customers.json" -F splitBy=customers \
-  -F 'batchName={{ item.name }}' -F steps=convert \
+curl -F template=@letter-one.txt -F "data=<customers.json" \
+  -F splitBy=customers -F 'batchName={{ item.name }}' -F steps=convert \
   http://localhost:9027/v1/render/batch -o letters.zip
 
 unzip -l letters.zip | grep -o 'Ada.pdf'
@@ -56,7 +60,8 @@ With `splitBy=customers`, `{{ customers | length }}` is `1` in every file, and `
 For an Office template, the tags work as they do in any [Office template](/docs/templates/office/):
 
 ```bash test
-jq '. + {invoices: [{number: "INV-1"}, {number: "INV-2"}]}' invoice.json > invoices.json
+jq '. + {invoices: [{number: "INV-1"}, {number: "INV-2"}]}' invoice.json \
+  > invoices.json
 curl -F template=@invoice.docx -F "data=<invoices.json" -F splitBy=invoices \
   -F 'batchName=invoice-{{ item.number }}' -F outputFilename=november \
   http://localhost:9027/v1/render/batch -o november.zip
@@ -84,8 +89,8 @@ Without `batchName`, the files are `1.txt`, `2.txt` and so on.
 The steps that carry files or repeat are refused here: `watermark`, `stamp`, `embed` and `factur-x`.
 
 ```bash test=fail
-curl -F template=@letter.txt -F 'data={"customers":[{"name":"Ada"}]}' -F splitBy=customers \
-  -F steps=watermark -F watermarkText=DRAFT \
+curl -F template=@letter.txt -F 'data={"customers":[{"name":"Ada"}]}' \
+  -F splitBy=customers -F steps=watermark -F watermarkText=DRAFT \
   http://localhost:9027/v1/render/batch -o out.zip
 ```
 

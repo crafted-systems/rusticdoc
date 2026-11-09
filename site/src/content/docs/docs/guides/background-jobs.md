@@ -24,8 +24,14 @@ Add `Prefer: respond-async` to any request that produces a file: `/v1/render`, `
 curl -F template=@letter.txt http://localhost:9027/v1/templates -o stored.json
 ID=$(jq -r .id stored.json)
 
-curl -s -D headers.txt -H "Prefer: respond-async" -H "Content-Type: application/json" \
-  -d "{\"templateId\":\"$ID\",\"data\":{\"customer\":{\"name\":\"Ada\"},\"total\":1500}}" \
+cat > body.json <<EOF
+{
+  "templateId": "$ID",
+  "data": {"customer": {"name": "Ada"}, "total": 1500}
+}
+EOF
+curl -s -D headers.txt -H "Prefer: respond-async" \
+  -H "Content-Type: application/json" -d @body.json \
   http://localhost:9027/v1/render -o job.json
 grep -qi "^location: /v1/jobs/" headers.txt
 jq -e '.status == "queued"' job.json
@@ -53,13 +59,14 @@ Asking for a webhook and a job in one request is a `400`. Routes that answer in 
 
 ```bash test
 curl -F template=@letter.txt http://localhost:9027/v1/templates -o stored.json
-curl -s -H "Prefer: respond-async" -F templateId="$(jq -r .id stored.json)" -F "data=<letter.json" \
-  http://localhost:9027/v1/render -o job.json
+curl -s -H "Prefer: respond-async" -F templateId="$(jq -r .id stored.json)" \
+  -F "data=<letter.json" http://localhost:9027/v1/render -o job.json
 JOB=$(jq -r .id job.json)
 
 for i in $(seq 50); do
   curl -s "http://localhost:9027/v1/jobs/$JOB" -o state.json
-  jq -e '.status == "done" or .status == "failed"' state.json > /dev/null && break
+  jq -e '.status == "done" or .status == "failed"' state.json > /dev/null \
+    && break
   sleep 0.2
 done
 jq -e '.status == "done" and .result.name == "letter.txt"' state.json

@@ -8,7 +8,10 @@ Use this page to work out what an error means and what to change. Errors are JSO
 ## The JSON body
 
 ```json
-{ "error": "invalid_request", "message": "invalid request: unknown step 'teleport'; file-carrying steps (watermark, stamp, embed, factur-x) take their own fields" }
+{
+  "error": "invalid_request",
+  "message": "invalid request: unknown step 'teleport'; file-carrying steps (watermark, stamp, embed, factur-x) take their own fields"
+}
 ```
 
 | Field | Meaning |
@@ -64,7 +67,8 @@ A private address is a `400`, not a `403`.
 | `template_not_cached` | `templateHash` is not in this replica's memory | Send the file. See [sending a hash](/docs/guides/pipeline/#sending-a-hash) |
 
 ```bash test=fail
-curl -F templateHash=deadbeef -F "data=<letter.json" http://localhost:9027/v1/render
+curl -F templateHash=deadbeef -F "data=<letter.json" \
+  http://localhost:9027/v1/render
 ```
 
 ### 409
@@ -90,7 +94,8 @@ curl -F templateHash=deadbeef -F "data=<letter.json" http://localhost:9027/v1/re
 | `reported` | The render worker stopped: `The document used more CPU time than one render may use.` or `The document could not be rendered.` | Simplify the template or the page. Look in the log under the request id |
 
 ```bash test=fail
-curl -F template=@letter.txt -F 'data={"customer":{}}' http://localhost:9027/v1/render
+curl -F template=@letter.txt -F 'data={"customer":{}}' \
+  http://localhost:9027/v1/render
 ```
 
 ### 429

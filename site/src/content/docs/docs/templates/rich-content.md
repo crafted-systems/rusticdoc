@@ -70,8 +70,10 @@ mkdir t && cd t && unzip -q ../invoice.docx
 perl -pi -e 's/Billed to/{{ logo | image(width=120) }}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-jq --arg logo "$(base64 < logo.png | tr -d '\n')" '. + {logo: $logo}' invoice.json > with-logo.json
-curl -F template=@tagged.docx -F "data=<with-logo.json" http://localhost:9027/v1/render -o out.docx
+jq --arg logo "$(base64 < logo.png | tr -d '\n')" '. + {logo: $logo}' \
+  invoice.json > with-logo.json
+curl -F template=@tagged.docx -F "data=<with-logo.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -l out.docx | grep -o 'word/media/rich1.png'
 ```
 
@@ -93,9 +95,16 @@ mkdir t && cd t && unzip -q ../invoice.docx
 perl -pi -e 's/Billed to/{{ mark | image(width=60) }}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-svg='<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="18" fill="#b8431a"/><script>alert(1)</script></svg>'
-jq --arg mark "$(printf '%s' "$svg" | base64 | tr -d '\n')" '. + {mark: $mark}' invoice.json > with-mark.json
-curl -F template=@tagged.docx -F "data=<with-mark.json" http://localhost:9027/v1/render -o out.docx
+cat > mark.svg <<'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+  <circle cx="20" cy="20" r="18" fill="#b8431a"/>
+  <script>alert(1)</script>
+</svg>
+EOF
+jq --arg mark "$(base64 < mark.svg | tr -d '\n')" '. + {mark: $mark}' \
+  invoice.json > with-mark.json
+curl -F template=@tagged.docx -F "data=<with-mark.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -l out.docx | grep -o 'word/media/rich[0-9]*\.svg'
 unzip -p out.docx word/document.xml | grep -o 'asvg:svgBlip'
 ! unzip -p out.docx 'word/media/rich*.svg' | grep script
@@ -119,7 +128,8 @@ perl -pi -e 's/Billed to/{{ logo | image }}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
 jq '. + {logo: "https://example.com/logo.png"}' invoice.json > with-url.json
-curl -F template=@tagged.docx -F "data=<with-url.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<with-url.json" \
+  http://localhost:9027/v1/render -o out.docx
 ```
 
 ### Where the picture goes
@@ -151,11 +161,14 @@ To control exactly where a picture goes and how it looks, put a real picture in 
 The alt text holds one tag, and it must end in `image` or `barcode`. Text around it stays as the picture's alt text. Any other tag in the same alt text is filled in as text, as alt text tags are. A placeholder takes its size from its frame, so `width`, `height` and `size` are refused there: `a placeholder picture takes its size from its frame`. Choose how the image sits with `fit`, whose default in a placeholder is `contain`.
 
 ```bash test
-jq -n --arg photo "$(base64 < logo.png | tr -d '\n')" '{photo: $photo}' > photo.json
-curl -F template=@badge.docx -F "data=<photo.json" http://localhost:9027/v1/render -o out.docx
+jq -n --arg photo "$(base64 < logo.png | tr -d '\n')" '{photo: $photo}' \
+  > photo.json
+curl -F template=@badge.docx -F "data=<photo.json" \
+  http://localhost:9027/v1/render -o out.docx
 # A 3:1 logo covering a square frame loses a third of its width on each side.
-unzip -p out.docx word/document.xml | grep -o '<a:srcRect l="33333" t="0" r="33333" b="0"/>'
-unzip -p out.docx word/document.xml | grep -o '<wp:extent cx="1371600" cy="1371600"/>'
+unzip -p out.docx word/document.xml > out.xml
+grep -o '<a:srcRect l="33333" t="0" r="33333" b="0"/>' out.xml
+grep -o '<wp:extent cx="1371600" cy="1371600"/>' out.xml
 ```
 
 A placeholder in a table row that a loop repeats gives each copy its own image, as `{{ item.photo | image }}` would. In XLSX, pictures live in a drawing beside the sheet, so a placeholder there sees the data's top level but not loop variables, and is not copied by a row loop.
@@ -225,7 +238,8 @@ For `gs1-128`, each identifier is 2 to 4 digits in parentheses, followed by its 
 The sample invoice holds a QR code, which you can see with no changes to it:
 
 ```bash test
-curl -F template=@invoice.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@invoice.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -l out.docx | grep -o 'word/media/rich1.png'
 ```
 
@@ -233,11 +247,14 @@ A retail code with its digits under the bars, rotated and in colour:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
-perl -pi -e 's/Billed to/{{ gtin | barcode("ean13", text=true, width=160, color="#123a6b", rotate=90) }}/' word/document.xml
+export TAG='{{ gtin | barcode("ean13", text=true, width=160,'
+TAG+=' color="#123a6b", rotate=90) }}'
+perl -pi -e 's/Billed to/$ENV{TAG}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
 jq '. + {gtin: "590123412345"}' invoice.json > with-gtin.json
-curl -F template=@tagged.docx -F "data=<with-gtin.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<with-gtin.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -l out.docx | grep -c 'word/media/rich[0-9]*\.png' | grep -x 2
 ```
 
@@ -245,10 +262,12 @@ A bad value is a `422` naming the problem:
 
 ```bash test=fail
 mkdir t && cd t && unzip -q ../invoice.docx
-perl -pi -e 's/Billed to/{{ "5901234123458" | barcode("ean13") }}/' word/document.xml
+perl -pi -e 's/Billed to/{{ "5901234123458" | barcode("ean13") }}/' \
+  word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 ```
 
 A barcode counts as an image for placement and limits, and fills a placeholder picture like one. The bars are drawn with a whole number of device pixels per module, so their edges stay sharp, and the image is then printed at the size asked for. Every symbology decodes to its exact value with rxing, a port of ZXing, from the PNG the service makes, with and without text, colours, a wider quiet zone and rotation, and from LibreOffice's PDF of the document at 300 dpi. ZBar reads the same PNGs for every linear code and QR; it has no Data Matrix or Aztec reader. EAN and UPC codes come back with the check digit the service adds. rxing reports Codabar without its start and stop letters, and ZBar with them. At 100 dpi a long Code 128 or Code 39 at the default size is too fine to read, so give it a larger `size` for screens. No code has been scanned with a hardware or phone reader, as [known limits](/docs/project/known-limits/) says, so test yours on your own hardware.
@@ -270,8 +289,10 @@ perl -pi -e 's/Billed to/{{ site | link("Open") }}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
 jq '. + {site: "https://example.com"}' invoice.json > with-link.json
-curl -F template=@tagged.docx -F "data=<with-link.json" http://localhost:9027/v1/render -o out.docx
-unzip -p out.docx word/_rels/document.xml.rels | grep -o 'Target="https://example.com"'
+curl -F template=@tagged.docx -F "data=<with-link.json" \
+  http://localhost:9027/v1/render -o out.docx
+unzip -p out.docx word/_rels/document.xml.rels |
+  grep -o 'Target="https://example.com"'
 ```
 
 ## color
@@ -304,7 +325,8 @@ mkdir t && cd t && unzip -q ../invoice.docx
 perl -pi -e 's/Billed to/{{ number | color("#c00") }}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -p out.docx word/document.xml | grep -o '<w:color w:val="CC0000"/>'
 ```
 
@@ -312,19 +334,24 @@ A shaded paragraph:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
-perl -pi -e 's/Billed to/{{ number | color(background="#fee", scope="paragraph") }}/' word/document.xml
+export TAG='{{ number | color(background="#fee", scope="paragraph") }}'
+perl -pi -e 's/Billed to/$ENV{TAG}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
-unzip -p out.docx word/document.xml | grep -o '<w:shd w:val="clear" w:color="auto" w:fill="FFEEEE"/>'
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
+unzip -p out.docx word/document.xml |
+  grep -o '<w:shd w:val="clear" w:color="auto" w:fill="FFEEEE"/>'
 ```
 
 ```bash test=fail
 mkdir t && cd t && unzip -q ../invoice.docx
-perl -pi -e 's/Billed to/{{ number | color(background="#fee", scope="shape") }}/' word/document.xml
+export TAG='{{ number | color(background="#fee", scope="shape") }}'
+perl -pi -e 's/Billed to/$ENV{TAG}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 ```
 
 ## html
@@ -364,8 +391,10 @@ mkdir t && cd t && unzip -q ../invoice.docx
 perl -pi -e 's/Billed to/{{ note | html }}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-jq '. + {note: "<p>Thanks for your <b>order</b></p><script>bad()</script>"}' invoice.json > with-note.json
-curl -F template=@tagged.docx -F "data=<with-note.json" http://localhost:9027/v1/render -o out.docx
+jq '. + {note: "<p>Thanks for your <b>order</b></p><script>bad()</script>"}' \
+  invoice.json > with-note.json
+curl -F template=@tagged.docx -F "data=<with-note.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -p out.docx word/document.xml > out.xml
 grep -o 'Thanks for your ' out.xml
 ! grep 'bad()' out.xml
@@ -389,11 +418,17 @@ The value is a list of objects, and each object is one category.
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
-perl -pi -e 's/Billed to/{{ rows | chart(type="column", x="month", y=["sales"], title="Sales") }}/' word/document.xml
+export TAG='{{ rows | chart(type="column", x="month",'
+TAG+=' y=["sales"], title="Sales") }}'
+perl -pi -e 's/Billed to/$ENV{TAG}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-jq '. + {rows: [{month: "March", sales: 90}, {month: "April", sales: 120}]}' invoice.json > with-rows.json
-curl -F template=@tagged.docx -F "data=<with-rows.json" http://localhost:9027/v1/render -o out.docx
+jq '. + {rows: [
+  {month: "March", sales: 90},
+  {month: "April", sales: 120}
+]}' invoice.json > with-rows.json
+curl -F template=@tagged.docx -F "data=<with-rows.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -l out.docx | grep -o 'word/charts/chart1.xml'
 ```
 
@@ -423,7 +458,8 @@ mkdir t && cd t && unzip -q ../invoice.docx
 perl -pi -e 's/Billed to/{{ "" | pagebreak }}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -p out.docx word/document.xml | grep -o '<w:br w:type="page"/>'
 ```
 
@@ -432,7 +468,8 @@ mkdir t && cd t && unzip -q ../deck.pptx
 perl -pi -e 's/A slide/{{ "" | pagebreak }}/' ppt/slides/slide1.xml
 zip -qr ../tagged.pptx . && cd ..
 
-curl -F template=@tagged.pptx -F 'data={"_":1}' http://localhost:9027/v1/render -o out.pptx
+curl -F template=@tagged.pptx -F 'data={"_":1}' \
+  http://localhost:9027/v1/render -o out.pptx
 ```
 
 

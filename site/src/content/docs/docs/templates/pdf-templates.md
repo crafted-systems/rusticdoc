@@ -38,16 +38,20 @@ Two routes do this:
 Both take `data`, `ctx`, `flatten` and `stripAnnotations`, and `outputFilename` names the result.
 
 ```bash test
-curl -F files=@form.pdf -F 'data={"name":"Ada","date":"2026-11-06","agree":true}' \
+curl -F files=@form.pdf \
+  -F 'data={"name":"Ada","date":"2026-11-06","agree":true}' \
   http://localhost:9027/v1/pdf/forms/fill -o filled.pdf
 
-curl -F files=@filled.pdf http://localhost:9027/v1/pdf/forms/fields -o fields.json
+curl -F files=@filled.pdf \
+  http://localhost:9027/v1/pdf/forms/fields -o fields.json
 jq -e '.[0].value == "Ada" and .[2].value == "Yes"' fields.json
 ```
 
 ```bash test
-curl -F template=@form.pdf -F 'data={"name":"Ada"}' http://localhost:9027/v1/render -o filled.pdf
-curl -F files=@filled.pdf http://localhost:9027/v1/pdf/forms/fields -o fields.json
+curl -F template=@form.pdf -F 'data={"name":"Ada"}' \
+  http://localhost:9027/v1/render -o filled.pdf
+curl -F files=@filled.pdf \
+  http://localhost:9027/v1/pdf/forms/fields -o fields.json
 jq -e '.[0].value == "Ada"' fields.json
 ```
 

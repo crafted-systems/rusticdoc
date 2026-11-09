@@ -19,9 +19,15 @@ This page shows how to show, hide or choose content: inline conditions, `if` blo
 Without `else`, a false condition prints nothing. Inline conditions chain, for up to three or four choices:
 
 ```bash test
-printf '{{ "Paid" if paid else "Due" }}|{{ " (late)" if late }}|{{ "Gold" if points >= 1000 else "Silver" if points >= 500 else "Bronze" }}' > inline.txt
-curl -F template=@inline.txt -F 'data={"paid":false,"late":false,"points":700}' http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = 'Due||Silver'
+cat > inline.txt <<'EOF'
+{{ "Paid" if paid else "Due" }}
+{{ " (late)" if late }}
+{{ "Gold" if points >= 1000 else "Silver" if points >= 500 else "Bronze" }}
+EOF
+curl -F template=@inline.txt \
+  -F 'data={"paid":false,"late":false,"points":700}' \
+  http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = "$(printf 'Due\n\nSilver')"
 ```
 
 `or` gives the first value that is true, a short way to fall back: `{{ nickname or name }}`. It treats `0` and `""` as false, so `{{ discount or "none" }}` prints `none` for a discount of `0`.
@@ -40,13 +46,35 @@ There is no `switch` statement. An `elif` chain does the same job, and the first
 
 ```bash test
 cat > status.txt <<'EOF'
-{% for o in orders %}{{ o.id }}: {% if o.status == "paid" %}Paid, thank you{% elif o.status == "partial" %}Part paid{% elif o.status in ["due", "overdue"] %}Payment due{% else %}Unknown status {{ o.status }}{% endif %}
+{% for o in orders -%}
+{{ o.id }}: {% if o.status == "paid" -%}
+  Paid, thank you
+{%- elif o.status == "partial" -%}
+  Part paid
+{%- elif o.status in ["due", "overdue"] -%}
+  Payment due
+{%- else -%}
+  Unknown status {{ o.status }}
+{%- endif %}
 {% endfor %}
 EOF
-curl -F template=@status.txt \
-  -F 'data={"orders":[{"id":1,"status":"paid"},{"id":2,"status":"overdue"},{"id":3,"status":"lost"}]}' \
+cat > orders.json <<'EOF'
+{
+  "orders": [
+    {"id": 1, "status": "paid"},
+    {"id": 2, "status": "overdue"},
+    {"id": 3, "status": "lost"}
+  ]
+}
+EOF
+curl -F template=@status.txt -F data=@orders.json \
   http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = "$(printf '1: Paid, thank you\n2: Payment due\n3: Unknown status lost')"
+cat > expected.txt <<'EOF'
+1: Paid, thank you
+2: Payment due
+3: Unknown status lost
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 When each case only maps a code to a label, an object literal is shorter. A code the object lacks is undefined, so `default` catches it:
@@ -82,13 +110,34 @@ The comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=`. Text compares letter by
 
 ```bash test
 cat > combine.txt <<'EOF'
-{% for c in customers %}{{ c.name }}: {% if c.vip and not c.blocked %}VIP{% elif c.orders > 10 or c.spent >= 5000 %}Regular{% else %}New{% endif %}{% if 0 < c.orders <= 2 %}, first orders{% endif %}
+{% for c in customers -%}
+{{ c.name }}: {% if c.vip and not c.blocked -%}
+  VIP
+{%- elif c.orders > 10 or c.spent >= 5000 -%}
+  Regular
+{%- else -%}
+  New
+{%- endif %}
+{%- if 0 < c.orders <= 2 %}, first orders{% endif %}
 {% endfor %}
 EOF
-curl -F template=@combine.txt \
-  -F 'data={"customers":[{"name":"Ada","vip":true,"blocked":false,"orders":30,"spent":9000},{"name":"Bo","vip":true,"blocked":true,"orders":2,"spent":6000},{"name":"Cy","vip":false,"blocked":false,"orders":1,"spent":20}]}' \
+cat > customers.json <<'EOF'
+{
+  "customers": [
+    {"name": "Ada", "vip": true, "blocked": false, "orders": 30, "spent": 9000},
+    {"name": "Bo", "vip": true, "blocked": true, "orders": 2, "spent": 6000},
+    {"name": "Cy", "vip": false, "blocked": false, "orders": 1, "spent": 20}
+  ]
+}
+EOF
+curl -F template=@combine.txt -F data=@customers.json \
   http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = "$(printf 'Ada: VIP\nBo: Regular, first orders\nCy: New, first orders')"
+cat > expected.txt <<'EOF'
+Ada: VIP
+Bo: Regular, first orders
+Cy: New, first orders
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 ## Tests
@@ -117,13 +166,20 @@ test "$(cat out.txt)" = "$(printf 'Ada: VIP\nBo: Regular, first orders\nCy: New,
 
 ```bash test
 cat > empty.txt <<'EOF'
-{% for k in ["note", "tags", "meta", "count", "flag", "gone"] %}{{ k }}={{ "empty" if values[k] is empty else "set" }} {% endfor %}
+{% for k in ["note", "tags", "meta", "count", "flag", "gone"] -%}
+  {{ k }}={{ "empty" if values[k] is empty else "set" }} {% endfor %}
 {% if note is not empty %}Note: {{ note }}{% else %}No note{% endif %}
 EOF
-curl -F template=@empty.txt \
-  -F 'data={"values":{"note":"","tags":[],"meta":{},"count":0,"flag":false},"note":null}' \
+cat > values.json <<'EOF'
+{
+  "values": {"note": "", "tags": [], "meta": {}, "count": 0, "flag": false},
+  "note": null
+}
+EOF
+curl -F template=@empty.txt -F data=@values.json \
   http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = "$(printf 'note=empty tags=empty meta=empty count=set flag=set gone=empty \nNo note')"
+first='note=empty tags=empty meta=empty count=set flag=set gone=empty '
+test "$(cat out.txt)" = "$(printf '%s\nNo note' "$first")"
 ```
 
 How it differs from the other ways to check:
@@ -144,9 +200,17 @@ Type tests help when a value can take more than one shape, such as one email or 
 
 ```bash test
 cat > types.txt <<'EOF'
-{% for v in values %}{% if v is none %}null{% elif v is boolean %}yes/no{% elif v is number %}number{% elif v is string %}text{% elif v is mapping %}object{% elif v is sequence %}list{% endif %} {% endfor %}
+{% for v in values -%}
+  {% if v is none %}null
+  {%- elif v is boolean %}yes/no
+  {%- elif v is number %}number
+  {%- elif v is string %}text
+  {%- elif v is mapping %}object
+  {%- elif v is sequence %}list
+  {%- endif %} {% endfor %}
 EOF
-curl -F template=@types.txt -F 'data={"values":[null,true,4.5,"a",{"k":1},[1]]}' \
+curl -F template=@types.txt \
+  -F 'data={"values":[null,true,4.5,"a",{"k":1},[1]]}' \
   http://localhost:9027/v1/render -o out.txt
 grep -x 'null yes/no number text object list ' out.txt
 ```
@@ -166,13 +230,28 @@ Test `boolean` before `number`, and `string` before `sequence`, if your data can
 
 ```bash test
 cat > member.txt <<'EOF'
-{% for c in clients %}{{ c.name }}: {{ "EU" if c.country in ["FR", "DE", "IT"] else "outside the EU" }}{{ ", company" if "ltd" in c.name | lower }}{{ ", VAT" if "vat" in c.totals }}
+{% for c in clients -%}
+  {{ c.name }}: {{ "EU" if c.country in ["FR", "DE", "IT"]
+                   else "outside the EU" }}
+  {{- ", company" if "ltd" in c.name | lower }}
+  {{- ", VAT" if "vat" in c.totals }}
 {% endfor %}
 EOF
-curl -F template=@member.txt \
-  -F 'data={"clients":[{"name":"Acme Ltd","country":"DE","totals":{"vat":19}},{"name":"Ada","country":"KE","totals":{}}]}' \
+cat > clients.json <<'EOF'
+{
+  "clients": [
+    {"name": "Acme Ltd", "country": "DE", "totals": {"vat": 19}},
+    {"name": "Ada", "country": "KE", "totals": {}}
+  ]
+}
+EOF
+curl -F template=@member.txt -F data=@clients.json \
   http://localhost:9027/v1/render -o out.txt
-test "$(cat out.txt)" = "$(printf 'Acme Ltd: EU, company, VAT\nAda: outside the EU')"
+cat > expected.txt <<'EOF'
+Acme Ltd: EU, company, VAT
+Ada: outside the EU
+EOF
+test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
 
 `"ltd" in c.name | lower` works without brackets because the filter binds tighter than `in`.
@@ -205,13 +284,18 @@ This DOCX keeps or drops two paragraphs, the heading and the line below it:
 
 ```bash test
 mkdir t && cd t && unzip -q ../report.docx
-perl -pi -e 's{Quarterly report}{{% if members %}Members report}; s{A document with no tags in it.}{For {{ members | length }} members.{% endif %}}' word/document.xml
+export OPEN='{% if members %}Members report'
+export CLOSE='For {{ members | length }} members.{% endif %}'
+perl -pi -e 's{Quarterly report}{$ENV{OPEN}}' word/document.xml
+perl -pi -e 's{A document with no tags in it.}{$ENV{CLOSE}}' word/document.xml
 zip -qr ../members.docx . && cd ..
 
-curl -F template=@members.docx -F 'data={"members":["Ada","Bo"]}' http://localhost:9027/v1/render -o kept.docx
+curl -F template=@members.docx -F 'data={"members":["Ada","Bo"]}' \
+  http://localhost:9027/v1/render -o kept.docx
 unzip -p kept.docx word/document.xml | grep -o 'For 2 members.'
 
-curl -F template=@members.docx -F 'data={"members":[]}' http://localhost:9027/v1/render -o dropped.docx
+curl -F template=@members.docx -F 'data={"members":[]}' \
+  http://localhost:9027/v1/render -o dropped.docx
 test "$(unzip -p dropped.docx word/document.xml | grep -c 'Members report')" = 0
 ```
 
@@ -219,10 +303,12 @@ In a sheet, a condition across a row's cells keeps or drops that row:
 
 ```bash test
 mkdir t && cd t && unzip -q ../sheet.xlsx
-perl -pi -e 's/Month/{% if header %}Month/; s/Sales/Sales{% endif %}/' xl/worksheets/sheet1.xml
+perl -pi -e 's/Month/{% if header %}Month/; s/Sales/Sales{% endif %}/' \
+  xl/worksheets/sheet1.xml
 zip -qr ../maybe.xlsx . && cd ..
 
-curl -F template=@maybe.xlsx -F 'data={"header":false}' http://localhost:9027/v1/render -o out.xlsx
+curl -F template=@maybe.xlsx -F 'data={"header":false}' \
+  http://localhost:9027/v1/render -o out.xlsx
 test "$(unzip -p out.xlsx xl/worksheets/sheet1.xml | grep -c 'Month')" = 0
 unzip -p out.xlsx xl/worksheets/sheet1.xml | grep -q 'January'
 ```

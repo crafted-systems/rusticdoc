@@ -12,7 +12,8 @@ This page shows you how to follow one request from its response to its log lines
 Every response carries `x-request-id`. Send your own and the service uses it:
 
 ```bash test
-curl -D - -o /dev/null -H 'x-request-id: order-2041' http://localhost:9027/v1/version
+curl -D - -o /dev/null -H 'x-request-id: order-2041' \
+  http://localhost:9027/v1/version
 ```
 
 The response has `x-request-id: order-2041`. If you send none, the service makes one. A client's id is kept to printable ASCII and 128 bytes. The same id appears in the logs and on webhook deliveries.
@@ -29,10 +30,33 @@ docker logs rusticdoc
 
 ### Access log
 
-There is one line per request with `log_type` set to `access`. Lines for status 500 and above have level `ERROR`, and the rest `INFO`.
+There is one line per request with `log_type` set to `access`, shown here spread over several lines to fit. Lines for status 500 and above have level `ERROR`, and the rest `INFO`.
 
 ```json
-{"timestamp":"2026-11-06T20:26:21.925591Z","level":"INFO","message":"request handled","log_type":"access","correlation_id":"0962144d-8980-41a2-9bdf-25ef19e48dd5","remote_addr":"172.17.0.1:55136","caller":"-","host":"localhost:9027","method":"POST","path":"/v1/render","referer":"","user_agent":"curl/8.7.1","status":200,"latency":1661752043,"latency_human":"1.661752043s","latency_ms":1661,"bytes_in":38426,"bytes_out":0,"span":{"request_id":"0962144d-8980-41a2-9bdf-25ef19e48dd5","name":"request"}}
+{
+  "timestamp": "2026-11-06T20:26:21.925591Z",
+  "level": "INFO",
+  "message": "request handled",
+  "log_type": "access",
+  "correlation_id": "0962144d-8980-41a2-9bdf-25ef19e48dd5",
+  "remote_addr": "172.17.0.1:55136",
+  "caller": "-",
+  "host": "localhost:9027",
+  "method": "POST",
+  "path": "/v1/render",
+  "referer": "",
+  "user_agent": "curl/8.7.1",
+  "status": 200,
+  "latency": 1661752043,
+  "latency_human": "1.661752043s",
+  "latency_ms": 1661,
+  "bytes_in": 38426,
+  "bytes_out": 0,
+  "span": {
+    "request_id": "0962144d-8980-41a2-9bdf-25ef19e48dd5",
+    "name": "request"
+  }
+}
 ```
 
 | Field | Holds |
@@ -53,7 +77,20 @@ There is one line per request with `log_type` set to `access`. Lines for status 
 Changes to stored objects log a line with `log_type` set to `audit`:
 
 ```json
-{"timestamp":"2026-11-06T20:30:44.957604Z","level":"INFO","message":"template stored","log_type":"audit","action":"template.upload","caller":"public","template":"01a1b28e-7cdc-7312-9094-7ebc1970f6de","size":37435,"span":{"request_id":"2ed44408-4ed4-437c-9aac-9f66a79e827d","name":"request"}}
+{
+  "timestamp": "2026-11-06T20:30:44.957604Z",
+  "level": "INFO",
+  "message": "template stored",
+  "log_type": "audit",
+  "action": "template.upload",
+  "caller": "public",
+  "template": "01a1b28e-7cdc-7312-9094-7ebc1970f6de",
+  "size": 37435,
+  "span": {
+    "request_id": "2ed44408-4ed4-437c-9aac-9f66a79e827d",
+    "name": "request"
+  }
+}
 ```
 
 | `action` | Other fields |

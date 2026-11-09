@@ -51,7 +51,8 @@ Put the opening tag in the row's first cell and the closing tag in its last. The
 | `{% for item in items %}{{ item.name }}` | `{{ item.qty }}` | `{{ item.price \| currency(currency) }}` | `{{ (item.qty * item.price) \| currency(currency) }}{% endfor %}` |
 
 ```bash test
-curl -F template=@invoice.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@invoice.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -p out.docx word/document.xml > out.xml
 grep -o 'Single-origin beans' out.xml
 grep -o 'Delivery to Mombasa' out.xml
@@ -136,7 +137,8 @@ The sample document `drop.docx` holds a tag for each element, on a condition its
 
 ```bash test
 jq '.discount = false' drop.json > data.json
-curl -F template=@drop.docx -F "data=<data.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@drop.docx -F "data=<data.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -p out.docx word/document.xml > out.xml
 ! grep -q 'Discount' out.xml
 grep -o 'Amount' out.xml
@@ -150,10 +152,12 @@ Inside a loop, each copy has its own tag, so a drop removes that copy only:
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
-perl -pi -e 's/\{\{ item\.qty \}\}/{{ item.qty }}{{ drop("row") if item.qty == 1 }}/' word/document.xml
+export TAG='{{ item.qty }}{{ drop("row") if item.qty == 1 }}'
+perl -pi -e 's/\{\{ item\.qty \}\}/$ENV{TAG}/' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 unzip -p out.docx word/document.xml > out.xml
 grep -o 'Paper filters, box of 100' out.xml
 ! grep -q 'Delivery to Mombasa' out.xml
@@ -177,7 +181,8 @@ mkdir t && cd t && unzip -q ../invoice.docx
 perl -pi -e 's/>Unit price</>Unit price{{ drop("column") }}</' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 ```
 
 ### Pictures, charts and shapes
@@ -198,7 +203,8 @@ The sample deck holds a tag for each element. This leaves out its picture and it
 
 ```bash test
 jq '.logo = false | .appendix = false' drop.json > data.json
-curl -F template=@drop.pptx -F "data=<data.json" http://localhost:9027/v1/render -o out.pptx
+curl -F template=@drop.pptx -F "data=<data.json" \
+  http://localhost:9027/v1/render -o out.pptx
 test "$(unzip -Z1 out.pptx | grep -c '^ppt/slides/slide[0-9]*\.xml$')" = 2
 ! unzip -p out.pptx ppt/slides/slide1.xml | grep -q '<p:pic>'
 ! unzip -Z1 out.pptx | grep -q '^ppt/media/'
@@ -220,7 +226,8 @@ The sample workbook drops its discount column and the row of each item marked hi
 
 ```bash test
 jq '.discount = false' drop.json > data.json
-curl -F template=@drop.xlsx -F "data=<data.json" http://localhost:9027/v1/render -o out.xlsx
+curl -F template=@drop.xlsx -F "data=<data.json" \
+  http://localhost:9027/v1/render -o out.xlsx
 unzip -p out.xlsx xl/worksheets/sheet1.xml > sheet.xml
 ! grep -q 'Discount' sheet.xml
 grep -o '<f[^>]*>SUM(C2:C4)</f>' sheet.xml
@@ -261,7 +268,8 @@ mkdir t && cd t && unzip -q ../invoice.docx
 perl -pi -e 's/>Billed to</>Billed to{{ drop("slide") }}</' word/document.xml
 zip -qr ../tagged.docx . && cd ..
 
-curl -F template=@tagged.docx -F "data=<invoice.json" http://localhost:9027/v1/render -o out.docx
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
 ```
 
 ## DOCX
@@ -279,8 +287,10 @@ Tags are read in `content.xml` and `styles.xml`, which holds headers and footers
 To try it from a DOCX, convert one. The tags survive the conversion:
 
 ```bash test
-curl -F files=@invoice.docx -F to=odt http://localhost:9027/v1/convert -o invoice.odt
-curl -F template=@invoice.odt -F "data=<invoice.json" http://localhost:9027/v1/render -o out.odt
+curl -F files=@invoice.docx -F to=odt \
+  http://localhost:9027/v1/convert -o invoice.odt
+curl -F template=@invoice.odt -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.odt
 unzip -p out.odt content.xml | grep -o 'KES 28,800.00'
 ```
 
@@ -303,10 +313,19 @@ This example turns the header row of a small sheet into a row loop:
 
 ```bash test
 mkdir t && cd t && unzip -q ../sheet.xlsx
-perl -pi -e 's/Month/{% for r in rows %}{{ r.month }}/; s/Sales/{{ r.sales }}{% endfor %}/' xl/worksheets/sheet1.xml
+perl -pi -e 's/Month/{% for r in rows %}{{ r.month }}/;' \
+  -e 's/Sales/{{ r.sales }}{% endfor %}/' xl/worksheets/sheet1.xml
 zip -qr ../tagged.xlsx . && cd ..
 
-curl -F template=@tagged.xlsx -F 'data={"rows":[{"month":"March","sales":90},{"month":"April","sales":120}]}' \
+cat > rows.json <<'EOF'
+{
+  "rows": [
+    {"month": "March", "sales": 90},
+    {"month": "April", "sales": 120}
+  ]
+}
+EOF
+curl -F template=@tagged.xlsx -F data=@rows.json \
   http://localhost:9027/v1/render -o out.xlsx
 unzip -p out.xlsx xl/worksheets/sheet1.xml > sheet.xml
 grep -o '<c r="B1"[^>]*><v>90</v>' sheet.xml
@@ -344,14 +363,27 @@ The loop sits in a cell because Excel caps a sheet name at 31 characters and ref
 ```bash test
 mkdir t && cd t && unzip -q ../sheet.xlsx
 perl -pi -e 's/name="Sheet"/name="{{ r.month }}"/' xl/workbook.xml
-perl -pi -e 's/>Month</>{% sheet for r in rows %}Month</; s/>January</>{{ r.month }}</; s/<c r="B2" t="n"><v>120<\/v><\/c>/<c r="B2" t="inlineStr"><is><t>{{ r.sales }}<\/t><\/is><\/c>/' xl/worksheets/sheet1.xml
+export CELL='<c r="B2" t="inlineStr"><is><t>{{ r.sales }}</t></is></c>'
+perl -pi -e 's/>Month</>{% sheet for r in rows %}Month</;' \
+  -e 's/>January</>{{ r.month }}</;' \
+  -e 's/<c r="B2" t="n"><v>120<\/v><\/c>/$ENV{CELL}/' \
+  xl/worksheets/sheet1.xml
 zip -qr ../tagged.xlsx . && cd ..
 
-curl -F template=@tagged.xlsx -F 'data={"rows":[{"month":"March","sales":90},{"month":"April","sales":120}]}' \
+cat > rows.json <<'EOF'
+{
+  "rows": [
+    {"month": "March", "sales": 90},
+    {"month": "April", "sales": 120}
+  ]
+}
+EOF
+curl -F template=@tagged.xlsx -F data=@rows.json \
   http://localhost:9027/v1/render -o out.xlsx
 unzip -p out.xlsx xl/workbook.xml | grep -o '<sheet [^>]*name="March"'
 unzip -p out.xlsx xl/workbook.xml | grep -o '<sheet [^>]*name="April"'
-unzip -p out.xlsx xl/worksheets/sheet2.xml | grep -o '<c r="B2"[^>]*><v>120</v>'
+unzip -p out.xlsx xl/worksheets/sheet2.xml |
+  grep -o '<c r="B2"[^>]*><v>120</v>'
 ```
 
 Names are made valid: a forbidden character becomes `_`, a name longer than 31 characters is cut, and a name another sheet or an earlier copy already has gets ` (2)`, ` (3)` and so on, as Excel does when it copies a sheet. Case does not count, so `paris` clashes with `Paris`. An empty name becomes `Sheet`. A looped sheet whose name holds no expression keeps its name for the first copy, and the others get ` (2)`, ` (3)` and so on.
@@ -460,11 +492,12 @@ mkdir t && cd t && unzip -q ../deck.pptx
 perl -pi -e 's/A slide/{{ title }}/' ppt/slides/slide1.xml
 zip -qr ../tagged.pptx . && cd ..
 
-curl -F template=@tagged.pptx -F 'data={"title":"Q3 results"}' http://localhost:9027/v1/render -o out.pptx
+curl -F template=@tagged.pptx -F 'data={"title":"Q3 results"}' \
+  http://localhost:9027/v1/render -o out.pptx
 unzip -p out.pptx ppt/slides/slide1.xml | grep -o '<a:t>Q3 results'
 
-curl -F template=@tagged.pptx -F 'data={"title":"Q3 results"}' -F steps=convert \
-  http://localhost:9027/v1/render -o out.pdf
+curl -F template=@tagged.pptx -F 'data={"title":"Q3 results"}' \
+  -F steps=convert http://localhost:9027/v1/render -o out.pdf
 test "$(head -c 4 out.pdf)" = "%PDF"
 ```
 
@@ -482,7 +515,8 @@ mkdir t && cd t && unzip -q ../deck.odp
 perl -pi -e 's/>A slide</>{{ title }}</' content.xml
 zip -qr ../tagged.odp . && cd ..
 
-curl -F template=@tagged.odp -F 'data={"title":"Q3 results"}' http://localhost:9027/v1/render -o out.odp
+curl -F template=@tagged.odp -F 'data={"title":"Q3 results"}' \
+  http://localhost:9027/v1/render -o out.odp
 unzip -p out.odp content.xml | grep -o 'Q3 results'
 ```
 

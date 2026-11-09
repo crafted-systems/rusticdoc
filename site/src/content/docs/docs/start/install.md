@@ -20,7 +20,8 @@ The build pins its base images by digest. The result is one Rust binary on Debia
 ## Run it hardened
 
 ```bash
-docker run -d --name rusticdoc --read-only --cap-drop ALL --security-opt no-new-privileges \
+docker run -d --name rusticdoc \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 \
   -p 127.0.0.1:9027:9027 ghcr.io/vmosoti/rusticdoc:0.1.0
 ```
@@ -49,7 +50,8 @@ docker compose -f deploy/compose.yaml up -d --build
 To use the published image instead of building one:
 
 ```bash
-RUSTICDOC_IMAGE=ghcr.io/vmosoti/rusticdoc:0.1.0 docker compose -f deploy/compose.yaml up -d --no-build
+RUSTICDOC_IMAGE=ghcr.io/vmosoti/rusticdoc:0.1.0 \
+  docker compose -f deploy/compose.yaml up -d --no-build
 ```
 
 [Docker](/docs/operate/docker/) lists the variables it reads.

@@ -19,7 +19,8 @@ Total: {{ total | currency("KES") }}
 Send both to `/v1/render`. Adding `steps=convert` gives a PDF:
 
 ```bash test
-curl -F template=@letter.txt -F "data=<letter.json" http://localhost:9027/v1/render -o filled.txt
+curl -F template=@letter.txt -F "data=<letter.json" \
+  http://localhost:9027/v1/render -o filled.txt
 grep -x 'Dear Ada,' filled.txt
 
 curl -F template=@letter.txt -F "data=<letter.json" -F steps=convert \
@@ -58,10 +59,23 @@ Statements include `for`, `if`, `set`, `with` and `macro`. A template is one fil
 
 ```bash test
 cat > items.txt <<'EOF'
-{% for i in items if i.qty %}{{ loop.index }}/{{ loop.length }} {{ i.name }}{% if not loop.last %}, {% endif %}{% else %}Nothing{% endfor %}
+{% for i in items if i.qty -%}
+  {{ loop.index }}/{{ loop.length }} {{ i.name }}
+  {%- if not loop.last %}, {% endif %}
+{%- else -%}
+  Nothing
+{%- endfor %}
 EOF
-curl -F template=@items.txt \
-  -F 'data={"items":[{"name":"Lamp","qty":2},{"name":"Plug","qty":0},{"name":"Desk","qty":1}]}' \
+cat > items.json <<'EOF'
+{
+  "items": [
+    {"name": "Lamp", "qty": 2},
+    {"name": "Plug", "qty": 0},
+    {"name": "Desk", "qty": 1}
+  ]
+}
+EOF
+curl -F template=@items.txt -F data=@items.json \
   http://localhost:9027/v1/render -o out.txt
 grep -x '1/2 Lamp, 2/2 Desk' out.txt
 ```
@@ -97,8 +111,12 @@ An empty list, an empty object, an empty string, `0`, `false` and `null` count a
 `a * b | currency("EUR")` applies the filter to `b` first, and then multiplies a string by a number, which repeats the string. Put the arithmetic in brackets:
 
 ```bash test
-printf '{{ a * b | currency("EUR") }}\n{{ (a * b) | currency("EUR") }}\n' > total.txt
-curl -F template=@total.txt -F 'data={"a":2,"b":3.5}' http://localhost:9027/v1/render -o out.txt
+cat > total.txt <<'EOF'
+{{ a * b | currency("EUR") }}
+{{ (a * b) | currency("EUR") }}
+EOF
+curl -F template=@total.txt -F 'data={"a":2,"b":3.5}' \
+  http://localhost:9027/v1/render -o out.txt
 test "$(cat out.txt)" = "$(printf 'EUR 3.50EUR 3.50\nEUR 7.00')"
 ```
 
@@ -110,13 +128,17 @@ Undefined values stop the render. A missing variable never prints as nothing, so
 
 ```bash test=fail
 printf 'Hello {{ nobody }}\n' > missing.txt
-curl -F template=@missing.txt -F 'data={"somebody":"Ada"}' http://localhost:9027/v1/render
+curl -F template=@missing.txt -F 'data={"somebody":"Ada"}' \
+  http://localhost:9027/v1/render
 ```
 
 The answer is a `422`:
 
 ```json
-{"error":"template_error","message":"template error: undefined value (in <string>:1) (line 1)"}
+{
+  "error": "template_error",
+  "message": "template error: undefined value (in <string>:1) (line 1)"
+}
 ```
 
 An Office template names the place instead of a line:
@@ -180,11 +202,14 @@ Each format escapes values in its own way, so data cannot add markup or keys of 
 
 ```bash test
 printf '<p>{{ name }}</p><p>{{ name | safe }}</p>' > page.html
-curl -F template=@page.html -F 'data={"name":"<b>&"}' http://localhost:9027/v1/render -o page.out
+curl -F template=@page.html -F 'data={"name":"<b>&"}' \
+  http://localhost:9027/v1/render -o page.out
 test "$(cat page.out)" = '<p>&lt;b&gt;&amp;</p><p><b>&</p>'
 
 printf '{"name":{{ name }},"count":{{ count }}}' > out-template.json
-curl -F template=@out-template.json -F 'data={"name":"say \"hi\"","count":5}' http://localhost:9027/v1/render -o json.out
+curl -F template=@out-template.json \
+  -F 'data={"name":"say \"hi\"","count":5}' \
+  http://localhost:9027/v1/render -o json.out
 jq -e '.name == "say \"hi\"" and .count == 5' json.out
 ```
 
@@ -194,7 +219,8 @@ In a `.json` template, do not put quotes around a tag. `"{{ name }}"` would come
 printf '{"name":"{{ name }}"}' > quoted.json
 curl -F template=@quoted.json -F 'data={"name":"Ada"}' \
   http://localhost:9027/v1/render -o error.json || true
-jq -e '.error == "template_error" and (.message | contains("remove any quotes"))' error.json
+jq -e '.error == "template_error"
+  and (.message | contains("remove any quotes"))' error.json
 ```
 
 :::caution[Where escaping does not help]

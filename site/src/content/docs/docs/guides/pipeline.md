@@ -23,12 +23,14 @@ These two do the same thing:
 
 ```bash test
 # As a text field. The quotes stop your shell reading the <.
-curl -F template=@invoice.docx -F "data=<invoice.json" -F steps=convert -F to=html \
+curl -F template=@invoice.docx -F "data=<invoice.json" \
+  -F steps=convert -F to=html \
   http://localhost:9027/v1/render -o filled.html
 grep -q "Amani" filled.html
 
 # As a file part, with any file name, before or after the template.
-curl -F data=@invoice.json -F template=@invoice.docx -F steps=convert -F to=html \
+curl -F data=@invoice.json -F template=@invoice.docx \
+  -F steps=convert -F to=html \
   http://localhost:9027/v1/render -o filled.html
 grep -q "Amani" filled.html
 ```
@@ -45,7 +47,8 @@ grep -q "Amani" filled.html
 A form with an Office file or PDF, no `data` and no `steps` is a no-op. The response is the same bytes you sent, with a `200`.
 
 ```bash test
-curl -F template=@report.docx http://localhost:9027/v1/render -D headers.txt -o same.docx
+curl -F template=@report.docx \
+  http://localhost:9027/v1/render -D headers.txt -o same.docx
 head -c2 same.docx | grep -q PK
 grep -qi "report.docx" headers.txt
 ```
