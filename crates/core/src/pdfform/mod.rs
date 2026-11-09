@@ -21,16 +21,26 @@
 //!    template.
 //!
 //! Text that this module draws itself (regenerated text-field appearances
-//! and free-standing annotation values) uses the base-14 Helvetica font with
-//! `WinAnsiEncoding`, which every viewer has built in. That covers Latin
-//! text; characters outside WinAnsi are drawn as `?`. Field values
-//! themselves are stored in full (UTF-16BE when they leave Latin), so a
-//! viewer that regenerates appearances still shows them. Rich text, comb
-//! fields, date formats and JavaScript actions are not interpreted.
+//! and free-standing annotation values) takes one of two paths:
+//!
+//! - Text whose every character is in `WinAnsiEncoding` uses the base-14
+//!   Helvetica font, which every viewer has built in, and embeds nothing.
+//! - Text with any other character goes to [`shaped`]: Parley shapes it with
+//!   the system's fonts (bidi, Arabic joining, fallback by script) and Krilla
+//!   writes it with subset fonts and ToUnicode maps, as a form XObject that
+//!   the appearance stream or the page draws. Such a form is no longer
+//!   marked `NeedAppearances`, since viewers that redraw fields cannot shape
+//!   that text.
+//!
+//! Both respect the field's font size (zero picks one that fits), `/Q`
+//! alignment and multiline flag, and clip to the rectangle. Field values are
+//! stored in full (UTF-16BE when they leave Latin). Rich text, comb fields,
+//! date formats and JavaScript actions are not interpreted.
 
 mod fields;
 mod fill;
 mod overlay;
+mod shaped;
 mod text;
 
 use lopdf::{Dictionary, Document, Object, ObjectId, dictionary};
