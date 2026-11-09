@@ -10,6 +10,7 @@ rust-version.workspace = true
 barcoders = { version = "2", default-features = false, features = ["std"] }
 base64 = "0.23.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+chrono-tz = "0.10.4"
 hex = "0.4.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }

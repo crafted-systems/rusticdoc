@@ -570,7 +570,7 @@ fn snippet(s: &str) -> String {
     }
 }
 
-fn apply_settings(text: &str, settings: &mut Settings) {
+pub(crate) fn apply_settings(text: &str, settings: &mut Settings) {
     for cap in SETTING_RE.captures_iter(text) {
         let value = cap
             .get(2)

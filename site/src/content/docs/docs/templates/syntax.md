@@ -229,8 +229,8 @@ A file with one of these extensions is rendered whole, as UTF-8 text. Office fil
 | `.json` | `application/json` | PDF |
 | `.svg` | `image/svg+xml` | PDF |
 
-:::caution[Text templates have fewer filters]
-Text templates have `currency` and the built-in filters. `date`, `t`, the rich content filters and `{% settings %}` work only in Office templates, and in a text template they fail with `unknown filter` or `unknown statement`. See [where each filter works](/docs/templates/filters/#where-each-filter-works).
+:::caution[Text templates have no rich content]
+Text templates have `currency`, `number`, `date`, `t`, `{% settings %}` and the built-in filters. The rich content filters work only in Office templates, and in a text template they fail with a clear error. See [where each filter works](/docs/templates/filters/#where-each-filter-works).
 :::
 
 ## Limits

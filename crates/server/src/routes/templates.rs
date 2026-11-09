@@ -555,6 +555,7 @@ pub async fn preview(
     let mut form = Form::from_request(req, &state).await?;
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = crate::routes::render::render_options(&mut form, &state)?;
     let page = match form.field("page").map(str::trim).filter(|p| !p.is_empty()) {
         None => 1,
         Some(text) => match text.parse::<u32>() {
@@ -592,6 +593,7 @@ pub async fn preview(
                     &options,
                     state.config.max_render_bytes,
                     timeout,
+                    &render_choices,
                 )
                 .await?
                 .into()
@@ -600,6 +602,7 @@ pub async fn preview(
         let mut req = rusticdoc_core::RenderRequest::new(template);
         req.data = data;
         req.ctx = ctx;
+        req.render_options = render_choices;
         let mut options = crate::routes::options::convert_options(&form)?;
         options.pdfa = None;
         options.pdfua = false;

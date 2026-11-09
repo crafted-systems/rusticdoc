@@ -41,7 +41,9 @@ pub fn is_office_format(ext: &str) -> bool {
 /// Office formats stop at their package limit instead.
 ///
 /// `options.undefined_as_empty` prints undefined values as nothing rather
-/// than failing, in every format.
+/// than failing, in every format. Its `lang`, `timezone`, `currency` and
+/// translations win over the template's own settings, which a text template
+/// can hold in a `{% settings %}` tag as an Office one does.
 pub fn render(
     doc: &Document,
     data: &serde_json::Value,
@@ -71,16 +73,14 @@ pub fn render(
     }
     let source = std::str::from_utf8(&doc.bytes)
         .map_err(|_| Error::Template(format!("{} is not valid UTF-8", doc.name)))?;
-    let mut env = environment();
-    if options.undefined_as_empty {
-        env.set_undefined_behavior(UndefinedBehavior::Chainable);
-    }
+    let (source, settings) = rusticdoc_template::translate::split_settings(source);
+    let mut env = environment_for(&settings, options);
     let escape = auto_escape(&ext);
     let writes_json = escape == AutoEscape::Json;
     env.set_auto_escape_callback(move |_| escape.clone());
     let rendered = render_str(
         &env,
-        source,
+        &source,
         minijinja::Value::from(minijinja::value::Serde(&root)),
         limit,
     )?;
@@ -128,12 +128,14 @@ pub fn too_large(limit: usize) -> Error {
 
 /// Every problem a template has against sample data, without rendering a
 /// file for the caller: office formats report each tag; text formats
-/// report the first error.
+/// report the first error. When a language applies, each literal key passed
+/// to `t` with no translation for it is a warning.
 pub fn validate(
     doc: &Document,
     data: &serde_json::Value,
     ctx: &serde_json::Value,
     limit: usize,
+    options: &rusticdoc_template::RenderOptions,
 ) -> Vec<rusticdoc_template::Diagnostic> {
     use rusticdoc_template::{Diagnostic, Severity};
     let ext = doc.extension();
@@ -143,16 +145,64 @@ pub fn validate(
             _ => serde_json::Map::new(),
         };
         root.entry("ctx").or_insert_with(|| ctx.clone());
-        return rusticdoc_template::validate(format, &doc.bytes, &serde_json::Value::Object(root));
+        return rusticdoc_template::validate_with(
+            format,
+            &doc.bytes,
+            &serde_json::Value::Object(root),
+            options,
+        );
     }
-    match render(doc, data, ctx, limit, &Default::default()) {
+    let mut found = match render(doc, data, ctx, limit, options) {
         Ok(_) => Vec::new(),
         Err(e) => vec![Diagnostic {
             severity: Severity::Error,
             message: e.to_string(),
             location: None,
         }],
+    };
+    if is_text_template(&ext) {
+        let source = String::from_utf8_lossy(&doc.bytes);
+        let (_, settings) = rusticdoc_template::translate::split_settings(&source);
+        for tag in scan_tags(&source) {
+            let keys = rusticdoc_template::translate::literal_keys(&tag);
+            let missing = rusticdoc_template::translate::missing_translations(
+                &settings,
+                options,
+                keys.iter().map(String::as_str),
+            );
+            if !missing.is_empty() {
+                let lang = rusticdoc_template::translate::effective_lang(&settings, options)
+                    .unwrap_or_default();
+                let keys: Vec<String> = missing.iter().map(|k| format!("{k:?}")).collect();
+                found.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!("no {lang} translation for {}: {tag}", keys.join(", ")),
+                    location: None,
+                });
+            }
+        }
     }
+    found
+}
+
+/// The literal keys a template passes to `t`, and those its settings
+/// translate: what `rusticdoc translate` lists for translators. Formats that
+/// hold no tags have none.
+pub fn translation_keys(doc: &Document) -> Result<std::collections::BTreeSet<String>> {
+    let ext = doc.extension();
+    if let Some(format) = rusticdoc_template::Format::from_extension(&ext) {
+        return Ok(compiled(format, &doc.bytes)?.translation_keys());
+    }
+    let mut keys = std::collections::BTreeSet::new();
+    if is_text_template(&ext) {
+        let source = String::from_utf8_lossy(&doc.bytes);
+        let (_, settings) = rusticdoc_template::translate::split_settings(&source);
+        keys.extend(rusticdoc_template::translate::settings_keys(&settings));
+        for tag in scan_tags(&source) {
+            keys.extend(rusticdoc_template::translate::literal_keys(&tag));
+        }
+    }
+    Ok(keys)
 }
 
 /// What is wrong with a template whatever data it later gets. Formats that hold
@@ -165,6 +215,7 @@ pub fn check_syntax(doc: &Document) -> Vec<rusticdoc_template::Diagnostic> {
     }
     if is_text_template(&ext) {
         let source = String::from_utf8_lossy(&doc.bytes);
+        let (source, _) = rusticdoc_template::translate::split_settings(&source);
         let env = environment();
         if let Err(e) = env.template_from_str(&source) {
             return vec![Diagnostic {
@@ -187,8 +238,9 @@ pub fn tags(doc: &Document) -> Result<Vec<String>> {
     }
     if is_text_template(&ext) {
         let source = String::from_utf8_lossy(&doc.bytes);
+        let (stripped, _) = rusticdoc_template::translate::split_settings(&source);
         environment()
-            .template_from_str(&source)
+            .template_from_str(&stripped)
             .map_err(|e| Error::Template(e.to_string()))?;
         return Ok(scan_tags(&source));
     }
@@ -347,35 +399,31 @@ impl<T> Cache<T> {
 pub const TEMPLATE_FUEL: u64 = 5_000_000;
 
 /// The expression environment: strict about undefined names, with the
-/// document filters added.
+/// document filters (`currency`, `number`, `date`, `t`) and no settings.
 pub fn environment() -> Environment<'static> {
-    let mut env = Environment::new();
-    env.set_undefined_behavior(UndefinedBehavior::Strict);
-    // A budget of evaluation steps, so a template cannot loop for ever.
-    env.set_fuel(Some(TEMPLATE_FUEL));
-    env.add_filter("currency", currency);
-    env
+    environment_for(
+        &rusticdoc_template::Settings::default(),
+        &rusticdoc_template::RenderOptions::default(),
+    )
 }
 
-/// `{{ 1234.5 | currency("EUR") }}` gives `EUR 1,234.50`.
-fn currency(value: f64, code: Option<String>) -> String {
-    let negative = value < 0.0;
-    let cents = (value.abs() * 100.0).round() as u64;
-    let whole = cents / 100;
-    let frac = cents % 100;
-    let digits = whole.to_string();
-    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(ch);
-    }
-    let sign = if negative { "-" } else { "" };
-    match code {
-        Some(code) if !code.is_empty() => format!("{sign}{code} {grouped}.{frac:02}"),
-        _ => format!("{sign}{grouped}.{frac:02}"),
-    }
+/// The expression environment for a text template, a PDF form or a batch's
+/// file names: the document filters read `settings` with the render's
+/// choices on top, as in an Office template.
+pub fn environment_for(
+    settings: &rusticdoc_template::Settings,
+    options: &rusticdoc_template::RenderOptions,
+) -> Environment<'static> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(if options.undefined_as_empty {
+        UndefinedBehavior::Chainable
+    } else {
+        UndefinedBehavior::Strict
+    });
+    // A budget of evaluation steps, so a template cannot loop for ever.
+    env.set_fuel(Some(TEMPLATE_FUEL));
+    rusticdoc_template::add_filters(&mut env, settings, options);
+    env
 }
 
 fn describe(e: &minijinja::Error) -> String {
@@ -579,19 +627,9 @@ mod tests {
     fn docx_validation_lists_every_problem() {
         let body = r#"<w:p><w:r><w:t>{{ missing }} and {{ also }}</w:t></w:r></w:p>"#;
         let doc = Document::new("letter.docx", tiny_docx(body));
-        let problems = validate(&doc, &json!({}), &json!({}), LIMIT);
+        let problems = validate(&doc, &json!({}), &json!({}), LIMIT, &Default::default());
         assert!(problems.len() >= 2, "{problems:?}");
         assert!(problems.iter().all(|d| d.location.is_some()));
-    }
-
-    #[test]
-    fn currency_formats() {
-        assert_eq!(currency(0.0, None), "0.00");
-        assert_eq!(
-            currency(-1234567.891, Some("USD".into())),
-            "-USD 1,234,567.89"
-        );
-        assert_eq!(currency(999.999, Some("".into())), "1,000.00");
     }
 
     /// A short template that prints a long value in a loop: 100 MB with fuel to
@@ -610,8 +648,56 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
         assert!(err.to_string().contains("byte limit"), "{err}");
-        let problems = validate(&txt(WIDE), &json!({}), &json!({}), 1 << 20);
+        let problems = validate(
+            &txt(WIDE),
+            &json!({}),
+            &json!({}),
+            1 << 20,
+            &Default::default(),
+        );
         assert!(problems[0].message.contains("byte limit"), "{problems:?}");
+    }
+
+    #[test]
+    fn text_templates_take_settings_and_the_request_language() {
+        let source = "{% settings lang=\"fr\" t.total.fr=\"Montant\" t.total=\"Total\" %}\n{{ \"total\" | t }} {{ 1234.5 | number }} {{ d | date(\"%A\") }}\n{{ nope }}";
+        let doc = Document::new("a.txt", source.as_bytes().to_vec());
+        assert!(check_syntax(&doc).is_empty());
+        assert_eq!(tags(&doc).unwrap().len(), 5);
+        let keys: Vec<String> = translation_keys(&doc).unwrap().into_iter().collect();
+        assert_eq!(keys, ["total"]);
+        // The settings tag keeps its line, so errors still name the right one.
+        let err = render(
+            &doc,
+            &json!({"d": "2026-01-05"}),
+            &json!({}),
+            LIMIT,
+            &Default::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("line 3"), "{err}");
+        let data = json!({"d": "2026-01-05", "nope": ""});
+        let out = render(&doc, &data, &json!({}), LIMIT, &Default::default()).unwrap();
+        assert_eq!(
+            String::from_utf8(out.bytes.to_vec()).unwrap(),
+            "\nMontant 1\u{202f}234,5 lundi\n"
+        );
+        let de = rusticdoc_template::RenderOptions {
+            lang: Some("de".into()),
+            ..Default::default()
+        };
+        let out = render(&doc, &data, &json!({}), LIMIT, &de).unwrap();
+        assert_eq!(
+            String::from_utf8(out.bytes.to_vec()).unwrap(),
+            "\nTotal 1.234,5 Montag\n"
+        );
+        let problems = validate(&doc, &data, &json!({}), LIMIT, &de);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0]
+                .message
+                .starts_with("no de translation for \"total\"")
+        );
     }
 
     #[test]

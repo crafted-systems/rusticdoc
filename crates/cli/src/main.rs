@@ -10,6 +10,7 @@ use clap::{Args, Parser, Subcommand};
 #[cfg(target_os = "linux")]
 mod init;
 mod pdf;
+mod translate;
 use rusticdoc_core::config::RenderMode;
 use rusticdoc_core::job::parse_steps;
 use rusticdoc_core::{Config, Document, Engines, Format, Pipeline, RenderRequest, Step};
@@ -60,7 +61,19 @@ enum Command {
         template: PathBuf,
         #[arg(short, long)]
         data: Option<PathBuf>,
+        /// The language to render in. Each literal key passed to `t` with no
+        /// translation for it is a warning.
+        #[arg(long)]
+        lang: Option<String>,
+        /// JSON file of translations by language, as the service's
+        /// `translations` field.
+        #[arg(long)]
+        translations: Option<PathBuf>,
     },
+    /// Create or update `<lang>.json` with the keys templates pass to `t`.
+    /// Translations already there are kept, new keys get an empty text, and
+    /// keys no template uses any more are listed, not removed.
+    Translate(translate::TranslateArgs),
     /// Print the key a caller's webhook deliveries are signed with, in hex, from
     /// RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it.
     WebhookSecret {
@@ -93,6 +106,17 @@ struct RenderArgs {
     /// JSON file visible as `ctx`.
     #[arg(long)]
     ctx: Option<PathBuf>,
+    /// The language, such as `fr` or `fr-CA`: picks translations and, when
+    /// CLDR has data for it, how numbers, money and dates are written.
+    #[arg(long)]
+    lang: Option<String>,
+    /// JSON file of translations by language, as the service's
+    /// `translations` field: `{"fr": {"total": "Montant"}}`.
+    #[arg(long)]
+    translations: Option<PathBuf>,
+    /// The time zone `date` shows moments in: `+02:00` or `Europe/Paris`.
+    #[arg(long)]
+    timezone: Option<String>,
     /// Steps in order: convert, pdfa, metadata, encrypt, merge, sign. `sign`
     /// comes last and uses RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT.
     #[arg(short, long, default_value = "")]
@@ -253,14 +277,22 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             init_cli_logs(&config);
             pdf::run(&config, args).await?;
         }
-        Command::Validate { template, data } => {
+        Command::Validate {
+            template,
+            data,
+            lang,
+            translations,
+        } => {
             let doc = read_doc(&template)?;
             let data = read_json(data.as_deref())?;
+            let options =
+                translate::render_options(&config, lang.as_deref(), translations.as_deref(), None)?;
             let problems = rusticdoc_core::template::validate(
                 &doc,
                 &data,
                 &serde_json::Value::Object(Default::default()),
                 config.max_render_bytes,
+                &options,
             );
             println!("{}", serde_json::to_string_pretty(&problems)?);
             if problems
@@ -268,6 +300,21 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 .any(|d| matches!(d.severity, rusticdoc_template::Severity::Error))
             {
                 std::process::exit(1);
+            }
+        }
+        Command::Translate(args) => {
+            let done = translate::run(&args)?;
+            eprintln!(
+                "{}: {} added, {} already there",
+                done.file.display(),
+                done.added.len(),
+                done.kept
+            );
+            if !done.unused.is_empty() {
+                eprintln!(
+                    "not used by these templates (kept): {}",
+                    done.unused.join(", ")
+                );
             }
         }
         Command::RenderWorker => unreachable!("handled in main"),
@@ -307,6 +354,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let mut req = RenderRequest::new(template);
             req.data = read_json(args.data.as_deref())?;
             req.ctx = read_json(args.ctx.as_deref())?;
+            req.render_options = translate::render_options(
+                &config,
+                args.lang.as_deref(),
+                args.translations.as_deref(),
+                args.timezone.as_deref(),
+            )?;
             let mut fields = BTreeMap::new();
             fields.insert("to".into(), args.to.clone());
             fields.insert("pdfa".into(), args.pdfa.clone());

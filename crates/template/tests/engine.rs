@@ -246,7 +246,10 @@ fn settings_tag_is_removed_and_applies() {
     let out = compiled.render(&json!({})).unwrap();
     let text = docx_text(&out);
     assert_eq!(text[0], "Start");
-    assert_eq!(text[1], "Bonjour Au revoir other EUR 5.00 02/01/2024 01:00");
+    assert_eq!(
+        text[1],
+        "Bonjour Au revoir other 5,00\u{a0}€ 02/01/2024 01:00"
+    );
 }
 
 #[test]
@@ -835,7 +838,7 @@ fn settings_come_from_document_properties_and_the_tag_wins() {
     let compiled = compile(Format::Docx, &doc).unwrap();
     assert_eq!(compiled.settings().lang.as_deref(), Some("fr"));
     let out = compiled.render(&json!({})).unwrap();
-    assert_eq!(docx_text(&out), ["Montant EUR 2.00"]);
+    assert_eq!(docx_text(&out), ["Montant 2,00\u{a0}€"]);
 
     let doc = with_part(
         &docx(&p(&format!("{{% settings lang=\"de\" %}}{line}"))),
@@ -846,7 +849,7 @@ fn settings_come_from_document_properties_and_the_tag_wins() {
     assert_eq!(compiled.settings().lang.as_deref(), Some("de"));
     assert_eq!(compiled.settings().currency.as_deref(), Some("EUR"));
     let out = compiled.render(&json!({})).unwrap();
-    assert_eq!(docx_text(&out), ["Summe EUR 2.00"]);
+    assert_eq!(docx_text(&out), ["Summe 2,00\u{a0}€"]);
 
     let meta = r#"<?xml version="1.0" encoding="UTF-8"?><office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.3"><office:meta><meta:user-defined meta:name="timezone">+02:00</meta:user-defined><meta:user-defined meta:name="t.hello">Bonjour</meta:user-defined></office:meta></office:document-meta>"#;
     let doc = with_part(
@@ -880,6 +883,7 @@ fn undefined_values_can_print_as_empty_per_render() {
 
     let lenient = RenderOptions {
         undefined_as_empty: true,
+        ..Default::default()
     };
     let out = compiled.render_with(&data, &lenient).unwrap();
     assert_eq!(docx_text(&out), ["Hello !", "||||", "end"]);

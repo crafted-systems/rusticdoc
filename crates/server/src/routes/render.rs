@@ -39,6 +39,24 @@ pub struct RenderForm {
     /// failing the render. Default `false`, so a misspelt name is an error.
     #[schema(rename = "undefinedAsEmpty")]
     pub undefined_as_empty: Option<bool>,
+    /// The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins
+    /// over the template's `lang`: it picks translations for `t`, and when CLDR
+    /// has data for it, how `number`, `currency` and `date` write numbers,
+    /// money and month names.
+    #[schema(example = "fr-CA")]
+    pub lang: Option<String>,
+    /// Translations for `t`, by language, each a flat object of keys and texts.
+    /// They win over the service's dictionaries and the template's own. At most
+    /// 10,000 entries, keys of 256 bytes and texts of 16 KiB.
+    #[schema(value_type = Option<Object>, example = json!({"fr": {"total": "Montant"}, "en-gb": {"total": "Total"}}))]
+    pub translations: Option<serde_json::Value>,
+    /// The time zone `date` shows moments in: an offset such as `+02:00`, or an
+    /// IANA zone such as `Europe/Paris`. Wins over the template's.
+    #[schema(example = "Europe/Paris")]
+    pub timezone: Option<String>,
+    /// The currency `currency` uses when given none, such as `EUR`. Wins over
+    /// the template's.
+    pub currency: Option<String>,
     /// Comma-separated steps in order: `convert`, `pdfa`, `metadata`,
     /// `encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the
     /// service's key; it must be last and cannot be combined with `encrypt`.
@@ -103,6 +121,24 @@ pub struct RenderJson {
     /// `true` prints a value missing from the data as nothing.
     #[schema(rename = "undefinedAsEmpty")]
     pub undefined_as_empty: Option<bool>,
+    /// The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins
+    /// over the template's `lang`: it picks translations for `t`, and when CLDR
+    /// has data for it, how `number`, `currency` and `date` write numbers,
+    /// money and month names.
+    #[schema(example = "fr-CA")]
+    pub lang: Option<String>,
+    /// Translations for `t`, by language, each a flat object of keys and texts.
+    /// They win over the service's dictionaries and the template's own. At most
+    /// 10,000 entries, keys of 256 bytes and texts of 16 KiB.
+    #[schema(value_type = Option<Object>, example = json!({"fr": {"total": "Montant"}, "en-gb": {"total": "Total"}}))]
+    pub translations: Option<serde_json::Value>,
+    /// The time zone `date` shows moments in: an offset such as `+02:00`, or an
+    /// IANA zone such as `Europe/Paris`. Wins over the template's.
+    #[schema(example = "Europe/Paris")]
+    pub timezone: Option<String>,
+    /// The currency `currency` uses when given none, such as `EUR`. Wins over
+    /// the template's.
+    pub currency: Option<String>,
     /// The steps in order, as a list or as comma-separated text.
     #[schema(value_type = Option<Vec<String>>, example = json!(["convert", "pdfa"]))]
     pub steps: Option<serde_json::Value>,
@@ -179,6 +215,7 @@ pub async fn render(
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = render_options(&mut form, &state)?;
     let stored = templates::named_in(&mut form, &state, &principal).await?;
     let from_store = stored.is_some();
     let template = match stored {
@@ -218,7 +255,7 @@ pub async fn render(
     let mut req = RenderRequest::new(template);
     req.data = data;
     req.ctx = ctx;
-    req.render_options = render_options(&form);
+    req.render_options = render_choices;
     let mut options = options::convert_options(&form)?;
     // Here PDF/A and PDF/UA happen where the step list says, not on every
     // conversion.
@@ -255,6 +292,7 @@ pub async fn render(
                 &options,
                 state.config.max_render_bytes,
                 state.config.api_timeout,
+                &req.render_options,
             )
             .await?;
         req.template = rusticdoc_core::Document::new(req.template.name.clone(), filled);
@@ -264,12 +302,63 @@ pub async fn render(
     run(state, hook, request_id(&headers), req).await
 }
 
-/// What the form asks of the template stage.
-fn render_options(form: &Form) -> rusticdoc_template::RenderOptions {
-    rusticdoc_template::RenderOptions {
-        undefined_as_empty: form.bool("undefinedAsEmpty"),
+/// What the form asks of the template stage: `undefinedAsEmpty`, `lang`,
+/// `timezone`, `currency` and `translations`, checked here so a bad value is a
+/// 400 naming the field, and the service's dictionaries for the language.
+/// Reads `translations` as JSON, so call it before choosing the template: a
+/// `translations.json` file part is not one.
+pub(crate) fn render_options(
+    form: &mut Form,
+    state: &AppState,
+) -> ApiResult<rusticdoc_template::RenderOptions> {
+    use rusticdoc_template::locale;
+    let text = |name: &str| {
+        form.field(name)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let lang = match text("lang") {
+        None => None,
+        Some(raw) => Some(locale::normalize_lang(&raw).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "'lang' is {raw:?}, which is not a language tag such as fr, fr-CA or en-us"
+            ))
+        })?),
+    };
+    let timezone = text("timezone");
+    if let Some(tz) = &timezone {
+        locale::check_timezone(tz)
+            .map_err(|e| ApiError::bad_request(format!("'timezone': {e}")))?;
     }
+    let currency = text("currency");
+    if let Some(code) = &currency
+        && (code.chars().count() > MAX_CURRENCY_CHARS || code.chars().any(char::is_control))
+    {
+        return Err(ApiError::bad_request(format!(
+            "'currency' is a code such as EUR, of at most {MAX_CURRENCY_CHARS} characters"
+        )));
+    }
+    let undefined_as_empty = form.bool("undefinedAsEmpty");
+    let translations = match form.json("translations")? {
+        serde_json::Value::Object(map) if map.is_empty() => Default::default(),
+        value => rusticdoc_template::translate::parse_translations(&value, "translations")
+            .map_err(ApiError::bad_request)?,
+    };
+    let dictionary = state.dictionaries.for_lang(lang.as_deref());
+    Ok(rusticdoc_template::RenderOptions {
+        undefined_as_empty,
+        lang,
+        timezone,
+        currency,
+        translations,
+        dictionary,
+    })
 }
+
+/// Longest `currency` field: codes are three letters, and anything longer
+/// is printed as given.
+const MAX_CURRENCY_CHARS: usize = 16;
 
 /// The form's `steps` list. Steps that carry files or repeat
 /// (`watermark`, `stamp`, `embed`, `factur-x`) are built from their own
@@ -362,6 +451,7 @@ pub async fn batch(
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = render_options(&mut form, &state)?;
     let stored = templates::named_in(&mut form, &state, &principal).await?;
     let template = match stored {
         Some(template) => template,
@@ -436,7 +526,6 @@ pub async fn batch(
     let count = elements.len();
     let limit = state.config.batch_timeout;
     let max_render = state.config.max_render_bytes;
-    let render_choices = render_options(&form);
     let st = state.clone();
     let job = async move {
         let renderer = st.pipeline.renderer().clone();
@@ -469,7 +558,7 @@ pub async fn batch(
                 }
             };
             let name = current
-                .text(&name_template, &one, MAX_BATCH_NAME_BYTES)
+                .text(&name_template, &one, MAX_BATCH_NAME_BYTES, &render_choices)
                 .await
                 .map_err(|e| match e {
                     rusticdoc_core::Error::Template(m) => {
@@ -586,6 +675,7 @@ pub async fn validate(
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = render_options(&mut form, &state)?;
     let template = match templates::named_in(&mut form, &state, &principal).await? {
         Some(template) => template,
         None => form.require_file("a template file, or a 'templateId',")?,
@@ -608,6 +698,7 @@ pub async fn validate(
             &ctx,
             state.config.max_render_bytes,
             state.config.api_timeout,
+            &render_choices,
         )
         .await?;
     let mut diagnostics = diagnostics;

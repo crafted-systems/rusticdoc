@@ -18,15 +18,19 @@ use serde::{Deserialize, Serialize};
 pub mod filters;
 mod formats;
 pub mod limit;
+pub mod locale;
+mod locale_data;
 mod package;
 mod program;
 mod properties;
 mod rich;
 mod sheet;
+pub mod translate;
 mod workbook;
 mod xml;
 
 use program::{Mode, PartTree, Source, Tag, TagCtx};
+pub use translate::Translations;
 
 /// Formats the engine understands. Each is a ZIP of XML parts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -156,6 +160,37 @@ pub struct RenderOptions {
     /// print nothing for it too, and a sheet cell holding only it is left
     /// empty. Off by default: a misspelt name is an error.
     pub undefined_as_empty: bool,
+    /// Wins over the template's `lang`. It picks translations, and when CLDR
+    /// has data for it, how `number`, `currency` and `date` write numbers,
+    /// money and names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+    /// Wins over the template's `timezone`: an offset or an IANA zone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    /// Wins over the template's `currency`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// Translations sent with the request, the first place `t` looks.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translations: Translations,
+    /// The service's dictionaries, below `translations` and above the
+    /// template's own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dictionary: Translations,
+}
+
+impl RenderOptions {
+    /// True when nothing here changes how the template's filters behave, so
+    /// the environment compiled with the template serves as it is.
+    pub fn is_plain(&self) -> bool {
+        !self.undefined_as_empty
+            && self.lang.is_none()
+            && self.timezone.is_none()
+            && self.currency.is_none()
+            && self.translations.is_empty()
+            && self.dictionary.is_empty()
+    }
 }
 
 /// A template parsed once, renderable many times.
@@ -235,14 +270,35 @@ impl Compiled {
         data: &serde_json::Value,
         options: &RenderOptions,
     ) -> Result<Vec<u8>> {
-        if !options.undefined_as_empty {
+        if options.is_plain() {
             return self.render(data);
         }
-        // Cloning shares the parsed template; only the settings differ.
-        let mut env = self.env.clone();
-        filters::undefined_as_empty(&mut env, &self.settings);
+        let env = self.env_with(options);
         let (rendered, table) = self.render_text(&env, &self.source, data)?;
         self.assemble(&rendered, table.as_deref())
+    }
+
+    /// The compiled environment with a render's choices put in. Cloning
+    /// shares the parsed template; only the filters differ.
+    fn env_with(&self, options: &RenderOptions) -> minijinja::Environment<'static> {
+        let mut env = self.env.clone();
+        let ctx = filters::Context::new(&self.settings, options);
+        if options.undefined_as_empty {
+            filters::undefined_as_empty(&mut env, ctx);
+        } else {
+            filters::localize(&mut env, ctx);
+        }
+        env
+    }
+
+    /// The literal keys the template passes to `t`, and those its settings
+    /// translate, for `rusticdoc translate`.
+    pub fn translation_keys(&self) -> std::collections::BTreeSet<String> {
+        let mut keys = translate::settings_keys(&self.settings);
+        for tag in &self.table {
+            keys.extend(translate::literal_keys(&tag.text));
+        }
+        keys
     }
 
     fn render_text(
@@ -529,7 +585,25 @@ pub fn compile(format: Format, bytes: &[u8]) -> Result<Compiled> {
 /// Compiles and test-renders against sample data, reporting every problem
 /// found rather than stopping at the first.
 pub fn validate(format: Format, bytes: &[u8], data: &serde_json::Value) -> Vec<Diagnostic> {
-    validate_within(format, bytes, data, package::MAX_TOTAL_BYTES as usize)
+    validate_with(format, bytes, data, &RenderOptions::default())
+}
+
+/// [`validate`] rendering as a request with these choices would. When a
+/// language applies, each tag passing `t` a literal key with no translation
+/// for it, or for a language it falls back to, gets a warning.
+pub fn validate_with(
+    format: Format,
+    bytes: &[u8],
+    data: &serde_json::Value,
+    options: &RenderOptions,
+) -> Vec<Diagnostic> {
+    validate_within(
+        format,
+        bytes,
+        data,
+        package::MAX_TOTAL_BYTES as usize,
+        options,
+    )
 }
 
 /// What is wrong with a template whatever the data: a file that cannot be read,
@@ -578,6 +652,7 @@ fn validate_within(
     bytes: &[u8],
     data: &serde_json::Value,
     output_limit: usize,
+    options: &RenderOptions,
 ) -> Vec<Diagnostic> {
     let mut b = match build(format, bytes) {
         Ok(b) => b,
@@ -593,7 +668,11 @@ fn validate_within(
     }
 
     // A strict render finds the first runtime problem precisely.
-    match compiled.render_text(&compiled.env, &compiled.source, data) {
+    let strict = compiled.env_with(&RenderOptions {
+        undefined_as_empty: false,
+        ..options.clone()
+    });
+    match compiled.render_text(&strict, &compiled.source, data) {
         // Rich values and sheet copies are placed after rendering, so placing
         // them is part of the test.
         Ok((rendered, table)) => {
@@ -696,6 +775,30 @@ fn validate_within(
         }
     }
     dedup(&mut diags);
+    for tag in &compiled.table {
+        let keys = translate::literal_keys(&tag.text);
+        let missing = translate::missing_translations(
+            &compiled.settings,
+            options,
+            keys.iter().map(String::as_str),
+        );
+        if !missing.is_empty() {
+            let lang = translate::effective_lang(&compiled.settings, options).unwrap_or_default();
+            diags.push(Diagnostic {
+                severity: Severity::Warning,
+                message: format!(
+                    "no {lang} translation for {}: {}",
+                    missing
+                        .iter()
+                        .map(|k| format!("{k:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    tag.text
+                ),
+                location: Some(tag.loc.clone()),
+            });
+        }
+    }
     diags
 }
 
@@ -720,6 +823,19 @@ fn dedup(diags: &mut Vec<Diagnostic>) {
 /// a clear error, because text has no package to put their content in.
 pub fn environment() -> minijinja::Environment<'static> {
     filters::environment_for(&Settings::default(), "")
+}
+
+/// Adds `currency`, `number`, `date` and `t` to an environment of the
+/// caller's, such as a text template's, reading these settings with the
+/// render's choices on top. With `undefined_as_empty` they print an undefined
+/// value as nothing.
+pub fn add_filters(
+    env: &mut minijinja::Environment<'static>,
+    settings: &Settings,
+    options: &RenderOptions,
+) {
+    let ctx = filters::Context::new(settings, options);
+    filters::add_document_filters(env, std::sync::Arc::new(ctx), options.undefined_as_empty);
 }
 
 /// The expression environment with working rich filters for this format, for
@@ -813,6 +929,7 @@ mod tests {
         assert!(err.message.contains("package limit"), "{err}");
         let lenient = RenderOptions {
             undefined_as_empty: true,
+            ..Default::default()
         };
         let err = compiled
             .render_with(&serde_json::json!({}), &lenient)
@@ -822,7 +939,13 @@ mod tests {
 
     #[test]
     fn validation_stops_at_the_output_limit_too() {
-        let problems = validate_within(Format::Docx, &docx(WIDE), &serde_json::json!({}), 1 << 20);
+        let problems = validate_within(
+            Format::Docx,
+            &docx(WIDE),
+            &serde_json::json!({}),
+            1 << 20,
+            &RenderOptions::default(),
+        );
         assert!(
             problems.iter().any(|d| d.message.contains("package limit")),
             "{problems:?}"

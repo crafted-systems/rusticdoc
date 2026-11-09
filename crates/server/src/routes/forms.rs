@@ -100,6 +100,7 @@ pub async fn fill(
     // First, because the first file left is the PDF.
     let mut data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = crate::routes::render::render_options(&mut form, &state)?;
     let file = form.require_file("one PDF")?;
     rusticdoc_core::pdfops::require_pdf(&file)?;
     if let serde_json::Value::Object(map) = &mut data {
@@ -130,6 +131,7 @@ pub async fn fill(
                 &options,
                 st.config.max_render_bytes,
                 st.config.api_timeout,
+                &render_choices,
             )
             .await?;
         Ok::<Output, ApiError>(Output {
