@@ -91,6 +91,7 @@ pub fn sanitize(
     if keep == Keep::ALL {
         return Ok(removed);
     }
+    normalise_encodings(entries)?;
     match format {
         Format::Docx | Format::Xlsx | Format::Pptx => ooxml(format, entries, keep, &mut removed)?,
         Format::Odt | Format::Ods | Format::Odp => odf(entries, keep, &mut removed)?,
@@ -297,15 +298,44 @@ fn read_part(entries: &[Entry], name: &str) -> Result<Option<String>, TemplateEr
     let Some(e) = entries.iter().find(|e| e.name == name) else {
         return Ok(None);
     };
-    decode(&e.data).map(Some).ok_or_else(|| {
-        TemplateError::new(format!(
-            "{name}: the part is neither UTF-8 nor UTF-16 text, so it cannot be checked \
-             for macros, objects and links; the document is refused"
-        ))
-    })
+    decode(&e.data)
+        .map(Some)
+        .map_err(|why| unreadable(name, &why))
 }
 
-fn decode(b: &[u8]) -> Option<String> {
+fn unreadable(name: &str, why: &str) -> TemplateError {
+    TemplateError::new(format!(
+        "{name}: {why}, so it cannot be checked for macros, objects and links; the \
+         document is refused"
+    ))
+}
+
+/// Whether a part is XML the sanitiser must be able to read.
+fn is_xml_part(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [".xml", ".rels", ".vml"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// Rewrites every XML part as UTF-8 with a UTF-8 declaration, so that what
+/// is checked is byte for byte what is written out, and refuses the package
+/// when one cannot be read as Office would read it.
+fn normalise_encodings(entries: &mut [Entry]) -> Result<(), TemplateError> {
+    for e in entries.iter_mut().filter(|e| is_xml_part(&e.name)) {
+        let text = decode(&e.data).map_err(|why| unreadable(&e.name, &why))?;
+        if text.as_bytes() != e.data.as_slice() {
+            e.data = text.into_bytes();
+        }
+    }
+    Ok(())
+}
+
+/// The text of a part, decoded as its bytes and its declaration agree:
+/// UTF-8, or UTF-16 with or without a byte-order mark. A part that declares
+/// any other encoding, or one its bytes are not, is refused, since Office
+/// would read it differently from the way it was checked.
+fn decode(b: &[u8]) -> Result<String, String> {
     let utf16 = |le: bool, rest: &[u8]| -> Option<String> {
         let (pairs, odd) = rest.as_chunks::<2>();
         if !odd.is_empty() {
@@ -323,20 +353,36 @@ fn decode(b: &[u8]) -> Option<String> {
             .collect();
         String::from_utf16(&units).ok()
     };
-    let text = if let Some(rest) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        String::from_utf8(rest.to_vec()).ok()?
+    let not_utf16 = || "the part is not valid UTF-16".to_string();
+    let (text, wide) = if let Some(rest) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        (String::from_utf8(rest.to_vec()).ok(), false)
     } else if let Some(rest) = b.strip_prefix(&[0xFF, 0xFE]) {
-        utf16(true, rest)?
+        (Some(utf16(true, rest).ok_or_else(not_utf16)?), true)
     } else if let Some(rest) = b.strip_prefix(&[0xFE, 0xFF]) {
-        utf16(false, rest)?
+        (Some(utf16(false, rest).ok_or_else(not_utf16)?), true)
     } else if b.starts_with(&[b'<', 0]) {
-        utf16(true, b)?
+        (Some(utf16(true, b).ok_or_else(not_utf16)?), true)
     } else if b.starts_with(&[0, b'<']) {
-        utf16(false, b)?
+        (Some(utf16(false, b).ok_or_else(not_utf16)?), true)
     } else {
-        String::from_utf8(b.to_vec()).ok()?
+        (String::from_utf8(b.to_vec()).ok(), false)
     };
-    Some(declare_utf8(text))
+    let text = text.ok_or("the part is not valid UTF-8")?;
+    let declared = ENCODING_RE
+        .captures(&text)
+        .map(|c| c[2].trim_matches(['"', '\'']).trim().to_ascii_lowercase());
+    match declared.as_deref() {
+        None | Some("utf-8") | Some("utf8") if !wide => {}
+        None | Some("utf-16") | Some("utf-16le") | Some("utf-16be") if wide => {}
+        Some(other) => {
+            return Err(format!(
+                "the part declares the encoding {other:?} but is {}",
+                if wide { "UTF-16" } else { "UTF-8" }
+            ))
+        }
+        None => {}
+    }
+    Ok(declare_utf8(text))
 }
 
 static ENCODING_RE: LazyLock<Regex> =
@@ -355,8 +401,9 @@ fn declare_utf8(text: String) -> String {
 /// The namespaces the sanitiser recognises markup by, with the prefixes
 /// Office and LibreOffice always give them. Elements are matched by these
 /// qualified names, so a part that binds one of these namespaces to another
-/// prefix, or one of these prefixes to another namespace, is refused: it
-/// would otherwise hide a macro or link under a name that is not looked for.
+/// prefix (or makes it the default namespace when it has a prefix) is
+/// refused: it would otherwise hide a macro or link under a name that is not
+/// looked for.
 /// The template engine reads the same fixed prefixes.
 const KNOWN_NAMESPACES: &[(&str, &str)] = &[
     (
@@ -432,14 +479,11 @@ fn check_namespaces(part: &str, src: &str) -> Result<(), TemplateError> {
             .filter(|(_, u)| *u == uri)
             .map(|(p, _)| *p)
             .collect();
-        let uris: Vec<&str> = KNOWN_NAMESPACES
-            .iter()
-            .filter(|(p, _)| !p.is_empty() && *p == prefix)
-            .map(|(_, u)| *u)
-            .collect();
-        let bad_uri = !wanted.is_empty() && !wanted.contains(&prefix);
-        let bad_prefix = !uris.is_empty() && !uris.contains(&uri);
-        if bad_uri || bad_prefix {
+        // A standard prefix bound to some other namespace is let be: what it
+        // names is not the markup Office acts on, so at worst the sanitiser
+        // edits something harmless. Parts such as SharePoint's custom XML
+        // bind `p` to their own namespace.
+        if !wanted.is_empty() && !wanted.contains(&prefix) {
             let shown = if prefix.is_empty() {
                 "the default namespace".to_string()
             } else {
@@ -597,7 +641,13 @@ static LITERAL_ARG_RE: LazyLock<Regex> =
 /// Why a formula must go, if it must. Function names are looked for outside
 /// string literals; a `HYPERLINK` passes only with a plain, public literal.
 fn formula_threat(formula: &str, keep: Keep) -> Option<Why> {
-    let code = STRING_RE.replace_all(formula, "\"\"");
+    // Each literal's inside becomes filler of the same byte length, so a
+    // place found in `code` is the same place in `formula`.
+    let code = STRING_RE.replace_all(formula, |c: &regex::Captures| {
+        let len = c[0].len();
+        format!("\"{}\"", "x".repeat(len.saturating_sub(2)))
+    });
+    debug_assert_eq!(code.len(), formula.len());
     if !keep.external_links
         && (EXTERNAL_REF_RE.is_match(&code)
             || ODF_EXTERNAL_REF_RE.is_match(formula)
@@ -609,7 +659,9 @@ fn formula_threat(formula: &str, keep: Keep) -> Option<Why> {
     if !keep.private_links {
         for m in HYPERLINK_FN_RE.find_iter(&code) {
             // The same place in the original, where the literal still is.
-            let rest = &formula[m.end()..];
+            let Some(rest) = formula.get(m.end()..) else {
+                return Some(Why::Private);
+            };
             match LITERAL_ARG_RE.captures(rest) {
                 Some(c) if !is_private_url(&c[1].replace("\"\"", "\"")) => {}
                 _ => return Some(Why::Private),
@@ -633,10 +685,13 @@ fn field_threat(instr: &str, nested: bool, keep: Keep) -> Option<Why> {
             if nested {
                 return Some(Why::Private);
             }
-            let target = field_argument(&instr[word.len()..]);
+            let (target, bookmark) = hyperlink_target(instr.get(word.len()..).unwrap_or(""));
             match target {
-                Some(t) if is_private_url(&t) => Some(Why::Private),
-                _ => None,
+                Some(t) if !t.trim().is_empty() => is_private_url(&t).then_some(Why::Private),
+                // A link to a bookmark in the document needs no target;
+                // anything else without one cannot be checked.
+                _ if bookmark => None,
+                _ => Some(Why::Private),
             }
         }
         "INCLUDEPICTURE" | "INCLUDETEXT" | "INCLUDE" | "IMPORT" | "LINK" | "DDE" | "DDEAUTO"
@@ -648,34 +703,53 @@ fn field_threat(instr: &str, nested: bool, keep: Keep) -> Option<Why> {
     }
 }
 
-/// The first argument of a field that is not a switch, quoted or bare.
-fn field_argument(rest: &str) -> Option<String> {
-    let mut chars = rest.trim_start().chars().peekable();
-    loop {
-        match chars.peek()? {
-            '"' => {
-                chars.next();
-                return Some(chars.take_while(|c| *c != '"').collect());
-            }
-            '\\' => {
-                // A switch and, for `\l`, `\o` and the like, its argument:
-                // a bookmark or tip, not the target.
-                chars.next();
-                let _: String = chars.by_ref().take_while(|c| !c.is_whitespace()).collect();
-                while chars.peek().is_some_and(|c| c.is_whitespace()) {
-                    chars.next();
+/// The words of a field instruction: quoted arguments without their quotes,
+/// bare words and switches as written.
+fn field_tokens(rest: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let mut chars = rest.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+        } else if c == '"' {
+            chars.next();
+            out.push((chars.by_ref().take_while(|c| *c != '"').collect(), true));
+        } else {
+            let mut word = String::new();
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() || c == '"' {
+                    break;
                 }
-                if chars.peek() == Some(&'"') {
-                    chars.next();
-                    let _: String = chars.by_ref().take_while(|c| *c != '"').collect();
-                }
-            }
-            c if c.is_whitespace() => {
+                word.push(c);
                 chars.next();
             }
-            _ => return Some(chars.take_while(|c| !c.is_whitespace()).collect()),
+            out.push((word, false));
         }
     }
+    out
+}
+
+/// The target of a `HYPERLINK` field, and whether it has `\l` (a bookmark
+/// in the document). Of its switches only `\l` (bookmark), `\o` (tip) and
+/// `\t` (target frame) take an argument; `\h`, `\m` and `\n` take none.
+fn hyperlink_target(rest: &str) -> (Option<String>, bool) {
+    let mut tokens = field_tokens(rest).into_iter();
+    let (mut target, mut bookmark) = (None, false);
+    while let Some((word, quoted)) = tokens.next() {
+        match word.strip_prefix('\\').filter(|_| !quoted) {
+            Some(switch) => {
+                let switch = switch.to_ascii_lowercase();
+                if matches!(switch.as_str(), "l" | "o" | "t") {
+                    tokens.next();
+                }
+                bookmark |= switch == "l";
+            }
+            None => {
+                target.get_or_insert(word);
+            }
+        }
+    }
+    (target, bookmark)
 }
 
 /// Takes the complex fields `field_threat` picks out of a Word part: the
@@ -1084,15 +1158,9 @@ impl Ooxml<'_> {
     /// characters around instruction runs). The field goes and its last
     /// result stays as plain text.
     fn word_fields(&mut self) -> Result<(), TemplateError> {
-        let names: Vec<String> = self
-            .entries
-            .iter()
-            .filter(|e| {
-                let lower = e.name.to_ascii_lowercase();
-                lower.starts_with("word/") && lower.ends_with(".xml")
-            })
-            .map(|e| e.name.clone())
-            .collect();
+        // Every XML part, wherever it sits: a relationship can place a story
+        // part anywhere in the package.
+        let names = self.xml_parts();
         let keep = self.keep;
         for name in names {
             let Some(src) = checked_part(self.entries, &name)? else {
@@ -1132,15 +1200,8 @@ impl Ooxml<'_> {
     /// literal, which could build one.
     fn sheet_formulas(&mut self) -> Result<(), TemplateError> {
         let keep = self.keep;
-        let names: Vec<String> = self
-            .entries
-            .iter()
-            .filter(|e| {
-                let lower = e.name.to_ascii_lowercase();
-                lower.starts_with("xl/") && lower.ends_with(".xml") && !lower.contains("/_rels/")
-            })
-            .map(|e| e.name.clone())
-            .collect();
+        // Every XML part, wherever a relationship placed it.
+        let names = self.xml_parts();
         for name in names {
             let Some(src) = checked_part(self.entries, &name)? else {
                 continue;
@@ -1184,6 +1245,18 @@ impl Ooxml<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Every XML part but relationships and content types.
+    fn xml_parts(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|e| {
+                let lower = e.name.to_ascii_lowercase();
+                lower.ends_with(".xml") && lower != "[content_types].xml"
+            })
+            .map(|e| e.name.clone())
+            .collect()
     }
 
     fn content_types(&mut self, gone: &HashSet<String>) -> Result<(), TemplateError> {
@@ -2010,7 +2083,7 @@ mod tests {
             );
         }
         assert_eq!(decode(b"\xEF\xBB\xBF<a/>").unwrap(), "<a/>");
-        assert!(decode(b"<a>\xFF</a>").is_none());
+        assert!(decode(b"<a>\xFF</a>").is_err());
         let entries = vec![Entry {
             name: "word/_rels/document.xml.rels".into(),
             data: b"<a>\xFF</a>".to_vec(),
@@ -2028,13 +2101,56 @@ mod tests {
             "<pr:Relationships xmlns:pr=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>",
             "<o2:document-content xmlns:o2=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\"/>",
             "<document xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>",
-            "<w:document xmlns:w=\"urn:not-word\"/>",
-            "<a xmlns:xlink='http://www.w3.org/1999/xlink2'/>",
             "<a><b xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/></a>",
         ] {
             let err = check_namespaces("p", bad).unwrap_err();
             assert!(err.message.contains("refused"), "{bad}: {err}");
         }
+        // A standard prefix for some other namespace names markup Office
+        // does not act on, as SharePoint's custom XML does with `p`.
+        for fine in [
+            "<p:properties xmlns:p=\"http://schemas.microsoft.com/office/2006/metadata/properties\"/>",
+            "<w:document xmlns:w=\"urn:not-word\"/>",
+        ] {
+            assert!(check_namespaces("p", fine).is_ok(), "{fine}");
+        }
+    }
+
+    #[test]
+    fn a_declared_encoding_must_match_the_bytes() {
+        let latin = "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><a>x</a>";
+        let err = decode(latin.as_bytes()).unwrap_err();
+        assert!(err.contains("iso-8859-1"), "{err}");
+        assert!(decode(b"<?xml version=\"1.0\" encoding='UTF-7'?><a/>").is_err());
+        assert!(decode(b"<?xml version=\"1.0\" encoding=\"UTF-16\"?><a/>").is_err());
+        let mut wide = vec![0xFF, 0xFE];
+        wide.extend(
+            "<?xml version=\"1.0\" encoding=\"windows-1252\"?><a/>"
+                .encode_utf16()
+                .flat_map(|u| u.to_le_bytes()),
+        );
+        assert!(decode(&wide).is_err());
+        assert!(decode(b"<?xml version=\"1.0\" encoding=\"utf-8\"?><a/>").is_ok());
+        assert!(decode(b"<?xml version=\"1.0\"?><a/>").is_ok());
+        // What was checked is what is written: UTF-16 becomes UTF-8.
+        let mut entries = vec![Entry {
+            name: "content.xml".into(),
+            data: {
+                let mut d = vec![0xFF, 0xFE];
+                d.extend(
+                    "<?xml version=\"1.0\" encoding=\"UTF-16\"?><a/>"
+                        .encode_utf16()
+                        .flat_map(|u| u.to_le_bytes()),
+                );
+                d
+            },
+            stored: false,
+        }];
+        normalise_encodings(&mut entries).unwrap();
+        assert_eq!(
+            entries[0].data,
+            b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><a/>"
+        );
     }
 
     #[test]
@@ -2052,6 +2168,16 @@ mod tests {
             ("HYPERLINK(\"http://\"&A1)", Why::Private),
             ("HYPERLINK(\"http://10.0.0.1\",\"x\")", Why::Private),
             ("IF(1,HYPERLINK(\"http:\\\\10.0.0.1\"),0)", Why::Private),
+            // A long literal before the call: places found past it must
+            // still be the same places in the formula.
+            (
+                "CONCAT(\"ééééééééé a long string\",HYPERLINK(\"http://10.0.0.1\"))",
+                Why::Private,
+            ),
+            (
+                "\"x\"&HYPERLINK(\"http://192.168.0.1\")&\"y\"",
+                Why::Private,
+            ),
         ] {
             assert_eq!(formula_threat(f, none), Some(why), "{f}");
         }
@@ -2060,6 +2186,7 @@ mod tests {
             "Table1[[#This Row],[2019]]",
             "\"a|b\"&\"WEBSERVICE(\"",
             "HYPERLINK(\"https://example.com\",\"site\")",
+            "CONCAT(\"ééé HYPERLINK(A1)\",HYPERLINK(\"https://example.com\"))",
         ] {
             assert_eq!(formula_threat(f, none), None, "{f}");
         }
@@ -2076,6 +2203,12 @@ mod tests {
                 " HYPERLINK \\o \"tip\" \"http://192.168.0.1\"",
                 Why::Private,
             ),
+            // `\h` and `\n` take no argument, so the target follows them.
+            (" HYPERLINK \\h \"http://10.0.0.1\"", Why::Private),
+            (" HYPERLINK \\n \\h \"http://10.0.0.1\"", Why::Private),
+            // No target and no bookmark: nothing to check, so it goes.
+            (" HYPERLINK \\h ", Why::Private),
+            (" HYPERLINK \\o \"tip only\" ", Why::Private),
             (
                 " INCLUDEPICTURE \"http://example.com/a.png\" \\d",
                 Why::External,

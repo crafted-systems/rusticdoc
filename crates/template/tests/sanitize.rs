@@ -1141,7 +1141,9 @@ fn a_utf16_relationships_file_is_read_not_skipped() {
         1,
     );
     p.set("word/_rels/document.xml.rels", utf16le(&rels));
-    let types = p.text("[Content_Types].xml");
+    let types =
+        p.text("[Content_Types].xml")
+            .replacen("encoding=\"UTF-8\"", "encoding=\"UTF-16\"", 1);
     p.set("[Content_Types].xml", utf16le(&types));
     let out = clean(Format::Docx, &p.bytes());
     assert!(!names(&out).iter().any(|n| n.contains("vbaProject")));
@@ -1459,4 +1461,164 @@ fn what_cannot_be_cleaned_safely_is_refused() {
         },
     );
     assert!(kept.is_ok(), "{kept:?}");
+}
+
+// --- Second review: four more crafted files.
+
+/// Finding 1: blanking string literals moved every later offset, so the
+/// argument checked was not the one written, or the scan panicked.
+#[test]
+fn a_formula_with_long_literals_is_checked_at_the_right_place() {
+    let book = xlsx(
+        &[row(
+            1,
+            &[
+                cell(
+                    "A1",
+                    "f",
+                    "CONCAT(\"ééééééé quite a long label\",HYPERLINK(\"http://10.0.0.1\",\"x\"))",
+                ),
+                cell("B1", "f", "\"é\"&HYPERLINK(C1)"),
+                cell(
+                    "C1",
+                    "f",
+                    "CONCAT(\"ééé HYPERLINK(A1)\",HYPERLINK(\"https://example.com/\"))",
+                ),
+            ],
+        )],
+        &[],
+    );
+    let out = clean(Format::Xlsx, &book);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    let formulas: Vec<String> = Regex::new("<f>([^<]*)</f>")
+        .unwrap()
+        .captures_iter(&sheet)
+        .map(|c| unescape(&c[1]))
+        .collect();
+    assert_eq!(
+        formulas,
+        ["CONCAT(\"ééé HYPERLINK(A1)\",HYPERLINK(\"https://example.com/\"))"],
+        "{sheet}"
+    );
+}
+
+/// Finding 2: an argument was taken after every switch, so `\h`, which
+/// takes none, swallowed the target.
+#[test]
+fn a_hyperlink_field_switch_without_an_argument_hides_nothing() {
+    let body = [
+        format!(
+            "<w:p>{}</w:p>",
+            complex_field(" HYPERLINK \\h \"http://10.0.0.1/\" ", "hidden target")
+        ),
+        format!(
+            "<w:p>{}</w:p>",
+            complex_field(" HYPERLINK \\h ", "no target")
+        ),
+        format!(
+            "<w:p>{}</w:p>",
+            complex_field(" HYPERLINK \\l \"intro\" \\h ", "bookmark")
+        ),
+    ]
+    .concat();
+    let out = clean(Format::Docx, &docx(&body));
+    let doc = part(&out, "word/document.xml");
+    assert!(!doc.contains("10.0.0.1"), "{doc}");
+    assert_eq!(
+        doc.matches("HYPERLINK").count(),
+        1,
+        "only the bookmark stays: {doc}"
+    );
+    for words in ["hidden target", "no target", "bookmark"] {
+        assert!(doc.contains(words), "{doc}");
+    }
+}
+
+/// Finding 3: only parts under `word/` and `xl/` were scanned, but a
+/// relationship can place a header or a sheet anywhere.
+#[test]
+fn story_parts_outside_the_usual_folders_are_scanned() {
+    let mut p = Pkg::open(&docx(&p("body")));
+    p.set(
+        "custom/hdr.xml",
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p>{}</w:p></w:hdr>",
+            complex_field(" INCLUDEPICTURE \"http://example.com/a.png\" ", "header picture")
+        ),
+    );
+    p.rels(
+        "word/_rels/document.xml.rels",
+        &[(
+            "rId30",
+            &format!("{REL}/header"),
+            "../custom/hdr.xml",
+            false,
+        )],
+    );
+    p.types(
+        "<Override PartName=\"/custom/hdr.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml\"/>",
+    );
+    let out = clean(Format::Docx, &p.bytes());
+    let header = part(&out, "custom/hdr.xml");
+    assert!(
+        !header.contains("INCLUDEPICTURE") && header.contains("header picture"),
+        "{header}"
+    );
+
+    let mut b = Pkg::open(&xlsx(&[row(1, &[cell("A1", "n", "1")])], &[]));
+    b.set(
+        "data/sheet9.xml",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\"><f>WEBSERVICE(\"https://example.com/\")</f><v>0</v></c></row></sheetData></worksheet>",
+    );
+    b.rels(
+        "xl/_rels/workbook.xml.rels",
+        &[(
+            "rId30",
+            &format!("{REL}/worksheet"),
+            "../data/sheet9.xml",
+            false,
+        )],
+    );
+    b.types(
+        "<Override PartName=\"/data/sheet9.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>",
+    );
+    let out = clean(Format::Xlsx, &b.bytes());
+    let sheet = part(&out, "data/sheet9.xml");
+    assert!(
+        !sheet.contains("WEBSERVICE") && sheet.contains("<v>0</v>"),
+        "{sheet}"
+    );
+}
+
+/// Finding 4: a part read as UTF-8 but declaring another encoding is read
+/// differently by Office; and a UTF-16 part checked as text must be written
+/// as the text that was checked.
+#[test]
+fn a_part_declaring_another_encoding_is_refused_and_utf16_is_rewritten() {
+    let mut p = Pkg::open(&docx(&p("body")));
+    let doc = p.text("word/document.xml").replacen(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+        "<?xml version=\"1.0\" encoding=\"ISO-8859-1\" standalone=\"yes\"?>",
+        1,
+    );
+    p.set("word/document.xml", doc);
+    let message = refused(Format::Docx, &p.bytes());
+    assert!(
+        message.contains("iso-8859-1") && message.contains("word/document.xml"),
+        "{message}"
+    );
+
+    let mut p = Pkg::open(&docx(&common::p("body")));
+    let doc = p
+        .text("word/document.xml")
+        .replacen("encoding=\"UTF-8\"", "encoding=\"UTF-16\"", 1);
+    p.set("word/document.xml", utf16le(&doc));
+    let out = clean(Format::Docx, &p.bytes());
+    let written = bytes_of(&out, "word/document.xml").unwrap();
+    let text = String::from_utf8(written).expect("written as UTF-8");
+    assert!(
+        text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\""),
+        "{text}"
+    );
+    assert!(text.contains("body"), "{text}");
 }
