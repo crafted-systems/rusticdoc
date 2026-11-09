@@ -178,7 +178,7 @@ const faq = [
     </p>
   </section>
 
-  <section class="stage" aria-label="How one request turns a template and data into a finished invoice">
+  <section class="stage" id="how-it-works" aria-label="How one request turns a template and data into a finished invoice">
     <div class="stage-in">
       <article class="file">
         <h2 class="file-name"><Icon name="file" />invoice-template.docx</h2>
@@ -217,7 +217,7 @@ Total due {{ total | currency(currency) }}
     </div>
   </section>
 
-  <section class="formats" aria-label="Formats">
+  <section class="formats" id="formats" aria-label="Formats">
     <div class="format-row">
       <h2>Templates in</h2>
       <ul>{['DOCX', 'XLSX', 'PPTX', 'ODT', 'ODS', 'ODP', 'PDF forms', 'HTML', 'Markdown', 'CSV', 'XML'].map((f) => <li>{f}</li>)}</ul>
@@ -265,7 +265,7 @@ Total due {{ total | currency(currency) }}
     </div>
   </section>
 
-  <section class="band">
+  <section id="made-for" class="band">
     <header class="section-head">
       <h2>Made for documents people sign, file and pay</h2>
     </header>
@@ -291,7 +291,7 @@ Total due {{ total | currency(currency) }}
     </div>
   </section>
 
-  <section class="band blocks" data-tabs>
+  <section id="building-blocks" class="band blocks" data-tabs>
     <header class="section-head">
       <h2>Building blocks that compose into one request</h2>
       <p>Use one, or chain them all. Every block works the same in the HTTP API and the CLI.</p>
@@ -325,7 +325,7 @@ Total due {{ total | currency(currency) }}
     ))}
   </section>
 
-  <section class="band">
+  <section id="run-it" class="band">
     <header class="section-head">
       <h2>Run it your way</h2>
       <p>One image and one binary. Replicas share nothing but a bucket.</p>
@@ -391,7 +391,7 @@ Total due {{ total | currency(currency) }}
     </div>
   </section>
 
-  <section class="band">
+  <section id="questions" class="band">
     <div class="two faq-wrap">
       <header class="section-head left">
         <h2>Questions</h2>

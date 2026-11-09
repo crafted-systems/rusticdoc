@@ -19,6 +19,7 @@ export default defineConfig({
       editLink: { baseUrl: 'https://github.com/vmosoti/rusticdoc/edit/main/site/' },
       lastUpdated: false,
       components: {
+        Header: './src/components/Header.astro',
         ThemeProvider: './src/components/ThemeProvider.astro',
         ThemeSelect: './src/components/ThemeSwitch.astro',
       },
@@ -56,7 +57,14 @@ export default defineConfig({
             { slug: 'docs/reference/errors' },
           ],
         },
-        { label: 'Project', items: [{ autogenerate: { directory: 'docs/project' } }] },
+        {
+          label: 'Project',
+          items: [
+            { label: 'Security overview', link: '/security/' },
+            { label: 'Status', link: '/status/' },
+            { autogenerate: { directory: 'docs/project' } },
+          ],
+        },
       ],
     }),
     sitemap(),
