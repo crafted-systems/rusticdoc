@@ -353,31 +353,52 @@ fn collect(xml: &str, needle: &str, out: &mut BTreeSet<String>) {
 /// what LibreOffice and the PDF stage will actually substitute.
 const FONTS_CONF: &str = include_str!("../../../deploy/fonts.conf");
 
-/// Each aliased family in the image's fontconfig, lowercased, with the
-/// families it accepts in its place, in order.
+/// fontconfig's own metric aliases (Helvetica, Times and Courier to their
+/// Liberation equivalents, and the like), where the host has them. They are
+/// read from the system rather than copied, so the report follows the
+/// fontconfig that will actually render.
+const SYSTEM_ALIAS_FILES: &[&str] = &[
+    "/etc/fonts/conf.d/30-metric-aliases.conf",
+    "/usr/share/fontconfig/conf.avail/30-metric-aliases.conf",
+];
+
+/// Each aliased family in the image's fontconfig and the system's metric
+/// aliases, lowercased, with the families it accepts in its place, in order.
 fn aliases() -> &'static [(String, Vec<String>)] {
     static ALIASES: std::sync::OnceLock<Vec<(String, Vec<String>)>> = std::sync::OnceLock::new();
     ALIASES.get_or_init(|| {
-        let families = |xml: &str| -> Vec<String> {
-            xml.split("<family>")
-                .skip(1)
-                .filter_map(|rest| rest.split_once("</family>"))
-                .map(|(name, _)| name.trim().to_lowercase())
-                .collect()
-        };
-        FONTS_CONF
-            .split("<alias")
-            .skip(1)
-            .filter_map(|rest| rest.split_once("</alias>").map(|(body, _)| body))
-            .filter_map(|body| {
-                let mut names = families(body);
-                (!names.is_empty()).then(|| {
-                    let from = names.remove(0);
-                    (from, names)
-                })
-            })
-            .collect()
+        let mut all = parse_aliases(FONTS_CONF);
+        if let Some(system) = SYSTEM_ALIAS_FILES
+            .iter()
+            .find_map(|path| std::fs::read_to_string(path).ok())
+        {
+            all.extend(parse_aliases(&system));
+        }
+        all
     })
+}
+
+/// The `<alias>` rules in a fontconfig file: each one's first family, and the
+/// families it names after it.
+fn parse_aliases(conf: &str) -> Vec<(String, Vec<String>)> {
+    let families = |xml: &str| -> Vec<String> {
+        xml.split("<family>")
+            .skip(1)
+            .filter_map(|rest| rest.split_once("</family>"))
+            .map(|(name, _)| name.trim().to_lowercase())
+            .collect()
+    };
+    conf.split("<alias")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("</alias>").map(|(body, _)| body))
+        .filter_map(|body| {
+            let mut names = families(body);
+            (!names.is_empty()).then(|| {
+                let from = names.remove(0);
+                (from, names)
+            })
+        })
+        .collect()
 }
 
 /// The families in `wanted` that neither a loaded face nor an alias in the
@@ -392,13 +413,27 @@ pub fn missing(wanted: &[String], loaded: &[FontInfo]) -> Vec<String> {
             if have.contains(&lower) {
                 return false;
             }
-            !aliases()
-                .iter()
-                .filter(|(from, _)| *from == lower)
-                .any(|(_, to)| to.iter().any(|family| have.contains(family)))
+            !served(&lower, &have, &mut BTreeSet::new(), 0)
         })
         .cloned()
         .collect()
+}
+
+/// True when `family` is loaded, or an alias leads to one that is. fontconfig
+/// follows aliases in chains (Courier to Courier New to Liberation Mono), so
+/// this does too, a few steps deep and never round a loop.
+fn served(family: &str, have: &BTreeSet<String>, seen: &mut BTreeSet<String>, depth: u8) -> bool {
+    if have.contains(family) {
+        return true;
+    }
+    if depth >= 4 || !seen.insert(family.to_string()) {
+        return false;
+    }
+    aliases()
+        .iter()
+        .filter(|(from, _)| from == family)
+        .flat_map(|(_, to)| to.iter())
+        .any(|next| served(next, have, seen, depth + 1))
 }
 
 /// The fonts a PDF names, from `/BaseFont` entries, without subset prefixes.
@@ -511,6 +546,30 @@ mod tests {
         ];
         assert_eq!(missing(&wanted, &loaded), vec!["Aptos", "Segoe UI"]);
         assert!(aliases().len() > 40, "{}", aliases().len());
+    }
+
+    #[test]
+    fn fontconfig_metric_aliases_count_as_served() {
+        // The shape of fontconfig's 30-metric-aliases.conf.
+        let conf = r#"<fontconfig>
+          <alias binding="same"><family>Courier</family><default><family>Liberation Mono</family></default></alias>
+          <alias binding="same"><family>Helvetica</family><accept><family>Liberation Sans</family></accept></alias>
+        </fontconfig>"#;
+        let parsed = parse_aliases(conf);
+        assert_eq!(
+            parsed[0],
+            ("courier".to_string(), vec!["liberation mono".to_string()])
+        );
+        assert_eq!(parsed[1].0, "helvetica");
+    }
+
+    #[test]
+    fn aliases_are_followed_in_chains() {
+        // fonts.conf maps Courier New to Liberation Mono; a chain through it
+        // counts. A loop of aliases ends without a match.
+        let have: BTreeSet<String> = ["liberation mono".to_string()].into();
+        assert!(served("courier new", &have, &mut BTreeSet::new(), 0));
+        assert!(!served("no such face", &have, &mut BTreeSet::new(), 0));
     }
 
     #[test]

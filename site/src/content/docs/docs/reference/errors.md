@@ -143,17 +143,18 @@ Some answers come from the HTTP layer, before a route's code runs, so they are n
 
 | Case | Status | Body |
 |---|---|---|
-| The body is not `multipart/form-data` | `400` | Text, such as ``Invalid `boundary` for `multipart/form-data` request`` |
 | A query value is wrong, such as `?limit=abc` on `/v1/templates` | `400` | Text, starting `Failed to deserialize query string` |
-| An unknown path | `404` | The text `Not Found` |
+| An unknown path | `404` | Empty |
 | A known path with the wrong method | `405` | Empty, with an `allow` header |
 | A request still running 5 seconds past its time limit | `503` | Empty |
 
 ```bash test
-curl -H "content-type: application/json" -d '{}' \
-  http://localhost:9027/v1/render -D headers.txt -o error.txt || true
-grep -qi "^content-type: text/plain" headers.txt
+curl -s http://localhost:9027/v1/nope -D headers.txt -o error.txt || true
+grep -q "^HTTP/1.1 404" headers.txt
+test ! -s error.txt
 ```
+
+A body that is neither multipart nor JSON is a route's own `400`, in the JSON shape.
 
 ## Failures after a 204
 
