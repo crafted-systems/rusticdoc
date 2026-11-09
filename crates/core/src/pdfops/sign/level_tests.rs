@@ -753,14 +753,24 @@ fn a_timestamp_signer_needs_the_critical_usage_and_validity() {
     let root = certificate(&pki.text("root.pem"));
     let tsa = certificate(&pki.text("tsa.pem"));
     let now = SystemTime::now();
-    assert!(super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), now).is_ok());
+    assert!(super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), now, now).is_ok());
     // Outside its validity: the certificates last 30 days.
     let later = now + Duration::from_secs(60 * 86_400);
-    let err = super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), later).unwrap_err();
+    let err =
+        super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), later, later).unwrap_err();
     assert!(err.contains("not valid"), "{err}");
+    // Valid at the token's time is not enough: it must be valid now as well.
+    let err =
+        super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), now, later).unwrap_err();
+    assert!(err.contains("not valid now"), "{err}");
+    // A pinned authority certificate that has expired by now is refused too.
+    let err =
+        super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&tsa), now, later).unwrap_err();
+    assert!(err.contains("not valid now"), "{err}");
     // A signing certificate from the same root has no timestamping usage.
     let signer = certificate(&pki.text("signer.pem"));
-    let err = super::tsa::check_signer(&signer, &[], std::slice::from_ref(&root), now).unwrap_err();
+    let err =
+        super::tsa::check_signer(&signer, &[], std::slice::from_ref(&root), now, now).unwrap_err();
     assert!(err.contains("not for timestamping"), "{err}");
     // A timestamping usage that is not critical does not count either.
     let ca_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
@@ -777,7 +787,8 @@ fn a_timestamp_signer_needs_the_critical_usage_and_validity() {
         super::verify::extended_key_usage(&leaf),
         Some((false, _))
     ));
-    let err = super::tsa::check_signer(&leaf, &[], &[certificate(&ca.pem())], now).unwrap_err();
+    let err =
+        super::tsa::check_signer(&leaf, &[], &[certificate(&ca.pem())], now, now).unwrap_err();
     assert!(err.contains("critical"), "{err}");
 }
 
@@ -843,4 +854,246 @@ async fn revocation_data_must_be_current() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("in the future"), "{err}");
+}
+
+#[test]
+fn a_token_dated_away_from_now_is_refused() {
+    let Some(pki) = Pki::make() else { return };
+    let outbound = Openssl::new(&pki);
+    let digest: [u8; 32] = Sha256::digest(b"stamp me").into();
+    let nonce = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x08];
+    let query = super::tsa::request(&digest, &nonce).unwrap();
+    let response = outbound
+        .run(
+            &[
+                "ts",
+                "-reply",
+                "-config",
+                "{pki}/ca.cnf",
+                "-queryfile",
+                "{in}",
+                "-signer",
+                "{pki}/tsa.pem",
+                "-inkey",
+                "{pki}/tsa.key",
+                "-chain",
+                "{pki}/root.pem",
+                "-out",
+                "{out}",
+            ],
+            &query,
+        )
+        .unwrap();
+    let anchors = [certificate(&pki.text("root.pem"))];
+    let now = SystemTime::now();
+    super::tsa::check(&response, &digest, &nonce, &anchors, now).unwrap();
+    // The same token, judged by a clock ten minutes on or back: refused.
+    for clock in [
+        now + Duration::from_secs(600),
+        now - Duration::from_secs(600),
+    ] {
+        let err = super::tsa::check(&response, &digest, &nonce, &anchors, clock).unwrap_err();
+        assert!(matches!(err, Error::Status(502, _)), "{err}");
+        assert!(
+            err.to_string().contains("from this service's clock"),
+            "{err}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_impostor_with_the_issuers_name_cannot_stand_in_for_it() {
+    let Some(pki) = Pki::make() else { return };
+    // The signer's chain as configured leaves its root out, and the
+    // impostor, which has the root's name and another key, comes first.
+    // Its forged OCSP answers and CRL must not be believed, and the real root
+    // (fetched from the AIA caIssuers URL) is used instead.
+    let outbound = Openssl::forging(&pki, "rogue", "root.crl");
+    let certs = vec![
+        certificate(&pki.text("rogue.pem")),
+        certificate(&pki.text("signer.pem")),
+    ];
+    let limits = Limits::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let found =
+        super::revocation::collect(&certs, &*outbound, &limits, deadline, SystemTime::now())
+            .await
+            .unwrap();
+    assert!(found.ocsps.is_empty(), "the forged OCSP answer is refused");
+    assert_eq!(
+        found.crls.len(),
+        1,
+        "the real CRL, checked with the real key"
+    );
+    assert!(
+        outbound.asked().iter().any(|u| u.ends_with("/root.der")),
+        "the real issuer was fetched: {:?}",
+        outbound.asked()
+    );
+    let root = certificate(&pki.text("root.pem")).to_der().unwrap();
+    assert!(found.certs.contains(&root));
+
+    // With only the impostor to go on, nothing it vouches for is used.
+    let outbound = Openssl::forging(&pki, "rogue", "rogue.crl");
+    let err = super::revocation::collect(&certs, &*outbound, &limits, deadline, SystemTime::now())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Status(502, _)), "{err}");
+}
+
+#[test]
+fn certificates_an_ocsp_answer_carries_do_not_join_the_pool() {
+    let Some(pki) = Pki::make() else { return };
+    let outbound = Openssl::new(&pki);
+    let signer = certificate(&pki.text("signer.pem"));
+    let root = certificate(&pki.text("root.pem"));
+    let query = super::revocation::ocsp_request(&signer, &root).unwrap();
+    let answer = outbound
+        .run(
+            &[
+                "ocsp",
+                "-index",
+                "{pki}/index.txt",
+                "-CA",
+                "{pki}/root.pem",
+                "-rsigner",
+                "{pki}/ocsp.pem",
+                "-rkey",
+                "{pki}/ocsp.key",
+                // A stowaway in the answer's certificates.
+                "-rother",
+                "{pki}/rogue.pem",
+                "-nmin",
+                "60",
+                "-reqin",
+                "{in}",
+                "-respout",
+                "{out}",
+            ],
+            &query,
+        )
+        .unwrap();
+    let delegate =
+        super::revocation::read_ocsp(&answer, &signer, &root, SystemTime::now()).unwrap();
+    let delegate = delegate.expect("the delegated responder");
+    assert!(
+        delegate
+            .tbs_certificate
+            .subject
+            .to_string()
+            .contains("OCSP responder"),
+        "only the verified responder comes back"
+    );
+}
+
+/// A one-page PDF whose AcroForm is a chain of `levels` field nodes, each
+/// naming the next `fan` times in its `/Kids`: one bottom node, reached by
+/// `fan^levels` paths. With `signed`, the bottom node is a signed signature
+/// field.
+fn shared_kids_form(levels: usize, fan: usize, signed: bool) -> Vec<u8> {
+    use ::lopdf::dictionary;
+    let mut pdf = Pdf::load_mem(&fixtures::pages(1)).unwrap();
+    let bottom = if signed {
+        let sig = pdf.add_object(dictionary! { "Type" => "Sig" });
+        pdf.add_object(
+            dictionary! { "FT" => "Sig", "T" => Object::string_literal("deep"), "V" => sig },
+        )
+    } else {
+        pdf.add_object(dictionary! { "FT" => "Tx", "T" => Object::string_literal("deep") })
+    };
+    let mut below = bottom;
+    for level in 0..levels {
+        below = pdf.add_object(dictionary! {
+            "T" => Object::string_literal(format!("n{level}")),
+            "Kids" => vec![Object::Reference(below); fan],
+        });
+    }
+    let acroform = pdf.add_object(dictionary! { "Fields" => vec![Object::Reference(below)] });
+    let root = pdf.trailer.get(b"Root").unwrap().as_reference().unwrap();
+    pdf.get_dictionary_mut(root)
+        .unwrap()
+        .set("AcroForm", acroform);
+    let mut out = Vec::new();
+    pdf.save_to(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn certifying_walks_a_shared_kids_form_once_per_node() {
+    let key = super::tests::self_signed(&rcgen::PKCS_ECDSA_P256_SHA256);
+    let signer = super::tests::signer(&key);
+    let certify = SignOptions {
+        certify: Some(DocMdp::FormFilling),
+        ..SignOptions::default()
+    };
+    // 40 levels of 8 shared kids: 8^40 paths for a walk that follows them
+    // all, which the old recursion (depth cap 32) would never finish.
+    let started = std::time::Instant::now();
+    let unsigned = shared_kids_form(40, 8, false);
+    super::sign_at(
+        &Document::new("dag.pdf", unsigned),
+        &signer,
+        &certify,
+        super::tests::now(),
+    )
+    .unwrap();
+    // And it still looks all the way down: a signed field at the bottom of
+    // the same graph stops a certification.
+    let signed = shared_kids_form(40, 8, true);
+    let err = super::sign_at(
+        &Document::new("dag.pdf", signed),
+        &signer,
+        &certify,
+        super::tests::now(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("signed already"), "{err}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_form_past_the_node_budget_is_refused_for_certification() {
+    use ::lopdf::dictionary;
+    let key = super::tests::self_signed(&rcgen::PKCS_ECDSA_P256_SHA256);
+    let signer = super::tests::signer(&key);
+    let mut pdf = Pdf::load_mem(&fixtures::pages(1)).unwrap();
+    let fields: Vec<Object> = (0..=super::incremental::MAX_FIELD_NODES)
+        .map(|i| {
+            Object::Reference(pdf.add_object(
+                dictionary! { "FT" => "Tx", "T" => Object::string_literal(format!("f{i}")) },
+            ))
+        })
+        .collect();
+    let acroform = pdf.add_object(dictionary! { "Fields" => fields });
+    let root = pdf.trailer.get(b"Root").unwrap().as_reference().unwrap();
+    pdf.get_dictionary_mut(root)
+        .unwrap()
+        .set("AcroForm", acroform);
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).unwrap();
+    let certify = SignOptions {
+        certify: Some(DocMdp::NoChanges),
+        ..SignOptions::default()
+    };
+    let err = super::sign_at(
+        &Document::new("big.pdf", bytes.clone()),
+        &signer,
+        &certify,
+        super::tests::now(),
+    )
+    .unwrap_err();
+    assert!(err.is_client_error(), "{err}");
+    assert!(err.to_string().contains("more than 10000 fields"), "{err}");
+    // An approval signature does not need the walk, and goes ahead.
+    super::sign_at(
+        &Document::new("big.pdf", bytes),
+        &signer,
+        &SignOptions::default(),
+        super::tests::now(),
+    )
+    .unwrap();
 }

@@ -162,7 +162,8 @@ pub enum PdfOp {
         #[arg(long, requires = "key")]
         certify: Option<String>,
         /// The RFC 3161 timestamp authority (with --key), instead of
-        /// RUSTICDOC_SIGNING_TSA_URL.
+        /// RUSTICDOC_SIGNING_TSA_URL. https, unless
+        /// RUSTICDOC_SIGNING_TSA_ALLOW_HTTP=true.
         #[arg(long, requires_all = ["key", "tsa_cert"])]
         tsa_url: Option<String>,
         /// PEM certificate the --tsa-url authority signs with, or the CA it
@@ -478,6 +479,8 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
                     .with_limits(config.signing.revocation.clone());
                 let tsa = match tsa_url {
                     Some(url) => {
+                        sign::check_tsa_url(&url, config.signing.tsa_allow_http)
+                            .map_err(anyhow::Error::msg)?;
                         let mut tsa = sign::Tsa::new(url, std::time::Duration::from_secs(10));
                         tsa.cert_file = tsa_cert;
                         Some(tsa)

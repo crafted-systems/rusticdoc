@@ -46,6 +46,25 @@ pub struct Settings {
     pub outbound_deny_list: Vec<String>,
     /// Allow those URLs to reach private and loopback addresses.
     pub outbound_allow_private: bool,
+    /// `RUSTICDOC_SIGNING_TSA_ALLOW_HTTP`: allow a timestamp authority URL
+    /// that is plain `http`.
+    pub tsa_allow_http: bool,
+}
+
+/// Refuses a timestamp authority URL that is not https, unless plain http is
+/// allowed. Tokens are signed, but over http the request and its credentials
+/// travel in the clear and anyone on the path can answer.
+pub fn check_tsa_url(url: &str, allow_http: bool) -> Result<(), String> {
+    match url::Url::parse(url.trim()) {
+        Ok(u) if u.scheme() == "https" => Ok(()),
+        Ok(u) if u.scheme() == "http" && allow_http => Ok(()),
+        Ok(u) if u.scheme() == "http" => Err(format!(
+            "the timestamp authority URL '{url}' is plain http; use https, or set RUSTICDOC_SIGNING_TSA_ALLOW_HTTP=true"
+        )),
+        _ => Err(format!(
+            "the timestamp authority URL must be an https URL, not '{url}'"
+        )),
+    }
 }
 
 /// A key name: letters, digits, `-` and `_`, up to 64.
@@ -141,11 +160,10 @@ impl Settings {
 
         if let Some(url) = get("RUSTICDOC_SIGNING_TSA_URL") {
             let mut tsa = Tsa::new(url.trim(), Duration::from_secs(10));
-            match url::Url::parse(url.trim()) {
-                Ok(u) if matches!(u.scheme(), "http" | "https") => {}
-                _ => problems.push(format!(
-                    "RUSTICDOC_SIGNING_TSA_URL must be an http or https URL, not '{url}'"
-                )),
+            s.tsa_allow_http = get("RUSTICDOC_SIGNING_TSA_ALLOW_HTTP")
+                .is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes"));
+            if let Err(problem) = check_tsa_url(&url, s.tsa_allow_http) {
+                problems.push(format!("RUSTICDOC_SIGNING_TSA_URL: {problem}"));
             }
             match get("RUSTICDOC_SIGNING_TSA_CERT") {
                 Some(path) => tsa.cert_file = Some(PathBuf::from(path)),
@@ -334,7 +352,23 @@ mod tests {
             ("RUSTICDOC_SIGNING_TSA_URL", "ftp://x"),
             ("RUSTICDOC_SIGNING_TSA_CERT", "/k/tsa-root.pem"),
         ]);
-        assert!(problems[0].contains("http"), "{problems:?}");
+        assert!(problems[0].contains("https"), "{problems:?}");
+        // Plain http only when allowed.
+        let (_, problems) = read(&[
+            ("RUSTICDOC_SIGNING_TSA_URL", "http://tsa.example/"),
+            ("RUSTICDOC_SIGNING_TSA_CERT", "/k/tsa-root.pem"),
+        ]);
+        assert!(
+            problems[0].contains("RUSTICDOC_SIGNING_TSA_ALLOW_HTTP"),
+            "{problems:?}"
+        );
+        let (s, problems) = read(&[
+            ("RUSTICDOC_SIGNING_TSA_URL", "http://tsa.example/"),
+            ("RUSTICDOC_SIGNING_TSA_CERT", "/k/tsa-root.pem"),
+            ("RUSTICDOC_SIGNING_TSA_ALLOW_HTTP", "true"),
+        ]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(s.tsa_allow_http);
         // A timestamp authority without an anchor to check its tokens against.
         let (_, problems) = read(&[("RUSTICDOC_SIGNING_TSA_URL", "https://tsa.example/")]);
         assert!(
