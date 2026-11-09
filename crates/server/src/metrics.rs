@@ -1,5 +1,6 @@
 //! Prometheus metrics: requests by route and status, stage durations,
-//! in-flight work and webhook outcomes.
+//! in-flight work, webhook outcomes, and, read at each scrape, the LibreOffice
+//! queue and worker restarts and the compiled-template cache.
 
 use std::sync::Mutex;
 
@@ -8,11 +9,12 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
-use prometheus_client::encoding::EncodeLabelSet;
+use prometheus_client::collector::Collector;
 use prometheus_client::encoding::text::encode;
-use prometheus_client::metrics::counter::Counter;
+use prometheus_client::encoding::{DescriptorEncoder, EncodeLabelSet, EncodeMetric};
+use prometheus_client::metrics::counter::{ConstCounter, Counter};
 use prometheus_client::metrics::family::Family;
-use prometheus_client::metrics::gauge::Gauge;
+use prometheus_client::metrics::gauge::{ConstGauge, Gauge};
 use prometheus_client::metrics::histogram::{Histogram, exponential_buckets};
 use prometheus_client::registry::Registry;
 
@@ -100,6 +102,16 @@ impl Metrics {
         }
     }
 
+    /// Reports the engines' own counters at every scrape: the LibreOffice
+    /// queue and restarts live in the pool, and copying them into metrics as
+    /// they change would need hooks in the pool for no gain.
+    pub fn watch(&self, libreoffice: Option<rusticdoc_core::convert::LibreOffice>) {
+        self.registry
+            .lock()
+            .expect("metrics registry")
+            .register_collector(Box::new(EngineCollector { libreoffice }));
+    }
+
     /// The text exposition format.
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -142,4 +154,59 @@ pub async fn observe(State(state): State<AppState>, req: Request<Body>, next: Ne
         .get_or_create(&StageLabels { stage: route })
         .observe(start.elapsed().as_secs_f64());
     res
+}
+
+/// Counters the engines keep themselves, encoded on each scrape.
+struct EngineCollector {
+    libreoffice: Option<rusticdoc_core::convert::LibreOffice>,
+}
+
+impl std::fmt::Debug for EngineCollector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineCollector").finish()
+    }
+}
+
+impl Collector for EngineCollector {
+    fn encode(&self, mut encoder: DescriptorEncoder) -> Result<(), std::fmt::Error> {
+        if let Some(pool) = &self.libreoffice {
+            let (queued, restarts) = pool.stats();
+            let gauge = ConstGauge::new(queued as i64);
+            gauge.encode(encoder.encode_descriptor(
+                "libreoffice_queue",
+                "Conversions waiting for a LibreOffice worker",
+                None,
+                gauge.metric_type(),
+            )?)?;
+            let counter = ConstCounter::new(restarts);
+            counter.encode(encoder.encode_descriptor(
+                "libreoffice_worker_restarts",
+                "LibreOffice workers replaced after a crash, a timeout, their job limit or a font reload",
+                None,
+                counter.metric_type(),
+            )?)?;
+        }
+        let (hits, misses) = rusticdoc_core::template::cache_stats();
+        for (name, help, value) in [
+            (
+                "template_cache_hits",
+                "Renders that found their compiled template in the cache",
+                hits,
+            ),
+            (
+                "template_cache_misses",
+                "Renders that had to compile their template",
+                misses,
+            ),
+        ] {
+            let counter = ConstCounter::new(value);
+            counter.encode(encoder.encode_descriptor(
+                name,
+                help,
+                None,
+                counter.metric_type(),
+            )?)?;
+        }
+        Ok(())
+    }
 }

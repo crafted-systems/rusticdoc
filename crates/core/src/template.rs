@@ -204,6 +204,17 @@ pub fn recall(scope: &str, hash: &str) -> Option<Document> {
         .map(|d| d.as_ref().clone())
 }
 
+static CACHE_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CACHE_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Compiled-template cache lookups since start: hits, then misses. A low hit
+/// rate means templates are parsed again on most renders, which is where the
+/// cache's time saving goes.
+pub fn cache_stats() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (CACHE_HITS.load(Relaxed), CACHE_MISSES.load(Relaxed))
+}
+
 /// The compiled form of a template, from the cache or freshly parsed.
 fn compiled(
     format: rusticdoc_template::Format,
@@ -213,8 +224,10 @@ fn compiled(
     let key = format!("{}:{}", format.extension(), template_hash(bytes));
     let cache = CACHE.get_or_init(|| Mutex::new(Cache::default()));
     if let Some(hit) = cache.lock().expect("template cache").get(&key) {
+        CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Ok(hit);
     }
+    CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let compiled = Arc::new(
         rusticdoc_template::compile(format, bytes).map_err(|e| Error::Template(e.to_string()))?,
     );

@@ -1482,3 +1482,158 @@ async fn read_head(stream: &mut tokio::net::TcpStream) -> String {
         .unwrap_or(0);
     String::from_utf8_lossy(&buffer[..read]).into_owned()
 }
+
+/// True while a process with `pid` exists.
+fn process_exists(pid: i32) -> bool {
+    // SAFETY: kill(2) with signal 0 only checks for the process.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// A client that hangs up mid-conversion stops the work: its LibreOffice
+/// worker is killed, a conversion queued behind it never starts, and the pool
+/// is free again for the next caller.
+#[tokio::test]
+async fn a_client_that_disconnects_cancels_its_conversion() {
+    use tokio::io::AsyncWriteExt;
+    let dir = tempfile::tempdir().unwrap();
+    // The bridge records each request it takes and its "soffice" pid, then
+    // hangs on the first request until it is killed and answers later ones.
+    let script = dir.path().join("bridge.py");
+    std::fs::write(
+        &script,
+        format!(
+            r#"
+import json, os, subprocess, sys, time
+child = subprocess.Popen(["sleep", "3600"], start_new_session=True).pid
+log = {log:?}
+print(json.dumps({{"ready": True, "soffice_pid": child}}), flush=True)
+for line in sys.stdin:
+    req = json.loads(line)
+    with open(log, "a") as f:
+        f.write("%d %s\n" % (child, req["input"]))
+    if not os.path.exists(log + ".hung"):
+        open(log + ".hung", "w").close()
+        time.sleep(3600)
+    with open(req["output"], "w") as f:
+        f.write("%PDF-1.4 fake")
+    print(json.dumps({{"id": req["id"], "ok": True, "pages": 1, "ms": 1}}), flush=True)
+"#,
+            log = dir.path().join("taken").display().to_string()
+        ),
+    )
+    .unwrap();
+    let mut c = config();
+    c.api_timeout = Duration::from_secs(60);
+    let mut state = AppState::new(c);
+    let office = LibreOffice::new("/nonexistent/soffice".into(), 1).with_bridge(script);
+    let engines = Arc::new(Engines {
+        libreoffice: Some(office.clone()),
+        ..Engines::default()
+    });
+    state.pipeline = Pipeline::new(engines.clone(), state.config.api_timeout);
+    state.engines = engines;
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: Duration::from_secs(5),
+        max_connections: 16,
+        max_connections_per_peer: 0,
+        stall_timeout: Duration::from_secs(60),
+        write_timeout: Duration::from_secs(60),
+        body_timeout: Duration::from_secs(60),
+    };
+    let task = tokio::spawn(rusticdoc_server::serve_on(
+        listener,
+        app(state),
+        limits,
+        std::future::pending::<()>(),
+    ));
+    let request = |name: &str| {
+        let parts: [Part<'_>; 1] = [("files", Some(name), b"hello")];
+        let body = body_of(&parts);
+        let mut out = format!(
+            "POST /v1/convert HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(&body);
+        out
+    };
+    let taken = dir.path().join("taken");
+    let wait_for = |what: &'static str, check: Box<dyn Fn() -> bool>| async move {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !check() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+
+    // The first conversion reaches the worker and hangs; the second queues.
+    let mut first = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    first.write_all(&request("first.txt")).await.unwrap();
+    let log = taken.clone();
+    wait_for(
+        "the first conversion never started",
+        Box::new(move || log.exists()),
+    )
+    .await;
+    let mut second = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    second.write_all(&request("second.txt")).await.unwrap();
+    let pool = office.clone();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while pool.stats().0 != 1 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the second never queued"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let soffice: i32 = std::fs::read_to_string(&taken)
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(process_exists(soffice));
+
+    // Both hang up. The hung worker and its LibreOffice go, the queued
+    // conversion leaves the queue without reaching a worker.
+    drop(second);
+    drop(first);
+    wait_for(
+        "the hung LibreOffice outlived its client",
+        Box::new(move || !process_exists(soffice)),
+    )
+    .await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while office.stats().0 != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the queued conversion stayed queued"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let lines = std::fs::read_to_string(&taken).unwrap();
+    assert_eq!(
+        lines.lines().count(),
+        1,
+        "the queued conversion ran: {lines}"
+    );
+
+    // The pool serves the next caller.
+    let mut third = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    third.write_all(&request("third.txt")).await.unwrap();
+    let answer = read_head(&mut third).await;
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    task.abort();
+}

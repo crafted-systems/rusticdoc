@@ -40,6 +40,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config) -> Self {
         let engines = Arc::new(Engines::from_config(&config));
+        let libreoffice = engines.libreoffice.clone();
         let renderer = match config.render_mode {
             RenderMode::InProcess => Renderer::in_process(),
             RenderMode::Isolated => Renderer::isolated(
@@ -91,7 +92,11 @@ impl AppState {
             config: Arc::new(config),
             engines,
             pipeline,
-            metrics: Arc::new(Metrics::new()),
+            metrics: Arc::new({
+                let metrics = Metrics::new();
+                metrics.watch(libreoffice);
+                metrics
+            }),
             started: Instant::now(),
             fonts: Default::default(),
             fonts_reload: Default::default(),

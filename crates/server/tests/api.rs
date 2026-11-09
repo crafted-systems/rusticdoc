@@ -109,7 +109,16 @@ async fn health_version_metrics_and_openapi_are_open() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert!(text(res).await.contains("rusticdoc_requests"));
+    let body = text(res).await;
+    assert!(body.contains("rusticdoc_requests"));
+    assert!(
+        body.contains("rusticdoc_template_cache_hits_total"),
+        "{body}"
+    );
+    assert!(
+        body.contains("rusticdoc_template_cache_misses_total"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
