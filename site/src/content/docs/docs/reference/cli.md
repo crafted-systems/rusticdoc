@@ -23,6 +23,7 @@ Commands:
   engines         Show the engines this machine has
   pdf             PDF operations: merge, split, rotate, flatten, optimize, encrypt, metadata, bookmarks, embed, watermark, stamp, sign, factur-x, forms
   validate        Check a template against sample data and list every problem
+  translate       Create or update `<lang>.json` with the keys templates pass to `t`. Translations already there are kept, new keys get an empty text, and keys no template uses any more are listed, not removed
   webhook-secret  Print the key a caller's webhook deliveries are signed with, in hex, from RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it
   help            Print this message or the help of the given subcommand(s)
 
@@ -49,6 +50,12 @@ Options:
           Log verbosity: -v for debug, -vv for trace
       --ctx <CTX>
           JSON file visible as `ctx`
+      --lang <LANG>
+          The language, such as `fr` or `fr-CA`: picks translations and, when CLDR has data for it, how numbers, money and dates are written
+      --translations <TRANSLATIONS>
+          JSON file of translations by language, as the service's `translations` field: `{"fr": {"total": "Montant"}}`
+      --timezone <TIMEZONE>
+          The time zone `date` shows moments in: `+02:00` or `Europe/Paris`
   -s, --steps <STEPS>
           Steps in order: convert, pdfa, metadata, encrypt, merge, sign. `sign` comes last and uses RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT [default: ""]
       --to <TO>
@@ -163,7 +170,7 @@ Commands:
   embed      Attach files to a PDF
   watermark  Put text, an image or a PDF under the page content
   stamp      Put text, an image or a PDF over the page content
-  sign       Sign cryptographically with --key and --cert (PAdES B-B, invisible unless --image is given), or, without them, place a signature image at exact coordinates, which is not a cryptographic signature
+  sign       Sign cryptographically with --key and --cert (PAdES B-B to B-LTA, invisible unless --image or --x and --y are given), or, without them, place a signature image at exact coordinates, which is not a cryptographic signature
   facturx    Embed Factur-X invoice XML
   fields     List a form's fields as JSON
   fill       Fill a form from JSON data; tags in annotations are applied too
@@ -382,28 +389,70 @@ Options:
 #### rusticdoc pdf sign
 
 ```text
-Sign cryptographically with --key and --cert (PAdES B-B, invisible unless --image is given), or, without them, place a signature image at exact coordinates, which is not a cryptographic signature
+Sign cryptographically with --key and --cert (PAdES B-B to B-LTA, invisible unless --image or --x and --y are given), or, without them, place a signature image at exact coordinates, which is not a cryptographic signature.
+
+--level b-t and above take the timestamp authority from --tsa-url or RUSTICDOC_SIGNING_TSA_*, and every request (timestamps, OCSP, CRLs) follows RUSTICDOC_SIGNING_OUTBOUND_*: private addresses are refused unless RUSTICDOC_SIGNING_OUTBOUND_ALLOW_PRIVATE=true.
 
 Usage: rusticdoc pdf sign [OPTIONS] --output <OUTPUT> <FILE>
 
 Arguments:
-  <FILE>  
+  <FILE>
+          
 
 Options:
-      --key <KEY>                    PEM private key (PKCS#8, PKCS#1 or SEC1; RSA or ECDSA P-256)
-  -v, --verbose...                   Log verbosity: -v for debug, -vv for trace
-      --cert <CERT>                  PEM certificate for --key, then any chain certificates
-      --image <IMAGE>                PNG or JPEG. With --key, the visible appearance of the signature
-      --page <PAGE>                  [default: 1]
-      --x <X>                        Points from the page's left edge
-      --y <Y>                        Points from the page's bottom edge
-      --width <WIDTH>                Width in points; default the image's natural size
-      --reason <REASON>              Why the document was signed (with --key)
-      --location <LOCATION>          Where it was signed (with --key)
-      --contact-info <CONTACT_INFO>  How to reach the signer (with --key)
-      --signer-name <SIGNER_NAME>    The signer's name as shown; validators read the certificate (with --key)
-  -o, --output <OUTPUT>              
-  -h, --help                         Print help
+      --key <KEY>
+          PEM private key (PKCS#8, PKCS#1 or SEC1; RSA or ECDSA P-256), or `pkcs11:<label>` for a key on the token RUSTICDOC_PKCS11_MODULE, _TOKEN or _SLOT, and _PIN_FILE or _PIN describe
+
+  -v, --verbose...
+          Log verbosity: -v for debug, -vv for trace
+
+      --cert <CERT>
+          PEM certificate for --key, then any chain certificates
+
+      --image <IMAGE>
+          PNG or JPEG. With --key, the visible appearance of the signature
+
+      --page <PAGE>
+          [default: 1]
+
+      --x <X>
+          Points from the page's left edge. With --key and no --image, the signature is shown there as text: signer, date and reason
+
+      --y <Y>
+          Points from the page's bottom edge
+
+      --width <WIDTH>
+          Width in points; default the image's natural size, or 200 for text
+
+      --level <LEVEL>
+          PAdES level (with --key): b-b, b-t (RFC 3161 timestamp), b-lt (and OCSP or CRL validation data in a DSS) or b-lta (and a document timestamp). Default RUSTICDOC_SIGNING_LEVEL, or b-b
+
+      --certify <CERTIFY>
+          Certify rather than approve (with --key), with DocMDP permission 1 (no changes), 2 (form filling and signing) or 3 (also annotations)
+
+      --tsa-url <TSA_URL>
+          The RFC 3161 timestamp authority (with --key), instead of RUSTICDOC_SIGNING_TSA_URL. https, unless RUSTICDOC_SIGNING_TSA_ALLOW_HTTP=true
+
+      --tsa-cert <TSA_CERT>
+          PEM certificate the --tsa-url authority signs with, or the CA it chains to, instead of RUSTICDOC_SIGNING_TSA_CERT. Tokens from any other signer are refused
+
+      --reason <REASON>
+          Why the document was signed (with --key)
+
+      --location <LOCATION>
+          Where it was signed (with --key)
+
+      --contact-info <CONTACT_INFO>
+          How to reach the signer (with --key)
+
+      --signer-name <SIGNER_NAME>
+          The signer's name as shown; validators read the certificate (with --key)
+
+  -o, --output <OUTPUT>
+          
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 #### rusticdoc pdf facturx
@@ -485,8 +534,27 @@ Arguments:
   <TEMPLATE>  
 
 Options:
-  -d, --data <DATA>  
+  -d, --data <DATA>                  
+  -v, --verbose...                   Log verbosity: -v for debug, -vv for trace
+      --lang <LANG>                  The language to render in. Each literal key passed to `t` with no translation for it is a warning
+      --translations <TRANSLATIONS>  JSON file of translations by language, as the service's `translations` field
+  -h, --help                         Print help
+```
+
+### rusticdoc translate
+
+```text
+Create or update `<lang>.json` with the keys templates pass to `t`. Translations already there are kept, new keys get an empty text, and keys no template uses any more are listed, not removed
+
+Usage: rusticdoc translate [OPTIONS] --lang <LANG> <PATHS>...
+
+Arguments:
+  <PATHS>...  Office and text templates, or directories to search for them
+
+Options:
+      --lang <LANG>  The language of the dictionary, such as `fr` or `fr-CA`
   -v, --verbose...   Log verbosity: -v for debug, -vv for trace
+      --out <OUT>    Where `<lang>.json` is created or updated [default: translations]
   -h, --help         Print help
 ```
 
@@ -502,5 +570,6 @@ Options:
   -v, --verbose...                   Log verbosity: -v for debug, -vv for trace
       --basic-user <BASIC_USER>      The caller's basic-auth user
       --oidc-subject <OIDC_SUBJECT>  The subject of the caller's OpenID Connect tokens
+      --tenant <TENANT>              The caller's tenant, from RUSTICDOC_TENANT_KEYS: every key of a tenant signs with the same key
   -h, --help                         Print help
 ```
