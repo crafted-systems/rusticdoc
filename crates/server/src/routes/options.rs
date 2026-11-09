@@ -145,6 +145,27 @@ pub fn post_steps(form: &mut Form, allow_merge: bool) -> ApiResult<Vec<Step>> {
     Ok(steps)
 }
 
+/// The `underlay` step of `/v1/render`: the one PDF sent under the
+/// `underlay` field, which the document is laid over.
+pub fn underlay(form: &Form) -> ApiResult<Step> {
+    let files = form
+        .by_field
+        .get("underlay")
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let [file] = files else {
+        return Err(ApiError::bad_request(format!(
+            "step 'underlay' needs exactly one PDF uploaded under 'underlay', and the form has {}",
+            files.len()
+        )));
+    };
+    rusticdoc_core::pdfops::require_pdf(file)?;
+    Ok(Step::Underlay {
+        base: file.bytes.to_vec(),
+        name: file.name.clone(),
+    })
+}
+
 fn split_mode(form: &Form) -> ApiResult<Option<SplitMode>> {
     let mode = form.field("splitMode").map(str::trim).unwrap_or("");
     let span = form.field("splitSpan").map(str::trim).unwrap_or("");

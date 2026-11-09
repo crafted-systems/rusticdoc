@@ -149,6 +149,8 @@ test "$(head -c 4 on-letterhead.pdf)" = "%PDF"
 
 Anything other than two PDFs is a `400`.
 
+To do both in one request, render and convert the template on `/v1/render` with the [`underlay` step](/docs/guides/pipeline/#underlay), which lays it over a base PDF the same way.
+
 ## What is not supported
 
 - `/v1/templates/validate` does not read PDFs. It answers `ok: false` with `'.pdf' is not a template format`.

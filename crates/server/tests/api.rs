@@ -1114,6 +1114,45 @@ async fn named_steps_take_their_fields_and_refuse_empty_ones() {
 }
 
 #[tokio::test]
+async fn underlay_lays_the_template_over_a_base_pdf() {
+    use rusticdoc_core::pdfops::fixtures;
+    let router = app(AppState::new(config()));
+    // The base comes first in the form and is still not taken as the
+    // template.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("underlay", Some("letterhead.pdf"), fixtures::pages(3)),
+                ("template", Some("letter.pdf"), fixtures::pages(1)),
+                ("steps", None, b"underlay".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let out = bytes_of(res).await;
+    let doc = lopdf::Document::load_mem(&out).unwrap();
+    assert_eq!(doc.get_pages().len(), 3);
+    let first = doc.get_page_content(doc.get_pages()[&1]);
+    assert!(String::from_utf8_lossy(&first).contains("/RdOv1 Do"));
+
+    let res = router
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("letter.pdf"), fixtures::pages(1)),
+                ("steps", None, b"underlay".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(text(res).await.contains("under 'underlay'"));
+}
+
+#[tokio::test]
 async fn signatures_land_at_exact_coordinates() {
     use rusticdoc_core::pdfops::fixtures;
     let router = app(AppState::new(config()));

@@ -34,7 +34,7 @@ pub struct RenderForm {
     /// JSON object visible as `ctx`, sent as text or as a file.
     pub ctx: Option<serde_json::Value>,
     /// Comma-separated steps in order: `convert`, `pdfa`, `metadata`,
-    /// `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the
+    /// `encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the
     /// service's key; it must be last and cannot be combined with `encrypt`.
     #[schema(example = "convert,pdfa,encrypt")]
     pub steps: Option<String>,
@@ -68,6 +68,10 @@ pub struct RenderForm {
     /// the whole page. Nothing is fetched from anywhere else.
     #[schema(value_type = Vec<String>, format = Binary, required = false)]
     pub assets: Option<Vec<String>>,
+    /// For `underlay`: the PDF the document is laid over, page by page, such
+    /// as letterhead or a pre-printed form.
+    #[schema(value_type = String, format = Binary)]
+    pub underlay: Option<String>,
     /// Further files, used by `merge`.
     #[schema(value_type = Vec<String>, format = Binary)]
     pub files: Option<Vec<String>>,
@@ -200,6 +204,10 @@ fn named_steps(form: &mut Form) -> ApiResult<Vec<Step>> {
     let carried = options::post_steps(form, false)?;
     let mut steps = Vec::new();
     for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        if name.eq_ignore_ascii_case("underlay") {
+            steps.push(options::underlay(form)?);
+            continue;
+        }
         let wanted: Option<fn(&Step) -> bool> = match name.to_ascii_lowercase().as_str() {
             "watermark" => Some(|s| matches!(s, Step::Watermark { .. })),
             "stamp" => Some(|s| matches!(s, Step::Stamp { .. })),

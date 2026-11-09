@@ -203,6 +203,13 @@ pub enum Step {
     Stamp {
         overlay: pdfops::Overlay,
     },
+    /// Lay every page over the matching page of this PDF, as
+    /// `/v1/pdf/overlay` does: the base underneath, such as letterhead or a
+    /// pre-printed form. Extra pages of either are kept.
+    Underlay {
+        base: Vec<u8>,
+        name: String,
+    },
     Rotate {
         rotation: pdfops::Rotation,
         pages: String,
@@ -248,6 +255,7 @@ impl Step {
             Step::Split { .. } => "split",
             Step::Watermark { .. } => "watermark",
             Step::Stamp { .. } => "stamp",
+            Step::Underlay { .. } => "underlay",
             Step::Rotate { .. } => "rotate",
             Step::Flatten => "flatten",
             Step::Optimize => "optimize",
@@ -487,7 +495,7 @@ pub fn parse_steps(list: &str, fields: &BTreeMap<String, String>) -> Result<Vec<
             }
             other => {
                 return Err(Error::InvalidRequest(format!(
-                    "unknown step '{other}'; file-carrying steps (watermark, stamp, embed, factur-x) take their own fields"
+                    "unknown step '{other}'; file-carrying steps (watermark, stamp, underlay, embed, factur-x) take their own fields"
                 )));
             }
         };
