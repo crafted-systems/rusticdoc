@@ -433,6 +433,42 @@ curl http://localhost:9027/v1/render \\
 </Base>
 
 <script>
+  // Questions open and close by sliding: the answer's height and opacity
+  // ease between closed and open. Without this script, or with reduced
+  // motion asked for, they open and close at once as plain disclosures.
+  const easing = 'cubic-bezier(0.2, 0.7, 0.2, 1)';
+  const still = matchMedia('(prefers-reduced-motion: reduce)');
+  for (const item of document.querySelectorAll<HTMLDetailsElement>('.faq details')) {
+    const summary = item.querySelector('summary');
+    const answer = item.querySelector<HTMLElement>('summary ~ *');
+    if (!summary || !answer) continue;
+    let running: Animation | null = null;
+    summary.addEventListener('click', (event) => {
+      if (still.matches) return;
+      event.preventDefault();
+      const opening = !item.open || item.classList.contains('is-closing');
+      const from = item.offsetHeight;
+      running?.cancel();
+      item.style.overflow = 'hidden';
+      if (opening) {
+        item.classList.remove('is-closing');
+        item.open = true;
+      } else {
+        item.classList.add('is-closing');
+      }
+      const to = opening ? summary.offsetHeight + answer.offsetHeight + parseFloat(getComputedStyle(answer).marginBottom) : summary.offsetHeight;
+      running = item.animate({ height: [`${from}px`, `${to}px`] }, { duration: 300, easing });
+      answer.animate({ opacity: opening ? [0, 1] : [1, 0] }, { duration: opening ? 300 : 180, easing, fill: 'both' });
+      running.onfinish = () => {
+        if (!opening) item.open = false;
+        item.classList.remove('is-closing');
+        item.style.overflow = '';
+        running = null;
+        for (const a of answer.getAnimations()) a.cancel();
+      };
+    });
+  }
+
   // Tabs: arrow keys move between them, as the ARIA pattern describes.
   for (const root of document.querySelectorAll<HTMLElement>('[data-tabs]')) {
     const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
