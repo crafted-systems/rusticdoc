@@ -987,3 +987,135 @@ fn a_sheet_loop_stops_at_the_package_limits() {
         "{err}"
     );
 }
+
+/// Copies that cannot fit are refused before any is built: a sheet owning a
+/// 2 MB part, repeated 200 times, would pass the 256 MB package limit.
+#[test]
+fn a_sheet_loop_that_cannot_fit_is_refused_before_copying() {
+    let note = "x".repeat(2 << 20);
+    let comments = format!("{DECL}<comments xmlns=\"{MAIN}\"><authors><author>A</author></authors><commentList><comment ref=\"A1\" authorId=\"0\"><text><r><t>{note}</t></r></text></comment></commentList></comments>");
+    let mut looped = sheet(
+        "{{ s }}",
+        &[row(1, &[s("A1", "{% sheet for s in range(200) %}{{ s }}")])],
+    );
+    looped.rels = vec![("rId1", "comments", "../comments1.xml")];
+    let doc = book(
+        &[looped],
+        &[(
+            "xl/comments1.xml",
+            "spreadsheetml.comments+xml",
+            comments.as_bytes(),
+        )],
+    );
+    let started = std::time::Instant::now();
+    let err = compile(Format::Xlsx, &doc)
+        .unwrap()
+        .render(&json!({}))
+        .unwrap_err();
+    // "would": the check that runs before copying, not the running total.
+    assert!(
+        err.message
+            .contains("would make the package pass its limit of 268435456 bytes"),
+        "{err}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+}
+
+/// Every event of `xml` reads, with matching end tags.
+fn well_formed(name: &str, xml: &str) {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => panic!("{name} is not well-formed: {e}\n{xml}"),
+        }
+    }
+}
+
+/// The value of attribute `attr` on the first `elem` start tag in `xml`,
+/// unescaped.
+fn attr_of(xml: &str, elem: &str, attr: &str) -> String {
+    let re = Regex::new(&format!(r#"<{elem}\b[^>]*\s{attr}="([^"]*)""#)).unwrap();
+    let raw = re
+        .captures(xml)
+        .unwrap_or_else(|| panic!("no {elem} {attr} in {xml}"))[1]
+        .to_string();
+    quick_xml::escape::unescape(&raw).unwrap().into_owned()
+}
+
+/// A sheet named from data holding `"`, `<`, `&` and `'` gives well-formed
+/// parts, and the references that name it, in text and in attributes, read
+/// back as that name.
+#[test]
+fn a_sheet_name_with_markup_characters_stays_well_formed() {
+    let name = "A\"b<c&d'e";
+    let quoted = "'A\"b<c&d''e'";
+    let data = json!({"sites": [{"name": name}]});
+
+    let mut looped = sheet(
+        "{{ s.name }}",
+        &[row(
+            1,
+            &[
+                s("A1", "{% sheet for s in sites %}{{ s.name }}"),
+                n("B1", "1"),
+            ],
+        )],
+    );
+    looped.tail = "<hyperlinks><hyperlink ref=\"A1\" location=\"'{{ s.name }}'!B1\" display=\"Go\"/></hyperlinks>";
+    let doc = book(
+        &[
+            sheet("Summary", &[row(1, &[f("A1", "'{{ s.name }}'!B1")])]),
+            looped,
+        ],
+        &[],
+    );
+    let out = compile(Format::Xlsx, &doc).unwrap().render(&data).unwrap();
+    for (part, bytes) in entries(&out) {
+        if part.ends_with(".xml") || part.ends_with(".rels") {
+            well_formed(&part, &String::from_utf8(bytes).unwrap());
+        }
+    }
+    let wb = part(&out, "xl/workbook.xml");
+    assert_eq!(
+        attr_of(&wb, "sheet name=\"Summary\"[^>]*/><sheet", "name"),
+        name
+    );
+    assert!(
+        wb.contains(&format!(
+            ">{}!$A$1:$D$4</definedName>",
+            quoted.replace('&', "&amp;").replace('<', "&lt;")
+        )),
+        "{wb}"
+    );
+    let looped = part(&out, "xl/worksheets/sheet2.xml");
+    assert_eq!(
+        attr_of(&looped, "hyperlink", "location"),
+        format!("{quoted}!B1")
+    );
+    let summary = cells(&part(&out, "xl/worksheets/sheet1.xml"));
+    assert_eq!(get(&summary, "A1"), format!("={quoted}!B1"));
+
+    let body = "<table:table table:name=\"Summary\"><table:table-row><table:table-cell table:formula=\"of:=[$'{{ s.name }}'.A1]\"><text:p>0</text:p></table:table-cell></table:table-row></table:table><table:table table:name=\"{{ s.name }}\" table:print-ranges=\"'{{ s.name }}'.A1:'{{ s.name }}'.B2\"><table:table-row><table:table-cell office:value-type=\"string\"><text:p>{% sheet for s in sites %}{{ s.name }}</text:p></table:table-cell></table:table-row></table:table>";
+    let out = compile(Format::Ods, &ods(body))
+        .unwrap()
+        .render(&data)
+        .unwrap();
+    let xml = part(&out, "content.xml");
+    well_formed("content.xml", &xml);
+    let names: Vec<String> = Regex::new(r#"<table:table table:name="([^"]*)""#)
+        .unwrap()
+        .captures_iter(&xml)
+        .map(|c| quick_xml::escape::unescape(&c[1]).unwrap().into_owned())
+        .collect();
+    assert_eq!(names, ["Summary", name]);
+    assert_eq!(
+        attr_of(&xml, "table:table-cell", "table:formula"),
+        format!("of:=[${quoted}.A1]")
+    );
+    assert_eq!(
+        attr_of(&xml, "table:table", "table:print-ranges"),
+        format!("{quoted}.A1:{quoted}.B2")
+    );
+}

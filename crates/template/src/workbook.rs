@@ -428,20 +428,88 @@ fn quoted(name: &str) -> String {
     format!("'{}'", name.replace('\'', "''"))
 }
 
-/// Replaces references to sheet `old` in raw XML with references to `new`.
-/// `sep` follows the name: `!` in OOXML, `.` in ODF. The quote may be
-/// written as itself or as `&apos;`.
-fn rename_in_xml(xml: &str, old: &str, new: &str, sep: char) -> String {
-    let (o, n) = (
-        format!("{}{sep}", quoted(old)),
-        format!("{}{sep}", quoted(new)),
-    );
-    let (o, n) = (xml::escape_text(&o), xml::escape_text(&n));
-    if !xml.contains(&o) && !xml.contains(&o.replace('\'', "&apos;")) {
+/// Sheet renames as `(old name, new name)`.
+type Renames = [(String, String)];
+
+/// Replaces references to each old sheet name in unescaped text, such as a
+/// formula, with references to its new name. `sep` follows the name: `!` in
+/// OOXML, `.` in ODF.
+fn rename_text(text: &str, renames: &Renames, sep: char) -> String {
+    let mut out = text.to_string();
+    for (old, new) in renames {
+        let from = format!("{}{sep}", quoted(old));
+        if out.contains(&from) {
+            out = out.replace(&from, &format!("{}{sep}", quoted(new)));
+        }
+    }
+    out
+}
+
+/// Whether raw XML may name one of the old sheets, in any of the ways XML
+/// can write it. A cheap test before parsing.
+fn mentions(xml: &str, renames: &Renames) -> bool {
+    renames.iter().any(|(old, _)| {
+        let inner = old.replace('\'', "''");
+        [xml::escape_text(&inner), xml::escape_attr(&inner)]
+            .iter()
+            .any(|form| xml.contains(form.as_str()) || xml.contains(&form.replace('\'', "&apos;")))
+    })
+}
+
+/// Renames sheet references in parsed XML: in attribute values always, and
+/// in text when `text` is set. Values are read unescaped and written back
+/// escaped for where they go, so a name holding `"`, `<`, `&` or `'` cannot
+/// break the markup. Returns whether anything changed.
+fn rename_nodes(nodes: &mut [Node], renames: &Renames, sep: char, text: bool) -> bool {
+    let mut changed = false;
+    for n in nodes {
+        match n {
+            Node::Text(t) if text && t.pieces.is_none() => {
+                let plain = xml::unescape(&t.raw).into_owned();
+                let moved = rename_text(&plain, renames, sep);
+                if moved != plain {
+                    t.raw = xml::escape_text(&moved);
+                    changed = true;
+                }
+            }
+            Node::Elem(e) => {
+                for (name, raw) in e.attrs() {
+                    let value = xml::unescape(&raw).into_owned();
+                    let moved = rename_text(&value, renames, sep);
+                    if moved != value {
+                        e.set_attr(&name, &moved);
+                        changed = true;
+                    }
+                }
+                changed |= rename_nodes(&mut e.children, renames, sep, text);
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+/// Renames sheet references in a whole OOXML part, text and attributes.
+fn rename_xml(xml: &str, renames: &Renames) -> String {
+    if renames.is_empty() || !mentions(xml, renames) {
         return xml.to_string();
     }
-    xml.replace(&o, &n)
-        .replace(&o.replace('\'', "&apos;"), &n.replace('\'', "&apos;"))
+    let Ok(mut nodes) = xml::parse(xml) else {
+        return xml.to_string();
+    };
+    if rename_nodes(&mut nodes, renames, '!', true) {
+        xml::to_xml(&nodes)
+    } else {
+        xml.to_string()
+    }
+}
+
+fn one(old: &str, new: &str) -> Vec<(String, String)> {
+    if old == new {
+        Vec::new()
+    } else {
+        vec![(old.to_string(), new.to_string())]
+    }
 }
 
 /// Splits the name a copy printed off the front of its content.
@@ -607,6 +675,13 @@ pub fn finish_xlsx(
     first_name.retain(|(old, new)| old != new);
 
     let mut pkg = Copier::new(entries);
+    // Refuse a loop whose copies cannot fit before building any of them.
+    pkg.check_room(finals.iter().filter(|f| f.copy > 0).map(|f| {
+        (
+            f.template_part.as_str(),
+            f.out.map_or(0, |o| o.content.len()),
+        )
+    }))?;
     for f in finals.iter_mut().filter(|f| f.copy > 0) {
         f.part = pkg.fresh(&f.template_part);
     }
@@ -619,28 +694,29 @@ pub fn finish_xlsx(
         .chain(finals.iter().filter(|f| f.copy == 0));
     for f in order {
         let Some(out) = f.out else { continue };
-        let mut xml = rename_in_xml(&out.content, &f.old_name, &f.name, '!');
-        for (old, first) in first_name.iter().filter(|(old, _)| *old != f.old_name) {
-            xml = rename_in_xml(&xml, old, first, '!');
-        }
+        let mut renames = one(&f.old_name, &f.name);
+        renames.extend(
+            first_name
+                .iter()
+                .filter(|(old, _)| *old != f.old_name)
+                .cloned(),
+        );
+        let mut xml = rename_xml(&out.content, &renames);
         if f.copy > 0 {
-            let tables = pkg.copy_rels(&f.template_part, &f.part, &f.old_name, &f.name);
+            let tables = pkg.copy_rels(&f.template_part, &f.part, &f.old_name, &f.name)?;
             xml = copy_sheet_fixes(&xml, &tables);
             pkg.content_type_like(&f.template_part, &f.part);
         } else {
-            pkg.rename_owned(&f.part, &f.old_name, &f.name);
+            pkg.rename_owned(&f.part, &f.old_name, &f.name)?;
         }
-        pkg.put(&f.part, xml.into_bytes());
+        pkg.put(&f.part, xml.into_bytes())?;
     }
     // Static sheets that point at a renamed sheet point at its first copy.
     for f in finals.iter().filter(|f| f.out.is_none()) {
-        if let Some(src) = package::text_of(pkg.entries, &f.part) {
-            let mut xml = src.clone();
-            for (old, first) in &first_name {
-                xml = rename_in_xml(&xml, old, first, '!');
-            }
+        if let Some(src) = pkg.text(&f.part) {
+            let xml = rename_xml(&src, &first_name);
             if xml != src {
-                pkg.put(&f.part, xml.into_bytes());
+                pkg.put(&f.part, xml.into_bytes())?;
             }
         }
     }
@@ -702,16 +778,13 @@ pub fn finish_xlsx(
                             let mut c = d.clone();
                             c.set_attr("localSheetId", &i.to_string());
                             let f = &finals[i];
-                            set_text(&mut c, &rename_plain(&text, &f.old_name, &f.name));
+                            set_text(&mut c, &rename_text(&text, &one(&f.old_name, &f.name), '!'));
                             out.push(Node::Elem(c));
                         }
                     }
                     None => {
                         let mut c = d.clone();
-                        let mut t = text.clone();
-                        for (old, first) in &first_name {
-                            t = rename_plain(&t, old, first);
-                        }
+                        let t = rename_text(&text, &first_name, '!');
                         if t != text {
                             set_text(&mut c, &t);
                         }
@@ -738,7 +811,7 @@ pub fn finish_xlsx(
             }
         }
     }
-    pkg.put(WORKBOOK, xml::to_xml(&wb).into_bytes());
+    pkg.put(WORKBOOK, xml::to_xml(&wb).into_bytes())?;
 
     let worksheet_names: Vec<String> = finals
         .iter()
@@ -749,7 +822,7 @@ pub fn finish_xlsx(
         .iter()
         .filter(|e| rel_of(e).is_some_and(|(_, _, t)| t.starts_with("xl/worksheets/")))
         .count();
-    pkg.update_app(template_worksheets, &worksheet_names, &first_name);
+    pkg.update_app(template_worksheets, &worksheet_names, &first_name)?;
 
     let mut names: Vec<String> = finals
         .iter()
@@ -758,7 +831,7 @@ pub fn finish_xlsx(
         .collect();
     // Parts the workbook does not list are written as they came out.
     for o in outputs.iter().filter(|o| !listed.contains(&o.part)) {
-        pkg.put(&o.part, o.content.clone().into_bytes());
+        pkg.put(&o.part, o.content.clone().into_bytes())?;
         names.push(o.part.clone());
     }
     pkg.finish()?;
@@ -784,11 +857,6 @@ fn rebase_names(nodes: &mut [Node], layouts: &HashMap<String, &Layout>) -> bool 
         }
     }
     changed
-}
-
-/// Replaces references to sheet `old` in unescaped formula text.
-fn rename_plain(text: &str, old: &str, new: &str) -> String {
-    text.replace(&format!("{}!", quoted(old)), &format!("{}!", quoted(new)))
 }
 
 fn set_text(e: &mut Elem, text: &str) {
@@ -863,11 +931,17 @@ fn rename_tables(nodes: &mut [Node], renames: &[(Regex, String)]) {
 /// copied: they are not owned by one sheet.
 const SHARED_TYPES: [&str; 3] = ["/pivotCacheDefinition", "/externalLink", "/customXml"];
 
-/// Copies parts and keeps the package's indexes in step. The content types
-/// and the workbook's relationships are edited in memory and written once
-/// by [`Copier::finish`], so a loop over many items stays linear.
+/// Copies parts and keeps the package's indexes in step. Parts are found
+/// through a name index, the content types and the workbook's relationships
+/// are edited in memory and written once by [`Copier::finish`], and every
+/// write counts against the package limits, so a loop over many items stays
+/// linear and stops as soon as its copies pass a limit.
 struct Copier<'a> {
     entries: &'a mut Vec<Entry>,
+    /// Each entry's position in `entries`.
+    index: HashMap<String, usize>,
+    /// Bytes the entries hold.
+    total: u64,
     /// Every part name in use or handed out.
     names: HashSet<String>,
     /// The next number to try for each `dir/base.ext` pattern.
@@ -883,6 +957,18 @@ struct Copier<'a> {
     next_table_id: u32,
     table_names: HashSet<String>,
     next_vml_block: u32,
+}
+
+fn too_many_parts(n: usize) -> TemplateError {
+    TemplateError::new(format!(
+        "the sheet loops make {n} parts; a package holds at most {MAX_ENTRIES}"
+    ))
+}
+
+fn too_many_bytes() -> TemplateError {
+    TemplateError::new(format!(
+        "the sheet loops make the package pass its limit of {MAX_TOTAL_BYTES} bytes"
+    ))
 }
 
 impl<'a> Copier<'a> {
@@ -932,7 +1018,9 @@ impl<'a> Copier<'a> {
                     .collect()
             })
             .unwrap_or_default();
-        Copier {
+        let mut copier = Copier {
+            index: HashMap::new(),
+            total: 0,
             names: entries.iter().map(|e| e.name.clone()).collect(),
             entries,
             counters: HashMap::new(),
@@ -944,21 +1032,139 @@ impl<'a> Copier<'a> {
             next_table_id,
             table_names,
             next_vml_block,
-        }
+        };
+        copier.reindex();
+        copier
     }
 
-    /// Writes a part, adding it when it is new.
-    fn put(&mut self, name: &str, data: Vec<u8>) {
-        if self.names.contains(name) && package::get(self.entries, name).is_some() {
-            package::set(self.entries, name, data);
-        } else {
-            self.names.insert(name.to_string());
-            self.entries.push(Entry {
-                name: name.to_string(),
-                data,
-                stored: false,
-            });
+    fn reindex(&mut self) {
+        self.index = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.name.clone(), i))
+            .collect();
+        self.total = self.entries.iter().map(|e| e.data.len() as u64).sum();
+    }
+
+    fn get(&self, name: &str) -> Option<&Entry> {
+        self.index.get(name).map(|&i| &self.entries[i])
+    }
+
+    fn text(&self, name: &str) -> Option<String> {
+        self.get(name)
+            .and_then(|e| String::from_utf8(e.data.clone()).ok())
+    }
+
+    /// `(type, resolved target)` of each relationship in `part`'s rels.
+    fn relationships(&self, part: &str) -> Vec<(String, String)> {
+        let base = part.rsplit_once('/').map_or("", |(d, _)| d);
+        let Some(nodes) = self
+            .text(&package::rels_name(part))
+            .and_then(|s| xml::parse(&s).ok())
+        else {
+            return Vec::new();
+        };
+        let Some(root) = xml::root(&nodes) else {
+            return Vec::new();
+        };
+        root.children_named("Relationship")
+            .filter(|r| r.attr("TargetMode").as_deref() != Some("External"))
+            .filter_map(|r| Some((r.attr("Type")?, package::resolve(base, &r.attr("Target")?))))
+            .collect()
+    }
+
+    /// Writes a part, adding it when it is new, and stops with an error once
+    /// the package passes a limit.
+    fn put(&mut self, name: &str, data: Vec<u8>) -> Result<(), TemplateError> {
+        let len = data.len() as u64;
+        match self.index.get(name) {
+            Some(&i) => {
+                self.total = self.total - self.entries[i].data.len() as u64 + len;
+                self.entries[i].data = data;
+            }
+            None => {
+                self.names.insert(name.to_string());
+                self.index.insert(name.to_string(), self.entries.len());
+                self.entries.push(Entry {
+                    name: name.to_string(),
+                    data,
+                    stored: false,
+                });
+                self.total += len;
+            }
         }
+        if self.entries.len() > MAX_ENTRIES {
+            return Err(too_many_parts(self.entries.len()));
+        }
+        if self.total > MAX_TOTAL_BYTES {
+            return Err(too_many_bytes());
+        }
+        Ok(())
+    }
+
+    /// The XML parts a sheet owns and would copy, with their relationship
+    /// parts: what each copy adds, as `(parts, bytes)`.
+    fn owned(&self, part: &str) -> (usize, u64) {
+        let mut owned = vec![part.to_string()];
+        let mut i = 0;
+        while i < owned.len() {
+            for (ty, target) in self.relationships(&owned[i]) {
+                let xml_part = target.ends_with(".xml") || target.ends_with(".vml");
+                if xml_part
+                    && !SHARED_TYPES.iter().any(|s| ty.ends_with(s))
+                    && self.index.contains_key(&target)
+                    && !owned.contains(&target)
+                {
+                    owned.push(target);
+                }
+            }
+            i += 1;
+        }
+        let mut parts = 0;
+        let mut bytes = 0;
+        // The sheet itself is counted by the caller, from what it rendered.
+        for (k, p) in owned.iter().enumerate() {
+            if k > 0 {
+                if let Some(e) = self.get(p) {
+                    parts += 1;
+                    bytes += e.data.len() as u64;
+                }
+            }
+            if let Some(e) = self.get(&package::rels_name(p)) {
+                parts += 1;
+                bytes += e.data.len() as u64;
+            }
+        }
+        (parts, bytes)
+    }
+
+    /// Refuses copies that cannot fit before any is built: each copy takes
+    /// its rendered sheet and a copy of every part its template sheet owns.
+    /// `copies` gives each copy's template part and rendered size.
+    fn check_room<'s>(
+        &self,
+        copies: impl Iterator<Item = (&'s str, usize)>,
+    ) -> Result<(), TemplateError> {
+        let mut seen: HashMap<&str, (usize, u64)> = HashMap::new();
+        let mut parts = self.entries.len();
+        let mut bytes = self.total;
+        for (template, size) in copies {
+            let (p, b) = *seen.entry(template).or_insert_with(|| self.owned(template));
+            parts += 1 + p;
+            bytes = bytes.saturating_add(size as u64 + b);
+            if parts > MAX_ENTRIES {
+                return Err(TemplateError::new(format!(
+                    "the sheet loops would make {parts} parts or more; a package holds at most {MAX_ENTRIES}"
+                )));
+            }
+            if bytes > MAX_TOTAL_BYTES {
+                return Err(TemplateError::new(format!(
+                    "the sheet loops would make the package pass its limit of {MAX_TOTAL_BYTES} bytes"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// A part name like `like` (`xl/charts/chart1.xml`) that is free.
@@ -991,27 +1197,27 @@ impl<'a> Copier<'a> {
         new: &str,
         old_name: &str,
         new_name: &str,
-    ) -> Vec<(String, String)> {
+    ) -> Result<Vec<(String, String)>, TemplateError> {
         let mut tables = Vec::new();
         let mut done = HashMap::new();
-        self.copy_rels_of(old, new, old_name, new_name, &mut done, &mut tables);
-        tables
+        let renames = one(old_name, new_name);
+        self.copy_rels_of(old, new, &renames, &mut done, &mut tables)?;
+        Ok(tables)
     }
 
     fn copy_rels_of(
         &mut self,
         old: &str,
         new: &str,
-        old_name: &str,
-        new_name: &str,
+        renames: &Renames,
         done: &mut HashMap<String, String>,
         tables: &mut Vec<(String, String)>,
-    ) {
-        let Some(src) = package::text_of(self.entries, &package::rels_name(old)) else {
-            return;
+    ) -> Result<(), TemplateError> {
+        let Some(src) = self.text(&package::rels_name(old)) else {
+            return Ok(());
         };
         let Ok(mut nodes) = xml::parse(&src) else {
-            return;
+            return Ok(());
         };
         let base = old.rsplit_once('/').map_or("", |(d, _)| d).to_string();
         let mut copies = Vec::new();
@@ -1028,7 +1234,7 @@ impl<'a> Copier<'a> {
                 }
                 let part = package::resolve(&base, &target);
                 if !(part.ends_with(".xml") || part.ends_with(".vml"))
-                    || !self.names.contains(&part)
+                    || !self.index.contains_key(&part)
                 {
                     continue;
                 }
@@ -1049,13 +1255,13 @@ impl<'a> Copier<'a> {
                 r.set_attr("Target", &new_target);
             }
         }
-        self.put(&package::rels_name(new), xml::to_xml(&nodes).into_bytes());
+        self.put(&package::rels_name(new), xml::to_xml(&nodes).into_bytes())?;
         for (part, copy) in copies {
-            let Some(data) = package::get(self.entries, &part).map(|e| e.data.clone()) else {
+            let Some(data) = self.get(&part).map(|e| e.data.clone()) else {
                 continue;
             };
             let text = String::from_utf8_lossy(&data).into_owned();
-            let text = rename_in_xml(&text, old_name, new_name, '!');
+            let text = rename_xml(&text, renames);
             let text = if part.starts_with("xl/tables/") {
                 self.fix_table(&text, tables)
             } else if part.ends_with(".vml") {
@@ -1063,10 +1269,11 @@ impl<'a> Copier<'a> {
             } else {
                 text
             };
-            self.put(&copy, text.into_bytes());
+            self.put(&copy, text.into_bytes())?;
             self.content_type_like(&part, &copy);
-            self.copy_rels_of(&part, &copy, old_name, new_name, done, tables);
+            self.copy_rels_of(&part, &copy, renames, done, tables)?;
         }
+        Ok(())
     }
 
     /// A copied table needs an id and a name no other table has.
@@ -1130,9 +1337,15 @@ impl<'a> Copier<'a> {
 
     /// Points the parts the first copy owns, such as its charts, at the
     /// sheet's new name.
-    fn rename_owned(&mut self, part: &str, old_name: &str, new_name: &str) {
-        if old_name == new_name {
-            return;
+    fn rename_owned(
+        &mut self,
+        part: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), TemplateError> {
+        let renames = one(old_name, new_name);
+        if renames.is_empty() {
+            return Ok(());
         }
         let mut seen = HashSet::new();
         let mut todo = vec![part.to_string()];
@@ -1140,22 +1353,20 @@ impl<'a> Copier<'a> {
             if !seen.insert(p.clone()) {
                 continue;
             }
-            let base = p.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-            for (_, ty, target) in
-                package::relationships(self.entries, &package::rels_name(&p), &base)
-            {
+            for (ty, target) in self.relationships(&p) {
                 if SHARED_TYPES.iter().any(|s| ty.ends_with(s)) || !target.ends_with(".xml") {
                     continue;
                 }
-                if let Some(text) = package::text_of(self.entries, &target) {
-                    let renamed = rename_in_xml(&text, old_name, new_name, '!');
+                if let Some(text) = self.text(&target) {
+                    let renamed = rename_xml(&text, &renames);
                     if renamed != text {
-                        self.put(&target, renamed.into_bytes());
+                        self.put(&target, renamed.into_bytes())?;
                     }
                 }
                 todo.push(target);
             }
         }
+        Ok(())
     }
 
     /// Removes a sheet that came out zero times, with the parts only it owns.
@@ -1163,11 +1374,7 @@ impl<'a> Copier<'a> {
         let mut owned = vec![part.to_string()];
         let mut i = 0;
         while i < owned.len() {
-            let p = owned[i].clone();
-            let base = p.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-            for (_, ty, target) in
-                package::relationships(self.entries, &package::rels_name(&p), &base)
-            {
+            for (ty, target) in self.relationships(&owned[i]) {
                 let xml_part = target.ends_with(".xml") || target.ends_with(".vml");
                 if xml_part
                     && !SHARED_TYPES.iter().any(|s| ty.ends_with(s))
@@ -1194,6 +1401,7 @@ impl<'a> Copier<'a> {
             }
         }
         self.entries.retain(|e| !dead.contains(&e.name));
+        self.reindex();
         self.dead_sheets.push(part.to_string());
     }
 
@@ -1205,15 +1413,15 @@ impl<'a> Copier<'a> {
         template_worksheets: usize,
         names: &[String],
         first_name: &[(String, String)],
-    ) {
-        let Some(src) = package::text_of(self.entries, APP) else {
-            return;
+    ) -> Result<(), TemplateError> {
+        let Some(src) = self.text(APP) else {
+            return Ok(());
         };
         let Ok(mut nodes) = xml::parse(&src) else {
-            return;
+            return Ok(());
         };
         let Some(root) = xml::root_mut(&mut nodes) else {
-            return;
+            return Ok(());
         };
         let count = root
             .find("HeadingPairs")
@@ -1222,13 +1430,13 @@ impl<'a> Copier<'a> {
             .and_then(|v| v.find("vt:i4"))
             .and_then(|i| i.text_content().trim().parse::<usize>().ok());
         if count != Some(template_worksheets) {
-            return;
+            return Ok(());
         }
         let Some(titles) = root
             .find_mut("TitlesOfParts")
             .and_then(|t| t.find_mut("vt:vector"))
         else {
-            return;
+            return Ok(());
         };
         let rest: Vec<Node> = titles
             .children
@@ -1238,10 +1446,7 @@ impl<'a> Copier<'a> {
             .cloned()
             .map(|n| match n {
                 Node::Elem(mut e) => {
-                    let mut t = e.text_content();
-                    for (old, first) in first_name {
-                        t = rename_plain(&t, old, first);
-                    }
+                    let t = rename_text(&e.text_content(), first_name, '!');
                     set_text(&mut e, &t);
                     Node::Elem(e)
                 }
@@ -1277,20 +1482,17 @@ impl<'a> Copier<'a> {
         if let Some(i4) = count {
             set_text(i4, &names.len().to_string());
         }
-        self.put(APP, xml::to_xml(&nodes).into_bytes());
+        self.put(APP, xml::to_xml(&nodes).into_bytes())
     }
 
-    /// Writes the content types and workbook relationships, and checks the
-    /// package against the limits every output meets.
+    /// Writes the content types and workbook relationships.
     fn finish(mut self) -> Result<(), TemplateError> {
         if self.types_changed {
             let types = xml::to_xml(&self.types).into_bytes();
-            self.put(CONTENT_TYPES, types);
+            self.put(CONTENT_TYPES, types)?;
         }
         if !self.new_rels.is_empty() || !self.dead_sheets.is_empty() {
-            if let Some(mut nodes) =
-                package::text_of(self.entries, WORKBOOK_RELS).and_then(|s| xml::parse(&s).ok())
-            {
+            if let Some(mut nodes) = self.text(WORKBOOK_RELS).and_then(|s| xml::parse(&s).ok()) {
                 if let Some(root) = xml::root_mut(&mut nodes) {
                     let dead = &self.dead_sheets;
                     root.children.retain(|n| match n {
@@ -1307,20 +1509,8 @@ impl<'a> Copier<'a> {
                         )));
                     }
                 }
-                self.put(WORKBOOK_RELS, xml::to_xml(&nodes).into_bytes());
+                self.put(WORKBOOK_RELS, xml::to_xml(&nodes).into_bytes())?;
             }
-        }
-        if self.entries.len() > MAX_ENTRIES {
-            return Err(TemplateError::new(format!(
-                "the sheet loops made {} parts; a package holds at most {MAX_ENTRIES}",
-                self.entries.len()
-            )));
-        }
-        let total: u64 = self.entries.iter().map(|e| e.data.len() as u64).sum();
-        if total > MAX_TOTAL_BYTES {
-            return Err(TemplateError::new(format!(
-                "the rendered document passes the package limit of {MAX_TOTAL_BYTES} bytes"
-            )));
         }
         Ok(())
     }
@@ -1374,33 +1564,23 @@ pub fn finish_ods(content: &str, blocks: &[crate::program::RowBlock]) -> Result<
         let name = unique_name(&valid_name(title), &mut taken);
         if let Some(Node::Elem(table)) = list.children.get_mut(*k) {
             table.set_attr("table:name", &name);
-            if *old != name {
-                rename_attrs(std::slice::from_mut(&mut list.children[*k]), old, &name);
-            }
+            rename_nodes(
+                std::slice::from_mut(&mut list.children[*k]),
+                &one(old, &name),
+                '.',
+                false,
+            );
         }
         first_name.entry(old.clone()).or_insert(name);
     }
-    for (old, first) in &first_name {
-        if old != first {
-            rename_attrs(&mut nodes, old, first);
-        }
-    }
+    // References elsewhere, in other sheets' formulas and named ranges,
+    // point at a renamed sheet's first copy. They sit in attributes.
+    let elsewhere: Vec<(String, String)> = first_name
+        .into_iter()
+        .filter(|(old, first)| old != first)
+        .collect();
+    rename_nodes(&mut nodes, &elsewhere, '.', false);
     Ok(xml::to_xml(&nodes))
-}
-
-/// Points sheet references in the attributes under `nodes`, such as
-/// formulas and print ranges, from sheet `old` to sheet `new`.
-fn rename_attrs(nodes: &mut [Node], old: &str, new: &str) {
-    for n in nodes {
-        let Node::Elem(e) = n else { continue };
-        if e.open.contains('\'') || e.open.contains("&apos;") {
-            let open = rename_in_xml(&e.open, old, new, '.');
-            if open != e.open {
-                e.open = open;
-            }
-        }
-        rename_attrs(&mut e.children, old, new);
-    }
 }
 
 #[cfg(test)]
@@ -1441,14 +1621,23 @@ mod tests {
 
     #[test]
     fn references_follow_a_renamed_sheet() {
-        let xml =
-            "<f>'{{ s.name }}'!A1+'O''Brien {{ x }}'!B2</f><v a=\"&apos;{{ s.name }}&apos;.A1\"/>";
-        let out = rename_in_xml(xml, "{{ s.name }}", "Paris & Co", '!');
-        assert!(out.contains("<f>'Paris &amp; Co'!A1"), "{out}");
-        let out = rename_in_xml(xml, "O'Brien {{ x }}", "D'Arcy", '!');
+        let xml = "<r><f>'{{ s.name }}'!A1+'O''Brien {{ x }}'!B2</f><v a=\"&apos;{{ s.name }}&apos;!A1\" b=\"x\"/></r>";
+        let out = rename_xml(xml, &one("O'Brien {{ x }}", "D'Arcy"));
         assert!(out.contains("'D''Arcy'!B2"), "{out}");
-        let out = rename_in_xml(xml, "{{ s.name }}", "Lyon", '.');
-        assert!(out.contains("&apos;Lyon&apos;.A1"), "{out}");
+        // A name that holds markup characters stays inside its text node and
+        // its attribute value.
+        let out = rename_xml(xml, &one("{{ s.name }}", "A\"b<c&d'e"));
+        assert!(out.contains("<f>'A\"b&lt;c&amp;d''e'!A1"), "{out}");
+        assert!(
+            out.contains("<v a=\"'A&quot;b&lt;c&amp;d''e'!A1\" b=\"x\"/>"),
+            "{out}"
+        );
+        let nodes = xml::parse(&out).unwrap();
+        let v = xml::root(&nodes).unwrap().child("v").unwrap();
+        assert_eq!(v.attr("a").as_deref(), Some("'A\"b<c&d''e'!A1"));
+        assert_eq!(v.attr("b").as_deref(), Some("x"));
+        // Nothing to rename leaves the bytes alone.
+        assert_eq!(rename_xml(xml, &one("Other", "New")), xml);
     }
 
     #[test]
