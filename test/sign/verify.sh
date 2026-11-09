@@ -154,6 +154,8 @@ else
     else
         trap 'pki_stop; rm -rf "$WORK"' EXIT
         export RUSTICDOC_SIGNING_TSA_URL=$PKI_TSA_URL RUSTICDOC_SIGNING_TSA_CERT=$PKI/root.pem
+        # The test authority is plain http on loopback.
+        export RUSTICDOC_SIGNING_TSA_ALLOW_HTTP=true
         export RUSTICDOC_SIGNING_OUTBOUND_ALLOW_PRIVATE=true
         RSA=(--key "$PKI/signer.key" --cert "$PKI/signer-chain.pem")
         EC=(--key "$PKI/ec-signer.key" --cert "$PKI/ec-signer-chain.pem")

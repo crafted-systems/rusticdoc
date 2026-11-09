@@ -161,28 +161,55 @@ fn field_name(pdf: &Pdf, fields: &[Object]) -> String {
         .expect("a free name")
 }
 
-/// True when a field in the tree is a signature field with a value.
-fn has_signature(pdf: &Pdf, fields: &[Object], depth: usize) -> bool {
-    if depth > 32 {
-        return false;
-    }
-    fields.iter().any(|f| {
-        let field = match f {
-            Object::Reference(id) => pdf.get_dictionary(*id).ok(),
-            Object::Dictionary(d) => Some(d),
-            _ => None,
+/// Most field nodes [`has_signature`] looks at before it gives up.
+pub(super) const MAX_FIELD_NODES: usize = 10_000;
+
+/// Whether a field in the tree is a signature field with a value, or `None`
+/// when the tree has more than [`MAX_FIELD_NODES`] nodes to look at. The
+/// walk is iterative and visits each object once, so neither deep nesting
+/// nor `/Kids` arrays that share children (a tree that is really a graph
+/// with exponentially many paths) costs more than the budget.
+pub(super) fn has_signature(pdf: &Pdf, fields: &[Object]) -> Option<bool> {
+    let mut visited: std::collections::HashSet<ObjectId> = std::collections::HashSet::new();
+    let mut stack: Vec<Object> = fields.iter().rev().cloned().collect();
+    let mut budget = MAX_FIELD_NODES;
+    while let Some(node) = stack.pop() {
+        if budget == 0 {
+            return None;
+        }
+        budget -= 1;
+        let field = match &node {
+            Object::Reference(id) => {
+                if !visited.insert(*id) {
+                    continue;
+                }
+                match pdf.get_dictionary(*id) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                }
+            }
+            Object::Dictionary(d) => d,
+            _ => continue,
         };
-        let Some(field) = field else { return false };
         let is_sig = field
             .get(b"FT")
             .and_then(Object::as_name)
             .is_ok_and(|n| n == b"Sig");
         if is_sig && field.get(b"V").is_ok() {
-            return true;
+            return Some(true);
         }
         let (kids, _) = array_in(pdf, field, b"Kids");
-        has_signature(pdf, &kids, depth + 1)
-    })
+        // Only children not seen yet go on the stack, so a Kids array that
+        // names one child many times spends the budget once per entry at
+        // most, and never re-walks what is below it.
+        for kid in kids.into_iter().rev() {
+            match &kid {
+                Object::Reference(id) if visited.contains(id) => {}
+                _ => stack.push(kid),
+            }
+        }
+    }
+    Some(false)
 }
 
 /// The DocMDP permission of an existing certification signature, if any.
@@ -564,20 +591,31 @@ pub(super) fn prepare(
         Kind::DocTimeStamp => None,
     };
     if let Some(options) = options {
-        match (options.certify, certified(pdf, &catalog)) {
-            (Some(_), _) if has_signature(pdf, &fields, 0) => {
-                return Err(invalid(
-                    name,
-                    "it is signed already, and a certification signature must be the first",
-                ));
+        if certified(pdf, &catalog) == Some(1) {
+            return Err(invalid(
+                name,
+                "it is certified with no changes allowed (DocMDP permission 1)",
+            ));
+        }
+        if options.certify.is_some() {
+            match has_signature(pdf, &fields) {
+                Some(false) => {}
+                Some(true) => {
+                    return Err(invalid(
+                        name,
+                        "it is signed already, and a certification signature must be the first",
+                    ));
+                }
+                // Fail closed: what cannot be checked is not certified.
+                None => {
+                    return Err(invalid(
+                        name,
+                        format!(
+                            "its form has more than {MAX_FIELD_NODES} fields to check for signatures before certifying"
+                        ),
+                    ));
+                }
             }
-            (_, Some(1)) => {
-                return Err(invalid(
-                    name,
-                    "it is certified with no changes allowed (DocMDP permission 1)",
-                ));
-            }
-            _ => {}
         }
     }
 

@@ -196,7 +196,7 @@ impl Tsa {
                 purpose: "the timestamp authority",
             })
             .await?;
-        let token = check(&response, digest, &nonce, &self.anchors)?;
+        let token = check(&response, digest, &nonce, &self.anchors, SystemTime::now())?;
         self.largest.fetch_max(token.der.len(), Ordering::Relaxed);
         Ok(token)
     }
@@ -234,6 +234,7 @@ pub(super) fn check(
     digest: &[u8; 32],
     nonce: &[u8],
     anchors: &[Certificate],
+    now: SystemTime,
 ) -> Result<Token> {
     let response = TimeStampResp::from_der(response)
         .map_err(|e| refused(format!("its answer is not a timestamp response: {e}")))?;
@@ -272,8 +273,28 @@ pub(super) fn check(
     if parsed.nonce.as_deref() != Some(nonce) {
         return Err(refused("its token does not carry the nonce that was sent"));
     }
-    check_signer(&parsed.signer, &parsed.certificates, anchors, parsed.time)
-        .map_err(|e| refused(format!("its token is not trusted: {e}")))?;
+    // The token was asked for just now, so its time must be now: a token
+    // dated elsewhere is not the one asked for, or the authority's clock is
+    // wrong, and either way its certificate cannot be judged at that time.
+    let skew = match parsed.time.duration_since(now) {
+        Ok(ahead) => ahead,
+        Err(behind) => behind.duration(),
+    };
+    if skew > verify::CLOCK_SKEW {
+        return Err(refused(format!(
+            "its token is dated {}, more than {} minutes from this service's clock",
+            super::keys::timestamp(parsed.time),
+            verify::CLOCK_SKEW.as_secs() / 60
+        )));
+    }
+    check_signer(
+        &parsed.signer,
+        &parsed.certificates,
+        anchors,
+        parsed.time,
+        now,
+    )
+    .map_err(|e| refused(format!("its token is not trusted: {e}")))?;
     Ok(Token {
         der,
         certificates: parsed.certificates,
@@ -389,15 +410,17 @@ pub(super) fn parse(der: &[u8]) -> Result<Parsed> {
     })
 }
 
-/// Whether the certificate that signed a token at `at` can be trusted: a
-/// critical extended key usage of `id-kp-timeStamping`, valid at `at`, and
-/// either one of `anchors` or issued, through CA certificates from `pool`
-/// that are valid at `at`, by one of them.
+/// Whether the certificate that signed a token at `at` can be trusted now:
+/// a critical extended key usage of `id-kp-timeStamping`; valid both at `at`
+/// and `now`; and either one of `anchors` or issued, through CA certificates
+/// from `pool`, by one of them, every certificate on the way and the anchor
+/// valid at both times too.
 pub(super) fn check_signer(
     signer: &Certificate,
     pool: &[Certificate],
     anchors: &[Certificate],
     at: SystemTime,
+    now: SystemTime,
 ) -> std::result::Result<(), String> {
     let subject = signer.tbs_certificate.subject.to_string();
     if anchors.is_empty() {
@@ -416,30 +439,38 @@ pub(super) fn check_signer(
             ));
         }
     }
-    if !verify::valid_at(signer, at) {
+    let valid = |c: &Certificate| verify::valid_at(c, at) && verify::valid_at(c, now);
+    if !valid(signer) {
         return Err(format!(
-            "the certificate {subject} was not valid at the token's time"
+            "the certificate {subject} is not valid now or was not at the token's time"
         ));
     }
-    if anchors.contains(signer) {
+    if anchors.iter().any(|a| a == signer) {
         return Ok(());
     }
     let mut current = signer.clone();
+    let mut expired_anchor = None;
     for _ in 0..MAX_PATH {
-        if anchors.iter().any(|a| verify::issued_by(&current, a)) {
-            return Ok(());
+        if let Some(anchor) = anchors.iter().find(|a| verify::issued_by(&current, a)) {
+            if valid(anchor) {
+                return Ok(());
+            }
+            expired_anchor = Some(anchor.tbs_certificate.subject.to_string());
+            break;
         }
         let Some(next) = pool.iter().find(|c| {
-            *c != &current
-                && verify::is_ca(c)
-                && verify::valid_at(c, at)
-                && verify::issued_by(&current, c)
+            *c != &current && verify::is_ca(c) && valid(c) && verify::issued_by(&current, c)
         }) else {
             break;
         };
         current = next.clone();
     }
-    Err(format!(
-        "the certificate {subject} neither is nor chains to a certificate in RUSTICDOC_SIGNING_TSA_CERT"
-    ))
+    Err(match expired_anchor {
+        Some(anchor) => format!(
+            "the certificate {subject} chains to {anchor}, which is not valid now or was not at the token's time"
+        ),
+        None => format!(
+            "the certificate {subject} neither is nor chains to a certificate in RUSTICDOC_SIGNING_TSA_CERT"
+        ),
+    })
 }

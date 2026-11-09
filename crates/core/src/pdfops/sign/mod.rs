@@ -51,7 +51,7 @@ pub use keys::Signer;
 pub use net::{Outbound, OutboundRequest};
 pub use pkcs11::{Pkcs11Settings, TokenKeySpec};
 pub use revocation::Limits;
-pub use settings::{NamedKey, Settings, load_key};
+pub use settings::{NamedKey, Settings, check_tsa_url, load_key};
 pub use tsa::Tsa;
 
 /// Longest `reason`, `location`, `contactInfo` or `signerName`, in bytes.

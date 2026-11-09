@@ -261,17 +261,17 @@ fn ocsp_signer<'a>(
     Ok(delegate)
 }
 
-/// What an OCSP response says of `cert`: good, with the responder's
-/// certificates, or why it cannot be used. It must answer for exactly the
+/// What an OCSP response says of `cert`: good, with the delegated responder's
+/// certificate when one signed it, or why it cannot be used. It must answer for exactly the
 /// certificate identifier asked about, be signed by the issuer or a
 /// responder the issuer authorised, and be current. `REVOKED` comes only
 /// from a response that passed all of that.
-fn read_ocsp(
+pub(super) fn read_ocsp(
     response: &[u8],
     cert: &Certificate,
     issuer: &Certificate,
     now: SystemTime,
-) -> std::result::Result<Vec<Certificate>, String> {
+) -> std::result::Result<Option<Certificate>, String> {
     let response = OcspResponse::from_der(response)
         .map_err(|e| format!("the answer is not an OCSP response: {e}"))?;
     if response.response_status != OcspResponseStatus::Successful {
@@ -322,7 +322,9 @@ fn read_ocsp(
     .map_err(|e| format!("the response is not current: {e}"))?;
 
     match &single.cert_status {
-        CertStatus::Good(_) => Ok(basic.certs.clone().unwrap_or_default()),
+        // Only the verified signer leaves here: other certificates the
+        // response carries prove nothing and never reach the pool.
+        CertStatus::Good(_) => Ok((signer != issuer).then(|| signer.clone())),
         CertStatus::Revoked(info) => Err(format!(
             "REVOKED since {}",
             timestamp(UNIX_EPOCH + info.revocation_time.0.to_unix_duration())
@@ -495,10 +497,13 @@ pub(super) async fn collect(
             continue;
         }
         let name = subject(&cert);
+        // The issuer is the certificate whose key verifies this one's
+        // signature, not merely one with the right name: an impostor with the
+        // issuer's name must not vouch for revocation data.
         let mut issuer = found
             .pool
             .iter()
-            .find(|c| c.tbs_certificate.subject == cert.tbs_certificate.issuer)
+            .find(|c| verify::issued_by(&cert, c))
             .cloned();
         if issuer.is_none() {
             for url in aia_urls(&cert, ID_AD_CA_ISSUERS) {
@@ -506,7 +511,7 @@ pub(super) async fn collect(
                     .fetch(&url, None, "the certificate issuer download")
                     .await
                     && let Some(fetched) = parse_certificate(&bytes)
-                    && fetched.tbs_certificate.subject == cert.tbs_certificate.issuer
+                    && verify::issued_by(&cert, &fetched)
                 {
                     found.add(&fetched, true)?;
                     issuer = Some(fetched);
@@ -536,12 +541,13 @@ pub(super) async fn collect(
                     }
                 };
                 match read_ocsp(&response, &cert, issuer, now) {
-                    Ok(responder_certs) => {
+                    Ok(delegate) => {
                         found.out.ocsps.push(response);
-                        for responder in responder_certs {
-                            let needs_status = !has_extension(&responder, ID_PKIX_OCSP_NOCHECK)
-                                && responder.tbs_certificate.subject
-                                    != issuer.tbs_certificate.subject;
+                        // A delegated responder, checked as issued by the
+                        // verified issuer: covered in turn unless it says
+                        // it needs no checking.
+                        if let Some(responder) = delegate {
+                            let needs_status = !has_extension(&responder, ID_PKIX_OCSP_NOCHECK);
                             found.add(&responder, needs_status)?;
                         }
                         covered = true;

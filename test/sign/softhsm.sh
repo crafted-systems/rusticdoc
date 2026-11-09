@@ -49,6 +49,7 @@ printf '4321\n' > /work/pin
 rm -f "$PKI/signer.key" "$PKI/ec-signer.key"
 export RUSTICDOC_PKCS11_MODULE=$MODULE RUSTICDOC_PKCS11_TOKEN=rusticdoc RUSTICDOC_PKCS11_PIN_FILE=/work/pin
 export RUSTICDOC_SIGNING_TSA_URL=$PKI_TSA_URL RUSTICDOC_SIGNING_TSA_CERT=$PKI/root.pem
+export RUSTICDOC_SIGNING_TSA_ALLOW_HTTP=true
 export RUSTICDOC_SIGNING_OUTBOUND_ALLOW_PRIVATE=true
 
 for level in b-b b-t b-lt b-lta; do
