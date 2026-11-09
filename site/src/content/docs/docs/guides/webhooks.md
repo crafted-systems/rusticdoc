@@ -4,7 +4,7 @@ description: Get results by HTTP callback instead of holding a request open, and
 sidebar: { order: 6 }
 ---
 
-A webhook request answers `204` at once and posts the result to a URL you name. After this page you can send one, handle failures and retries, and verify the signature in Node or Python.
+A webhook request answers `204` at once and posts the result to a URL you name. After this page you can send one, handle failures and retries, and verify the signature in Node or Python. If you cannot host a receiver, run the request as a [background job](/docs/guides/background-jobs/) and fetch the result instead.
 
 ```bash
 curl -H "X-Rusticdoc-Webhook-Url: https://receiver.example.com/documents" \
@@ -93,7 +93,7 @@ A delivery can arrive twice, if the receiver processed it and its answer was los
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook jobs running at once, in all |
+| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook and background jobs running at once, in all |
 | `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | The same, for one caller |
 
 Past either, the request gets `429 too_many_jobs` before its body is read. A job holds its place through its delivery attempts, so a slow or failing receiver uses up places.
@@ -121,11 +121,11 @@ The signature is `v1=` followed by the hex HMAC-SHA256 of this string, over the 
 
 ### The signing key
 
-Each caller signs with its own key, so one tenant cannot send another's receiver something that verifies.
+Each caller signs with its own key, so one tenant cannot send another's receiver something that verifies. Every key of a tenant in `RUSTICDOC_TENANT_KEYS` signs with the tenant's key, so replacing a key leaves receivers as they are.
 
 | Service | Principal | Key |
 |---|---|---|
-| With credentials | `key:<hex SHA-256 of the API key>`, `basic:<hex SHA-256 of the user>` or `oidc:<hex SHA-256 of the token's subject>` | `HMAC-SHA256(secret, principal)` |
+| With credentials | `key:<hex SHA-256 of the API key>`, `tenant:<name>` for a [tenant key](/docs/guides/authentication/#tenant-keys), `basic:<hex SHA-256 of the user>` or `oidc:<hex SHA-256 of the token's subject>` | `HMAC-SHA256(secret, principal)` |
 | No credentials | `public` | The secret's bytes |
 
 Do not derive this by hand. Run the command with the service's secret set, and give the receiver the hex it prints:
@@ -133,6 +133,7 @@ Do not derive this by hand. Run the command with the service's secret set, and g
 ```bash
 # In a container with RUSTICDOC_WEBHOOK_SECRET set
 rusticdoc webhook-secret --api-key "$KEY"
+rusticdoc webhook-secret --tenant acme
 rusticdoc webhook-secret --basic-user ada
 rusticdoc webhook-secret --oidc-subject "user-123"
 # With no credentials configured on the service

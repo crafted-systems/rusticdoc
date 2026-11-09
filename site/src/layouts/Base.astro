@@ -5,6 +5,7 @@ import '../styles/site.css';
 import ThemeProvider from '../components/ThemeProvider.astro';
 import ThemeSwitch from '../components/ThemeSwitch.astro';
 import Logo from '../components/Logo.astro';
+import SiteMenus from '../components/SiteMenus.astro';
 import { REPO } from '../site';
 
 interface Props {
@@ -15,11 +16,6 @@ interface Props {
 const { title, description, path } = Astro.props;
 const canonical = new URL(path, Astro.site).href;
 const image = new URL('/og.png', Astro.site).href;
-const nav = [
-  { href: '/docs/', label: 'Docs' },
-  { href: '/security/', label: 'Security' },
-  { href: '/status/', label: 'Status' },
-];
 const footer = [
   {
     title: 'Use it',
@@ -79,7 +75,7 @@ const footer = [
         <span>rusticdoc</span>
       </a>
       <nav aria-label="Main">
-        {nav.map((item) => <a href={item.href} aria-current={path.startsWith(item.href) ? 'page' : undefined}>{item.label}</a>)}
+        <SiteMenus path={path} />
         <ThemeSwitch />
         <a class="nav-outline" href={REPO}>GitHub</a>
         <a class="nav-action" href="/docs/start/quickstart/">Quickstart</a>

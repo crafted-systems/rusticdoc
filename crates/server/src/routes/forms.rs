@@ -9,9 +9,10 @@ use rusticdoc_core::{Document, Output, pdfform};
 use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
+use crate::jobs::Delivery;
 use crate::routes::form::{Form, download, request_id};
 use crate::state::AppState;
-use crate::webhook::{self, Hook, Webhook};
+use crate::webhook::{self, Hook};
 
 /// One form field, as `/v1/pdf/forms/fields` lists them.
 #[derive(ToSchema)]
@@ -99,6 +100,7 @@ pub async fn fill(
     // First, because the first file left is the PDF.
     let mut data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = crate::routes::render::render_options(&mut form, &state)?;
     let file = form.require_file("one PDF")?;
     rusticdoc_core::pdfops::require_pdf(&file)?;
     if let serde_json::Value::Object(map) = &mut data {
@@ -129,6 +131,7 @@ pub async fn fill(
                 &options,
                 st.config.max_render_bytes,
                 st.config.api_timeout,
+                &render_choices,
             )
             .await?;
         Ok::<Output, ApiError>(Output {
@@ -185,10 +188,10 @@ pub async fn overlay(
     finish(state, hook, request_id(&headers), job).await
 }
 
-/// Returns the output now, or hands it to a webhook task.
+/// Returns the output now, or hands it to a webhook task or a background job.
 pub async fn finish<F>(
     state: AppState,
-    hook: Option<Webhook>,
+    hook: Delivery,
     request_id: String,
     job: F,
 ) -> ApiResult<Response>
@@ -202,7 +205,7 @@ where
 /// As [`finish`], with one time limit over the whole job however it is delivered.
 pub async fn finish_within<F>(
     state: AppState,
-    hook: Option<Webhook>,
+    hook: Delivery,
     request_id: String,
     limit: std::time::Duration,
     job: F,
@@ -212,14 +215,15 @@ where
 {
     let job = webhook::within(limit, job);
     match hook {
-        None => {
+        Delivery::Now => {
             let out = job.await?;
             state.metrics.record_timings(&out.timings);
             Ok(download(out).await)
         }
-        Some(hook) => {
-            webhook::spawn_job(state, hook, request_id.clone(), job);
+        Delivery::Webhook(hook) => {
+            webhook::spawn_job(state, *hook, request_id.clone(), job);
             Ok(webhook::accepted(&request_id))
         }
+        Delivery::Job(ticket) => crate::jobs::start(state, ticket, request_id, limit, job).await,
     }
 }

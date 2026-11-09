@@ -68,6 +68,12 @@ impl Verifier {
     /// Checks a token and returns its subject, or the token's own digest when it
     /// names none. The reason it fails is for the log, not the client.
     pub async fn verify(&self, token: &str) -> Result<String, String> {
+        self.verify_claims(token).await.map(|(subject, _)| subject)
+    }
+
+    /// As [`Verifier::verify`], with the token's claims, for deciding who is an
+    /// admin.
+    pub async fn verify_claims(&self, token: &str) -> Result<(String, serde_json::Value), String> {
         let header = decode_header(token).map_err(|e| e.to_string())?;
         if !matches!(header.alg, Algorithm::RS256 | Algorithm::ES256) {
             return Err(format!("algorithm {:?} is not accepted", header.alg));
@@ -82,10 +88,11 @@ impl Verifier {
         let claims = decode::<serde_json::Value>(token, &key, &validation)
             .map_err(|e| e.to_string())?
             .claims;
-        Ok(match claims.get("sub").and_then(|sub| sub.as_str()) {
+        let subject = match claims.get("sub").and_then(|sub| sub.as_str()) {
             Some(subject) => subject.to_string(),
             None => token.to_string(),
-        })
+        };
+        Ok((subject, claims))
     }
 
     /// The key a token names, fetching the set when needed and allowed.

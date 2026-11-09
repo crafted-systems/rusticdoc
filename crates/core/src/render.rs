@@ -51,13 +51,29 @@ enum Op {
     /// Answers with the limit it runs under, to prove it can start.
     Ping,
     /// A template file. Blobs: the file, the data, the context.
-    Render { name: String, limit: usize },
+    Render {
+        name: String,
+        limit: usize,
+        #[serde(default)]
+        options: rusticdoc_template::RenderOptions,
+    },
     /// Blobs: the file, the data, the context.
-    Validate { name: String, limit: usize },
+    Validate {
+        name: String,
+        limit: usize,
+        #[serde(default)]
+        options: rusticdoc_template::RenderOptions,
+    },
     /// A template being stored. Blobs: the file.
     Syntax { name: String },
+    /// The tags a template holds. Blobs: the file.
+    Tags { name: String },
     /// A template string, for `batchName`. Blobs: the source, the context.
-    Text { limit: usize },
+    Text {
+        limit: usize,
+        #[serde(default)]
+        options: rusticdoc_template::RenderOptions,
+    },
     /// HTML to PDF. Blobs: the page, then each asset, named in order.
     Html {
         assets: Vec<String>,
@@ -69,6 +85,10 @@ enum Op {
         strip_tag_annotations: bool,
         limit: usize,
         timeout_ms: u64,
+        /// The request's language, time zone, currency and translations,
+        /// for the tags' filters.
+        #[serde(default)]
+        options: rusticdoc_template::RenderOptions,
     },
 }
 
@@ -244,10 +264,19 @@ fn evaluate(blobs: &[Vec<u8>]) -> Result<(ReplyMeta, Vec<u8>)> {
             },
             payload: Vec::new(),
         },
-        Op::Render { name, limit } => {
+        Op::Render {
+            name,
+            limit,
+            options,
+        } => {
             let doc = Document::new(name, blob_bytes(blobs, 1));
-            let rendered =
-                template::render(&doc, &blob_json(blobs, 2)?, &blob_json(blobs, 3)?, limit)?;
+            let rendered = template::render(
+                &doc,
+                &blob_json(blobs, 2)?,
+                &blob_json(blobs, 3)?,
+                limit,
+                &options,
+            )?;
             ReplyMetaAnd {
                 meta: ReplyMeta {
                     name: rendered.name,
@@ -256,10 +285,19 @@ fn evaluate(blobs: &[Vec<u8>]) -> Result<(ReplyMeta, Vec<u8>)> {
                 payload: rendered.bytes.to_vec(),
             }
         }
-        Op::Validate { name, limit } => {
+        Op::Validate {
+            name,
+            limit,
+            options,
+        } => {
             let doc = Document::new(name, blob_bytes(blobs, 1));
-            let found =
-                template::validate(&doc, &blob_json(blobs, 2)?, &blob_json(blobs, 3)?, limit);
+            let found = template::validate(
+                &doc,
+                &blob_json(blobs, 2)?,
+                &blob_json(blobs, 3)?,
+                limit,
+                &options,
+            );
             plain(serde_json::to_vec(&found).map_err(|e| Error::Engine {
                 engine: "template",
                 message: e.to_string(),
@@ -273,10 +311,18 @@ fn evaluate(blobs: &[Vec<u8>]) -> Result<(ReplyMeta, Vec<u8>)> {
                 message: e.to_string(),
             })?)
         }
-        Op::Text { limit } => {
+        Op::Tags { name } => {
+            let doc = Document::new(name, blob_bytes(blobs, 1));
+            let found = template::tags(&doc)?;
+            plain(serde_json::to_vec(&found).map_err(|e| Error::Engine {
+                engine: "template",
+                message: e.to_string(),
+            })?)
+        }
+        Op::Text { limit, options } => {
             let source = String::from_utf8_lossy(blobs.get(1).map(Vec::as_slice).unwrap_or(b""));
             let ctx = blob_json(blobs, 2)?;
-            let env = template::environment();
+            let env = template::environment_for(&Default::default(), &options);
             let text = template::render_str(
                 &env,
                 &source,
@@ -299,8 +345,9 @@ fn evaluate(blobs: &[Vec<u8>]) -> Result<(ReplyMeta, Vec<u8>)> {
             strip_tag_annotations,
             limit,
             timeout_ms,
+            options: render_options,
         } => {
-            let env = template::environment();
+            let env = template::environment_for(&Default::default(), &render_options);
             let options = FillOptions {
                 flatten,
                 strip_tag_annotations,
@@ -474,10 +521,11 @@ impl Renderer {
         ctx: &serde_json::Value,
         limit: usize,
         timeout: Duration,
+        options: &rusticdoc_template::RenderOptions,
     ) -> Result<Document> {
         self.session(timeout)
             .await?
-            .render(doc, data, ctx, limit)
+            .render(doc, data, ctx, limit, options)
             .await
     }
 
@@ -489,18 +537,21 @@ impl Renderer {
         ctx: &serde_json::Value,
         limit: usize,
         timeout: Duration,
+        options: &rusticdoc_template::RenderOptions,
     ) -> Result<Vec<rusticdoc_template::Diagnostic>> {
         let mut session = self.session(timeout).await?;
         if session.worker.is_none() {
-            let (doc, data, ctx) = (doc.clone(), data.clone(), ctx.clone());
+            let (doc, data, ctx, options) =
+                (doc.clone(), data.clone(), ctx.clone(), options.clone());
             return blocking(timeout, move |_| {
-                Ok(template::validate(&doc, &data, &ctx, limit))
+                Ok(template::validate(&doc, &data, &ctx, limit, &options))
             })
             .await;
         }
         let op = Op::Validate {
             name: doc.name.clone(),
             limit,
+            options: options.clone(),
         };
         let (data, ctx) = encode_pair(data, ctx).await?;
         let (_, payload) = session.call(&op, &[&doc.bytes, &data, &ctx]).await?;
@@ -529,6 +580,24 @@ impl Renderer {
         serde_json::from_slice(&payload).map_err(|e| Error::Engine {
             engine: "template",
             message: format!("unexpected validation reply: {e}"),
+        })
+    }
+
+    /// The tags a template holds, in document order, read where its renders
+    /// would run.
+    pub async fn tags(&self, doc: &Document, timeout: Duration) -> Result<Vec<String>> {
+        let mut session = self.session(timeout).await?;
+        if session.worker.is_none() {
+            let doc = doc.clone();
+            return blocking(timeout, move |_| template::tags(&doc)).await;
+        }
+        let op = Op::Tags {
+            name: doc.name.clone(),
+        };
+        let (_, payload) = session.call(&op, &[&doc.bytes]).await?;
+        serde_json::from_slice(&payload).map_err(|e| Error::Engine {
+            engine: "template",
+            message: format!("unexpected tags reply: {e}"),
         })
     }
 
@@ -567,12 +636,14 @@ impl Renderer {
         options: &FillOptions,
         limit: usize,
         timeout: Duration,
+        render_options: &rusticdoc_template::RenderOptions,
     ) -> Result<Vec<u8>> {
         let mut session = self.session(timeout).await?;
         if session.worker.is_none() {
             let (pdf, data, options) = (pdf.clone(), data.clone(), options.clone());
+            let render_options = render_options.clone();
             return blocking(timeout, move |deadline| {
-                let env = template::environment();
+                let env = template::environment_for(&Default::default(), &render_options);
                 let limits = FillLimits {
                     max_render_bytes: limit,
                     deadline,
@@ -586,6 +657,7 @@ impl Renderer {
             strip_tag_annotations: options.strip_tag_annotations,
             limit,
             timeout_ms: timeout.as_millis() as u64,
+            options: render_options.clone(),
         };
         let (data, _) = encode_pair(data, &serde_json::Value::Null).await?;
         let (_, payload) = session.call(&op, &[pdf, &data]).await?;
@@ -832,17 +904,20 @@ impl Session {
         data: &serde_json::Value,
         ctx: &serde_json::Value,
         limit: usize,
+        options: &rusticdoc_template::RenderOptions,
     ) -> Result<Document> {
         if self.worker.is_none() {
-            let (doc, data, ctx) = (doc.clone(), data.clone(), ctx.clone());
+            let (doc, data, ctx, options) =
+                (doc.clone(), data.clone(), ctx.clone(), options.clone());
             return blocking(self.remaining()?, move |_| {
-                template::render(&doc, &data, &ctx, limit)
+                template::render(&doc, &data, &ctx, limit, &options)
             })
             .await;
         }
         let op = Op::Render {
             name: doc.name.clone(),
             limit,
+            options: options.clone(),
         };
         let (data, ctx) = encode_pair(data, ctx).await?;
         let (meta, payload) = self.call(&op, &[&doc.bytes, &data, &ctx]).await?;
@@ -855,11 +930,12 @@ impl Session {
         source: &str,
         ctx: &serde_json::Value,
         limit: usize,
+        options: &rusticdoc_template::RenderOptions,
     ) -> Result<String> {
         if self.worker.is_none() {
-            let (source, ctx) = (source.to_string(), ctx.clone());
+            let (source, ctx, options) = (source.to_string(), ctx.clone(), options.clone());
             return blocking(self.remaining()?, move |_| {
-                let env = template::environment();
+                let env = template::environment_for(&Default::default(), &options);
                 template::render_str(
                     &env,
                     &source,
@@ -871,7 +947,13 @@ impl Session {
         }
         let (ctx, _) = encode_pair(ctx, &serde_json::Value::Null).await?;
         let (_, payload) = self
-            .call(&Op::Text { limit }, &[source.as_bytes(), &ctx])
+            .call(
+                &Op::Text {
+                    limit,
+                    options: options.clone(),
+                },
+                &[source.as_bytes(), &ctx],
+            )
             .await?;
         Ok(String::from_utf8_lossy(&payload).into_owned())
     }
@@ -899,7 +981,14 @@ mod tests {
     async fn render(renderer: &Renderer, timeout: Duration) -> Result<Document> {
         let empty = serde_json::json!({});
         renderer
-            .render(&doc(), &empty, &empty, 1 << 20, timeout)
+            .render(
+                &doc(),
+                &empty,
+                &empty,
+                1 << 20,
+                timeout,
+                &Default::default(),
+            )
             .await
     }
 

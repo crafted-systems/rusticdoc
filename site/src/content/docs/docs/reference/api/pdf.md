@@ -297,12 +297,15 @@ Needs credentials, if any are configured.
 ## POST /v1/pdf/sign
 
 Signs a PDF. With `signature=certificate`, a cryptographic signature with
-the key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`: an
-incremental update with a PAdES B-B style `/ETSI.CAdES.detached`
-signature (no timestamp), invisible, or shown with the one image sent.
-Without a configured key that answers 503. By default
-(`signature=image`) the images are drawn at exact coordinates, which is
-not a cryptographic signature.
+the key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or the
+named key `signingKey` chooses: an incremental update with a PAdES
+`/ETSI.CAdES.detached` signature at the `level` asked for (B-B to B-LTA),
+approving or, with `certify`, certifying. It is invisible, shown with the
+one image sent, or, with a position and no image, shown as text naming
+the signer, the date and the reason. Without a configured key that answers
+503; a timestamp authority or revocation source that fails answers 502. By
+default (`signature=image`) the images are drawn at exact coordinates,
+which is not a cryptographic signature.
 
 Needs credentials, if any are configured.
 
@@ -313,14 +316,17 @@ Needs credentials, if any are configured.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `files` | files | Yes | The PDF first, then one PNG or JPEG per placement. With `signature=certificate`, at most one image: the visible appearance. |
+| `certify` | integer | No | With `signature=certificate`: certify rather than approve, with this DocMDP permission: `1` no changes, `2` form filling and signing, `3` also annotations. Only the document's first signature can certify. |
 | `contactInfo` | string | No | With `signature=certificate`: how to reach the signer. |
+| `level` | string | No | With `signature=certificate`: the PAdES level, `b-b`, `b-t` (with an RFC 3161 timestamp), `b-lt` (and validation data in a DSS) or `b-lta` (and a document timestamp). Default the service's `RUSTICDOC_SIGNING_LEVEL`, `b-b` unless set. |
 | `location` | string | No | With `signature=certificate`: where it was signed. |
 | `outputFilename` | string | No |  |
 | `page` | integer | No | 1-based page of each image; repeat the field for several. |
 | `reason` | string | No | With `signature=certificate`: why the document was signed. |
-| `signature` | string | No | `image` (default) draws the images and is not a cryptographic signature. `certificate` signs with the service's key (PAdES B-B, `/ETSI.CAdES.detached`), invisibly unless an image is sent. |
+| `signature` | string | No | `image` (default) draws the images and is not a cryptographic signature. `certificate` signs with the service's key (PAdES, `/ETSI.CAdES.detached`), invisibly unless an image or a position is sent. |
 | `signerName` | string | No | With `signature=certificate`: the signer's name as shown. Validators identify the signer by the certificate, not by this. |
-| `width` | number | No | Width in points. Default the image's natural size. |
+| `signingKey` | string | No | With `signature=certificate`: a named key from `RUSTICDOC_SIGNING_KEYS` instead of the default one. A caller not on its allow list gets 403. |
+| `width` | number | No | Width in points. Default the image's natural size, or 200 for a text appearance. |
 | `x` | number | No | Points from the page's left edge to the image's left edge. |
 | `y` | number | No | Points from the page's bottom edge to the image's bottom edge. |
 
@@ -331,7 +337,9 @@ Needs credentials, if any are configured.
 | 200 | The signed PDF | File |
 | 204 | Accepted; the result goes to the webhook |  |
 | 400 | The request is wrong | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
-| 503 | signature=certificate and no signing key is configured, or the certificate has expired | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
+| 403 | The caller may not use the signing key | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
+| 502 | The timestamp authority or a revocation source failed | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
+| 503 | signature=certificate and no signing key is configured, the level needs a timestamp authority that is not configured, or the certificate has expired | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 
 ## POST /v1/pdf/split
 

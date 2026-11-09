@@ -8,6 +8,7 @@ license.workspace = true
 axum = { version = "0.8.9", features = ["multipart", "json", "macros"] }
 base64 = "0.23.1"
 bytes = "1.12.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 futures-util = "0.3.34"
 hex = "0.4.3"
 hmac = "0.13.0"
@@ -17,6 +18,7 @@ hyper-util = { version = "0.1", features = ["tokio", "service"] }
 http = "1.5.0"
 http-body-util = "0.1.5"
 libc = "0.2"
+lopdf = "0.47.0"
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 mime = "0.3.18"
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
@@ -29,6 +31,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 subtle = "2"
+tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["full"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["trace", "timeout", "limit", "cors", "request-id", "catch-panic", "util", "set-header"] }
@@ -36,8 +39,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 utoipa = { version = "6.0.0", features = ["axum_extras", "uuid"] }
 utoipa-scalar = { version = "0.4.0", features = ["axum"] }
-uuid = { version = "1.29.0", features = ["v4"] }
+uuid = { version = "1.29.0", features = ["v4", "v7"] }
 zip = { version = "9.4.0", default-features = false, features = ["deflate"] }
+async-trait = "0.1.92"
 
 [dev-dependencies]
 lopdf = "0.47.0"

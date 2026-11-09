@@ -68,6 +68,7 @@ A file in any other format with `data` gets `501 not_supported`. With no `data` 
 | `files` | Files | Further PDFs for the `merge` step. Every file part after the template lands here, except those under the fields below |
 | `fonts` | Files | Fonts for this request alone. See [fonts](/docs/guides/fonts/) |
 | `watermark`, `stamp` | Files | Image or PDF marks for those steps |
+| `underlay` | File | The PDF the `underlay` step lays the document over |
 | `embeds` | Files | Attachments for the `embed` step |
 | `facturxXml` | File | The invoice XML for the `factur-x` step |
 | `flatten` | Text | With a PDF template and data: fix the filled values into the page |
@@ -91,6 +92,7 @@ Each step works on the document or documents in flight, in the order `steps` lis
 | `split` | `splitMode` (`pages` or `intervals`) and `splitSpan`, both required; `splitUnify` | Splits into several documents |
 | `watermark` | `watermarkSource`, `watermarkExpression`, `watermarkOptions`, `watermarkPages`, `watermark` | Draws text, an image or a PDF under the page content |
 | `stamp` | `stampSource`, `stampExpression`, `stampOptions`, `stampPages`, `stamp` | Draws text, an image or a PDF over the page content |
+| `underlay` | `underlay`, one PDF | Lays each page over the matching page of the `underlay` PDF, such as letterhead or a pre-printed form. See [below](#underlay) |
 | `rotate` | `rotateAngle`, default `90`: `90`, `180`, `270`, `-90`; `rotatePages`, default all | Rotates pages |
 | `flatten` | None | Fixes forms and annotations into the page content |
 | `optimize` | None | Recompresses streams and drops unused objects |
@@ -99,7 +101,7 @@ Each step works on the document or documents in flight, in the order `steps` lis
 | `embed` | `embeds`; `embedsMetadata`, a JSON object mapping a file name to `{"mimeType": "..."}` | Attaches files |
 | `factur-x` | `facturxXml`; `facturxConformanceLevel`, default `EN16931`: `MINIMUM`, `BASIC_WL`, `BASIC`, `EN16931`, `EXTENDED` | Embeds Factur-X invoice XML |
 | `encrypt` | `userPassword`, `ownerPassword`; at least one. A missing owner password takes the user password | Encrypts the PDF |
-| `sign` | `reason`, `location`, `contactInfo`, `signerName`, all optional | Signs the PDF cryptographically with the deployment's key, invisibly. See [signing with a certificate](/docs/guides/pdf-operations/#with-a-certificate) |
+| `sign` | `reason`, `location`, `contactInfo`, `signerName`, `level`, `certify`, `signingKey`, and for a visible signature `page`, `x`, `y`, `width` and an image under `signatureImage`, all optional | Signs the PDF cryptographically, as `/v1/pdf/sign` with `signature=certificate` does: invisibly, or with the image or a box of text at `x` and `y`. See [signing with a certificate](/docs/guides/pdf-operations/#with-a-certificate) |
 
 Every step from `merge` down needs a PDF, so one of `convert`, `pdfa` or `pdfua` comes first when the template is not a PDF. Otherwise the response is a `400` that says `'letter.txt' is not a PDF`.
 
@@ -130,12 +132,27 @@ head -c4 paid.pdf | grep -q %PDF
 
 Repeat the `Source`, `Expression`, `Options` and `Pages` fields for several marks, up to 5 of each kind. Name the step once: each name in `steps` applies every mark of that kind, so `steps=watermark,watermark` with two sources draws four.
 
+### Underlay
+
+`underlay` puts a base PDF under the document in flight, page by page, as [`/v1/pdf/overlay`](/docs/templates/pdf-templates/#overlay) does with the base sent first. So one request can fill an Office template, convert it and lay it on your letterhead:
+
+```bash test
+curl -F template=@letter.txt -F "data=<letter.json" -F underlay=@a.pdf \
+  -F steps=convert,underlay http://localhost:9027/v1/render -o on-letterhead.pdf
+head -c4 on-letterhead.pdf | grep -q %PDF
+```
+
+- Page 1 of the document is drawn over page 1 of the base, page 2 over page 2, and so on. The result has the base's page sizes.
+- Base pages past the end of the document stay as they are. Document pages past the end of the base are added at the end, with nothing under them. For letterhead on every page, send a base with at least as many pages.
+- The `underlay` file part is never taken as the template or as a file to merge, wherever it comes in the form.
+- The step needs exactly one `underlay` PDF, and a PDF in flight, so `convert` comes first for an Office or text template. Otherwise the response is a `400`.
+
 ### How the fields are read
 
 - Fields of a step you did not name have no effect, but they are still checked. `-F rotateAngle=45` is a `400` even without `rotate` in `steps`.
 - The order of `steps` decides the order of work. The fields only give each step its options.
 - `encrypt` goes last. A later PDF step gets a `400` that says the file is encrypted.
-- `sign` must be the last step, because any later step would change the signed bytes, and it cannot be combined with `encrypt` in either order. Both are refused with a `400` before any work starts. Without `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT` configured, a request with `sign` gets a `503`. After a `split`, each part is signed.
+- `sign` must be the last step, because any later step would change the signed bytes, and it cannot be combined with `encrypt` in either order. Both are refused with a `400` before any work starts. Without a signing key configured, a request with `sign` gets a `503`, as does a `level` that needs a timestamp authority the service does not have; a caller not allowed the key gets `403`. After a `split`, each part is signed.
 
 ```bash
 curl -F template=@invoice.docx -F data=@data.json -F steps=convert,sign \

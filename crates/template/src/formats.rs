@@ -21,6 +21,9 @@ pub struct Dialect {
     pub preserve_space: bool,
     /// Cells are the paragraphs and places are named by cell reference.
     pub sheet: bool,
+    /// Elements whose text is an object's alt text: read like a paragraph of
+    /// its own, wherever it sits, and never joined into the text around it.
+    pub alt_text: &'static [&'static str],
 }
 
 pub const DOCX: Dialect = Dialect {
@@ -32,6 +35,7 @@ pub const DOCX: Dialect = Dialect {
     slide: None,
     preserve_space: true,
     sheet: false,
+    alt_text: &[],
 };
 
 pub const ODF_TEXT: Dialect = Dialect {
@@ -47,6 +51,7 @@ pub const ODF_TEXT: Dialect = Dialect {
     slide: None,
     preserve_space: false,
     sheet: false,
+    alt_text: &["svg:title", "svg:desc"],
 };
 
 pub const ODP: Dialect = Dialect {
@@ -63,6 +68,7 @@ pub const PPTX: Dialect = Dialect {
     slide: None,
     preserve_space: false,
     sheet: false,
+    alt_text: &[],
 };
 
 /// Sheet cells are the paragraphs; their `t` leaves (inline or rich) the runs.
@@ -75,6 +81,7 @@ pub const XLSX: Dialect = Dialect {
     slide: None,
     preserve_space: true,
     sheet: true,
+    alt_text: &[],
 };
 
 pub fn dialect(format: Format) -> Dialect {
@@ -100,8 +107,8 @@ pub fn is_text_part(format: Format, name: &str) -> bool {
         }
         Format::Odt => name == "content.xml" || name == "styles.xml",
         Format::Ods | Format::Odp => name == "content.xml",
+        // Drawings for the alt text of their pictures, charts and shapes.
         Format::Xlsx => {
-            // Drawings hold no text tags, only placeholder pictures.
             (name.starts_with("xl/worksheets/sheet") || name.starts_with("xl/drawings/drawing"))
                 && name.ends_with(".xml")
         }

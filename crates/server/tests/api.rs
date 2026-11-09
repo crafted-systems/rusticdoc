@@ -109,7 +109,16 @@ async fn health_version_metrics_and_openapi_are_open() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert!(text(res).await.contains("rusticdoc_requests"));
+    let body = text(res).await;
+    assert!(body.contains("rusticdoc_requests"));
+    assert!(
+        body.contains("rusticdoc_template_cache_hits_total"),
+        "{body}"
+    );
+    assert!(
+        body.contains("rusticdoc_template_cache_misses_total"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -1114,6 +1123,45 @@ async fn named_steps_take_their_fields_and_refuse_empty_ones() {
 }
 
 #[tokio::test]
+async fn underlay_lays_the_template_over_a_base_pdf() {
+    use rusticdoc_core::pdfops::fixtures;
+    let router = app(AppState::new(config()));
+    // The base comes first in the form and is still not taken as the
+    // template.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("underlay", Some("letterhead.pdf"), fixtures::pages(3)),
+                ("template", Some("letter.pdf"), fixtures::pages(1)),
+                ("steps", None, b"underlay".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let out = bytes_of(res).await;
+    let doc = lopdf::Document::load_mem(&out).unwrap();
+    assert_eq!(doc.get_pages().len(), 3);
+    let first = doc.get_page_content(doc.get_pages()[&1]);
+    assert!(String::from_utf8_lossy(&first).contains("/RdOv1 Do"));
+
+    let res = router
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("letter.pdf"), fixtures::pages(1)),
+                ("steps", None, b"underlay".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(text(res).await.contains("under 'underlay'"));
+}
+
+#[tokio::test]
 async fn signatures_land_at_exact_coordinates() {
     use rusticdoc_core::pdfops::fixtures;
     let router = app(AppState::new(config()));
@@ -1329,7 +1377,7 @@ async fn certificate_signatures_sign_with_the_configured_key() {
                 ("signature", None, b"certificate".to_vec()),
                 ("x", None, b"10".to_vec()),
             ],
-            "invisible",
+            "one 'x' and one 'y'",
         ),
         (
             vec![
@@ -1392,6 +1440,241 @@ async fn sign_steps_come_last_and_never_with_encrypt() {
             assert!(message.contains(says), "{steps}: {message}");
         }
     }
+}
+
+/// The `/Rect` of the widget of the last signature field in `signed`.
+fn last_signature_rect(signed: &[u8]) -> Vec<f32> {
+    let pdf = lopdf::Document::load_mem(signed).unwrap();
+    let acroform = match pdf.catalog().unwrap().get(b"AcroForm").unwrap() {
+        lopdf::Object::Reference(id) => pdf.get_dictionary(*id).unwrap().clone(),
+        lopdf::Object::Dictionary(d) => d.clone(),
+        other => panic!("unexpected AcroForm {other:?}"),
+    };
+    let fields = acroform.get(b"Fields").unwrap().as_array().unwrap();
+    let field = pdf
+        .get_dictionary(fields.last().unwrap().as_reference().unwrap())
+        .unwrap();
+    field
+        .get(b"Rect")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_float().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn visible_signatures_show_an_image_or_text_on_both_routes() {
+    use rusticdoc_core::pdfops::fixtures;
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(AppState::new(signing_config(dir.path())));
+    let original = fixtures::pages(1);
+
+    // /v1/pdf/sign with a place and no image: text, 200 points wide.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), original.clone()),
+                ("signature", None, b"certificate".to_vec()),
+                ("x", None, b"72".to_vec()),
+                ("y", None, b"72".to_vec()),
+                ("reason", None, b"Approved".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let signed = bytes_of(res).await;
+    signed_by_certificate(&original, &signed);
+    let rect = last_signature_rect(&signed);
+    assert_eq!(rect[..3], [72.0, 72.0, 272.0]);
+
+    // The sign step of /v1/render, with an image under signatureImage.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), original.clone()),
+                (
+                    "signatureImage",
+                    Some("sig.png"),
+                    fixtures::PNG_DOT.to_vec(),
+                ),
+                ("steps", None, b"sign".to_vec()),
+                ("page", None, b"1".to_vec()),
+                ("x", None, b"100".to_vec()),
+                ("y", None, b"50".to_vec()),
+                ("width", None, b"80".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let rendered = bytes_of(res).await;
+    signed_by_certificate(&original, &rendered);
+    assert_eq!(last_signature_rect(&rendered), [100.0, 50.0, 180.0, 130.0]);
+    assert!(rendered.windows(7).any(|w| w == b"/Img Do"));
+
+    // And as text, with the signer's name.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), original.clone()),
+                ("steps", None, b"sign".to_vec()),
+                ("x", None, b"10".to_vec()),
+                ("y", None, b"10".to_vec()),
+                ("signerName", None, b"Ada".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let rendered = bytes_of(res).await;
+    assert_eq!(last_signature_rect(&rendered)[..3], [10.0, 10.0, 210.0]);
+
+    // A signature image with no sign step is a mistake.
+    let res = router
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), original.clone()),
+                (
+                    "signatureImage",
+                    Some("sig.png"),
+                    fixtures::PNG_DOT.to_vec(),
+                ),
+                ("steps", None, b"rotate".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn named_signing_keys_are_for_the_callers_on_their_allow_list() {
+    use rusticdoc_core::pdfops::fixtures;
+    use rusticdoc_core::pdfops::sign::NamedKey;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = signing_config(dir.path());
+    config.api_keys = vec!["alpha".into(), "beta".into()];
+    config.signing.named = vec![NamedKey {
+        name: "acme".into(),
+        key: dir.path().join("key.pem").to_string_lossy().into_owned(),
+        cert: dir.path().join("cert.pem"),
+        allow: vec![rusticdoc_server::auth::key_principal("alpha").0],
+    }];
+    config.check().expect("the named key loads");
+    let router = app(AppState::new(config));
+    let request = |caller: &str, key: &str| {
+        let mut req = post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), fixtures::pages(1)),
+                ("signature", None, b"certificate".to_vec()),
+                ("signingKey", None, key.as_bytes().to_vec()),
+            ],
+        );
+        req.headers_mut()
+            .insert("x-api-key", caller.parse().unwrap());
+        req
+    };
+    let res = router
+        .clone()
+        .oneshot(request("alpha", "acme"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let res = router
+        .clone()
+        .oneshot(request("beta", "acme"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(text(res).await.contains("acme"));
+    let res = router
+        .clone()
+        .oneshot(request("beta", "globex"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // The same check on the sign step of a render.
+    let mut req = post_binary(
+        "/v1/render",
+        &[
+            ("template", Some("in.pdf"), fixtures::pages(1)),
+            ("steps", None, b"sign".to_vec()),
+            ("signingKey", None, b"acme".to_vec()),
+        ],
+    );
+    req.headers_mut()
+        .insert("x-api-key", "beta".parse().unwrap());
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn timestamped_levels_need_a_timestamp_authority_reached_under_the_outbound_rules() {
+    use rusticdoc_core::pdfops::fixtures;
+    let dir = tempfile::tempdir().unwrap();
+    let parts = |level: &str| {
+        vec![
+            ("files", Some("in.pdf"), fixtures::pages(1)),
+            ("signature", None, b"certificate".to_vec()),
+            ("level", None, level.as_bytes().to_vec()),
+        ]
+    };
+
+    // No timestamp authority: a 503 that names the setting.
+    let router = app(AppState::new(signing_config(dir.path())));
+    let res = router
+        .clone()
+        .oneshot(post_binary("/v1/pdf/sign", &parts("b-t")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(text(res).await.contains("RUSTICDOC_SIGNING_TSA_URL"));
+    let res = router
+        .oneshot(post_binary("/v1/pdf/sign", &parts("b-q")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // One on loopback, which the outbound rules refuse by default: a 502,
+    // and no file.
+    let mut config = signing_config(dir.path());
+    config.signing.tsa = Some(
+        rusticdoc_core::pdfops::sign::Tsa::new("http://127.0.0.1:9/tsa", Duration::from_secs(2))
+            .with_anchors_pem(&std::fs::read(dir.path().join("cert.pem")).unwrap())
+            .unwrap(),
+    );
+    let router = app(AppState::new(config.clone()));
+    let res = router
+        .oneshot(post_binary("/v1/pdf/sign", &parts("b-lta")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    let message = text(res).await;
+    assert!(message.contains("timestamp authority"), "{message}");
+    assert!(message.contains("private"), "{message}");
+
+    // A deny list refuses it before any connection.
+    config.signing.outbound_allow_private = true;
+    config.signing.outbound_deny_list = vec!["^http://127\\.0\\.0\\.1:9/".into()];
+    let router = app(AppState::new(config));
+    let res = router
+        .oneshot(post_binary("/v1/pdf/sign", &parts("b-t")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert!(text(res).await.contains("not allowed"));
 }
 
 #[tokio::test]
@@ -1607,4 +1890,446 @@ async fn disabling_conversion_stops_fulgur_too() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// A DOCX whose document names `font`, the smallest Word will open.
+fn docx_in(font: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(&mut out);
+    let options: zip::write::SimpleFileOptions = Default::default();
+    for (name, body) in [
+        (
+            "[Content_Types].xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_string(),
+        ),
+        (
+            "_rels/.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#.to_string(),
+        ),
+        (
+            "word/document.xml",
+            format!(r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="{font}" w:hAnsi="{font}"/></w:rPr><w:t>Hello {{{{ name }}}}</w:t></w:r></w:p></w:body></w:document>"#),
+        ),
+    ] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(body.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+    out.into_inner()
+}
+
+#[tokio::test]
+async fn validation_reports_fonts_the_service_lacks() {
+    let template = docx_in("Nonexistent Grotesque 9");
+    let mut body = format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"template\"; filename=\"letter.docx\"\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&template);
+    body.extend_from_slice(
+        format!("\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"data\"\r\n\r\n{{\"name\":\"Ada\"}}\r\n--{BOUNDARY}--\r\n").as_bytes(),
+    );
+    let req = Request::post("/v1/templates/validate")
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let res = app(AppState::new(config())).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let report: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(
+        report["ok"], true,
+        "a missing font warns, it does not fail: {report}"
+    );
+    assert_eq!(
+        report["missing_fonts"],
+        serde_json::json!(["Nonexistent Grotesque 9"]),
+        "{report}"
+    );
+    let warning = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["severity"] == "warning")
+        .expect("a warning");
+    assert!(
+        warning["message"]
+            .as_str()
+            .unwrap()
+            .contains("Nonexistent Grotesque 9"),
+        "{warning}"
+    );
+}
+
+#[tokio::test]
+async fn the_api_description_covers_json_bodies_aliases_variables_previews_and_jobs() {
+    let res = app(AppState::new(config()))
+        .oneshot(Request::get("/openapi.json").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let spec: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    for path in ["/v1/render", "/v1/render/batch", "/v1/templates/validate"] {
+        let content = &spec["paths"][path]["post"]["requestBody"]["content"];
+        assert!(content["multipart/form-data"].is_object(), "{path}");
+        assert!(content["application/json"].is_object(), "{path}");
+    }
+    assert!(spec["paths"]["/v1/render"]["post"]["responses"]["202"].is_object());
+    for (path, method) in [
+        ("/v1/aliases", "get"),
+        ("/v1/aliases/{name}", "put"),
+        ("/v1/aliases/{name}", "get"),
+        ("/v1/aliases/{name}", "delete"),
+        ("/v1/templates/{id}/variables", "get"),
+        ("/v1/templates/{id}/preview", "post"),
+        ("/v1/jobs/{id}", "get"),
+        ("/v1/jobs/{id}/result", "get"),
+    ] {
+        assert!(spec["paths"][path][method].is_object(), "{method} {path}");
+    }
+    for schema in [
+        "RenderJson",
+        "JobSchema",
+        "AliasHistorySchema",
+        "TemplateVariables",
+    ] {
+        assert!(
+            spec["components"]["schemas"][schema].is_object(),
+            "{schema}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn background_jobs_and_aliases_need_a_store_and_say_so() {
+    let router = app(AppState::new(config()));
+    let mut req = post_form(
+        "/v1/render",
+        &[("template", Some("t.txt"), "Hi"), ("data", None, "{}")],
+    );
+    req.headers_mut()
+        .insert("prefer", "respond-async".parse().unwrap());
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
+    let body = text(res).await;
+    assert!(body.contains("store_not_configured"), "{body}");
+
+    for (method, path) in [
+        ("GET", "/v1/jobs/01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"),
+        ("GET", "/v1/aliases"),
+        ("GET", "/v1/aliases/invoice"),
+        ("GET", "/v1/templates/invoice/variables"),
+    ] {
+        let res = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED, "{method} {path}");
+    }
+
+    // Without the preference, the same request renders as it always did.
+    let res = router
+        .oneshot(post_form(
+            "/v1/render",
+            &[("template", Some("t.txt"), "Hi"), ("data", None, "{}")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_json_body_without_a_store_can_still_use_a_template_hash() {
+    let router = app(AppState::new(config()));
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("hash.txt"), "Hi {{ name }}"),
+                ("data", None, r#"{"name":"A"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let hash = rusticdoc_core::template::template_hash(b"Hi {{ name }}");
+    let res = router
+        .clone()
+        .oneshot(
+            Request::post("/v1/render")
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .body(Body::from(
+                    serde_json::json!({ "templateHash": hash, "data": { "name": "B" } })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(text(res).await, "Hi B");
+    // A templateId needs a store.
+    let res = router
+        .oneshot(
+            Request::post("/v1/render")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"templateId":"invoice"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn undefined_values_can_print_as_nothing() {
+    let template = (
+        "template",
+        Some("letter.txt"),
+        "Dear {{ customer.name }}{{ missing.deeper }}.",
+    );
+    let data = ("data", None, r#"{"customer":{}}"#);
+    let strict = app(AppState::new(config()))
+        .oneshot(post_form("/v1/render", &[template, data]))
+        .await
+        .unwrap();
+    assert_eq!(strict.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let lenient = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/render",
+            &[template, data, ("undefinedAsEmpty", None, "true")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(lenient.status(), StatusCode::OK);
+    assert_eq!(text(lenient).await, "Dear .");
+}
+
+#[tokio::test]
+async fn keep_names_only_what_rendering_takes_out() {
+    let template = ("template", Some("letter.txt"), "Hello");
+    let res = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/render",
+            &[template, ("keep", None, "macros, bogus")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(text(res).await.contains("'bogus'"));
+    let res = app(AppState::new(config()))
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                template,
+                ("keep", None, "macros,objects,externalLinks,privateLinks"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn language_fields_format_and_translate_in_multipart() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("fr.json"),
+        r#"{"due": "Échéance", "total": "Total (serveur)"}"#,
+    )
+    .unwrap();
+    let state = AppState::new(Config {
+        translations_dir: Some(dir.path().to_path_buf()),
+        ..config()
+    });
+    let template = r#"{% settings t.total="Total" %}{{ "total" | t }}|{{ "due" | t }}|{{ 1500 | currency }}|{{ 1234.5 | number }}|{{ when | date("%d %B %H:%M") }}"#;
+    let res = app(state.clone())
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("t.txt"), template),
+                ("data", None, r#"{"when":"2026-07-01T10:00:00Z"}"#),
+                ("lang", None, "FR_ca"),
+                ("currency", None, "EUR"),
+                ("timezone", None, "America/Toronto"),
+                ("translations", None, r#"{"fr-CA": {"total": "Montant"}}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        text(res).await,
+        "Montant|Échéance|1\u{a0}500,00\u{a0}€|1\u{a0}234,5|01 juillet 06:00"
+    );
+
+    // Without the fields, the same template prints as it always has.
+    let res = app(state.clone())
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("t.txt"), template),
+                ("data", None, r#"{"when":"2026-07-01T10:00:00Z"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(text(res).await, "Total|due|1,500.00|1,234.5|01 July 10:00");
+
+    let long = "X".repeat(20);
+    for (field, value, wanted) in [
+        ("lang", "French!", "'lang'"),
+        ("timezone", "Mars/Olympus", "'timezone'"),
+        ("currency", long.as_str(), "'currency'"),
+        ("translations", r#"{"fr": {"a": 1}}"#, "'translations.fr'"),
+        ("translations", r#"["fr"]"#, "'translations'"),
+        ("translations", "{", "'translations'"),
+    ] {
+        let res = app(state.clone())
+            .oneshot(post_form(
+                "/v1/render",
+                &[("template", Some("t.txt"), "x"), (field, None, value)],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{field}={value}");
+        let body = text(res).await;
+        assert!(body.contains(wanted), "{field}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn validation_and_batches_take_the_language_fields() {
+    let state = AppState::new(config());
+    let res = app(state.clone())
+        .oneshot(post_form(
+            "/v1/templates/validate",
+            &[
+                (
+                    "template",
+                    Some("t.txt"),
+                    r#"{{ "total" | t }} {{ "due" | t }}"#,
+                ),
+                ("lang", None, "de-CH"),
+                ("translations", None, r#"{"de": {"total": "Summe"}}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(body["ok"], true, "{body}");
+    let warnings: Vec<&str> = body["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(warnings.len(), 1, "{body}");
+    assert!(
+        warnings[0].contains("no de-ch translation for \"due\""),
+        "{body}"
+    );
+
+    let res = app(state)
+        .oneshot(post_form(
+            "/v1/render/batch",
+            &[
+                ("template", Some("t.txt"), "{{ item.n | number(2) }}"),
+                ("data", None, r#"{"items":[{"n":1234.5}]}"#),
+                ("splitBy", None, "items"),
+                ("batchName", None, "{{ \"file\" | t }}"),
+                ("lang", None, "de"),
+                ("translations", None, r#"{"de": {"file": "Datei"}}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let zip = res.into_body().collect().await.unwrap().to_bytes();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip.to_vec())).unwrap();
+    let mut entry = archive.by_index(0).unwrap();
+    assert_eq!(entry.name().unwrap(), "Datei.txt");
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut content).unwrap();
+    assert_eq!(content, "1.234,50");
+}
+
+#[tokio::test]
+async fn pdf_form_tags_translate_and_format() {
+    use lopdf::{Document as Pdf, Object, Stream, dictionary};
+    // A text field whose default value is a tag.
+    let mut pdf = Pdf::with_version("1.7");
+    let pages_id = pdf.new_object_id();
+    let font_id = pdf.add_object(
+        dictionary! {"Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica"},
+    );
+    let content_id = pdf.add_object(Stream::new(dictionary! {}, b"".to_vec()));
+    let page_id = pdf.new_object_id();
+    let field_id = pdf.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx", "T" => Object::string_literal("label"),
+        "DV" => Object::string_literal("{{ \"total\" | t }} {{ amount | currency }} {{ day | date(\"%d %B\") }}"),
+        "Rect" => vec![72.into(), 600.into(), 400.into(), 620.into()], "P" => page_id,
+        "DA" => Object::string_literal("/Helv 10 Tf 0 g"), "F" => 4
+    });
+    pdf.objects.insert(page_id, Object::Dictionary(dictionary! {
+        "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Annots" => vec![field_id.into()]
+    }));
+    pdf.objects.insert(
+        pages_id,
+        Object::Dictionary(
+            dictionary! {"Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1},
+        ),
+    );
+    let catalog_id = pdf.add_object(dictionary! {
+        "Type" => "Catalog", "Pages" => pages_id,
+        "AcroForm" => dictionary! {"Fields" => vec![field_id.into()], "DR" => dictionary! {"Font" => dictionary! {"Helv" => font_id}}}
+    });
+    pdf.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).unwrap();
+
+    let res = app(AppState::new(config()))
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("form.pdf"), bytes),
+                (
+                    "data",
+                    None,
+                    br#"{"amount": 1500, "day": "2026-05-01"}"#.to_vec(),
+                ),
+                ("lang", None, b"de".to_vec()),
+                ("currency", None, b"EUR".to_vec()),
+                (
+                    "translations",
+                    None,
+                    br#"{"de": {"total": "Summe"}}"#.to_vec(),
+                ),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let filled = Pdf::load_mem(&bytes_of(res).await).unwrap();
+    let field = filled.get_object(field_id).unwrap().as_dict().unwrap();
+    let value = field.get(b"V").unwrap().as_str().unwrap();
+    // The no-break spaces and the euro sign need UTF-16.
+    let units: Vec<u16> = value[2..]
+        .chunks(2)
+        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+        .collect();
+    let value = String::from_utf16(&units).unwrap();
+    assert!(value.starts_with("Summe 1.500,00\u{a0}€"), "{value}");
+    assert!(value.contains("01 Mai"), "{value}");
 }

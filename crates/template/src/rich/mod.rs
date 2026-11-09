@@ -10,6 +10,7 @@
 mod barcode;
 mod chart;
 mod docx;
+pub(crate) mod drop;
 mod font;
 mod html;
 mod media;
@@ -17,6 +18,7 @@ mod odf;
 mod pkg;
 mod placeholder;
 mod pptx;
+pub(crate) mod shift;
 mod svg;
 mod xlsx;
 
@@ -50,7 +52,7 @@ const MAX_VALUES: usize = 100_000;
 /// The most charts one render may place.
 const MAX_CHARTS: usize = 200;
 
-const NAMES: [&str; 7] = [
+const NAMES: [&str; 8] = [
     "image",
     "barcode",
     "link",
@@ -58,6 +60,7 @@ const NAMES: [&str; 7] = [
     "html",
     "chart",
     "pagebreak",
+    "shift",
 ];
 
 /// How the rich filters behave in an environment.
@@ -134,6 +137,8 @@ pub enum Rich {
     Html(Vec<html::Block>),
     Chart(Chart),
     PageBreak,
+    /// Removes the element that holds it; see [`drop`].
+    Drop(drop::Drop),
 }
 
 /// The values one render registered. It lives in the render's `State`, so
@@ -533,6 +538,7 @@ pub fn apply(
         .collect();
     let mut pkg = pkg::Pkg::new(entries);
     let mut book = xlsx::Book::default();
+    let mut leftovers = drop::Leftovers::default();
     for name in names {
         let Some(src) = package::text_of(pkg.entries, &name) else {
             continue;
@@ -544,13 +550,14 @@ pub fn apply(
                 return Err(misplaced(&name, "", "a marker names an unknown value"));
             }
         }
+        // First, so that the other values are placed in what is left.
+        drop::apply_part(format, &mut pkg, &items, &name, &mut nodes, &mut leftovers)?;
         // Ids the placeholders gave out must be seen by what follows.
         let src = if placeholder::rewrite(&mut pkg, format, &items, &name, &src, &mut nodes)? {
             xml::to_xml(&nodes)
         } else {
             src
         };
-
         match format {
             Format::Docx => docx::rewrite(&mut pkg, &items, &name, &src, &mut nodes)?,
             Format::Pptx => pptx::rewrite(&mut pkg, &items, &name, &src, &mut nodes)?,
@@ -570,7 +577,9 @@ pub fn apply(
         package::set(pkg.entries, &name, out.into_bytes());
     }
     book.finish(&mut pkg)?;
-    pkg.finish()
+    pkg.finish()?;
+    drop::finish(entries, leftovers);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -887,23 +896,9 @@ fn html_filter(state: &mut State, value: Value) -> Result<Value, Error> {
     register(state, "html", Rich::Html(blocks))
 }
 
-fn chart_filter(
-    format: Format,
-    state: &mut State,
-    value: Value,
-    kwargs: Kwargs,
-) -> Result<Value, Error> {
+fn chart_filter(state: &mut State, value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     let options = chart::Options::read(&kwargs)?;
     no_more_kwargs("chart", &kwargs)?;
-    if !matches!(format, Format::Docx | Format::Pptx | Format::Xlsx) {
-        return Err(fail(
-            "chart",
-            format!(
-                "charts are not supported in {} templates yet",
-                format.extension().to_ascii_uppercase()
-            ),
-        ));
-    }
     if value.is_undefined() {
         return undefined(state, "chart");
     }
@@ -944,6 +939,13 @@ pub fn add_filters(env: &mut Environment<'static>, mode: Mode) {
                     },
                 );
             }
+            env.add_function("drop", |_: Rest<Value>| -> Result<Value, Error> {
+                Err(fail(
+                    "drop",
+                    "this function needs an Office template (DOCX, ODT, XLSX, ODS, PPTX or \
+                     ODP) and is not available in a text template",
+                ))
+            });
             return;
         }
         Mode::Check(format) | Mode::Render(format) => format,
@@ -958,15 +960,19 @@ pub fn add_filters(env: &mut Environment<'static>, mode: Mode) {
         },
     );
     env.add_filter("html", html_filter);
-    env.add_filter(
-        "chart",
-        move |state: &mut State, value: Value, kwargs: Kwargs| {
-            chart_filter(format, state, value, kwargs)
-        },
-    );
+    env.add_filter("chart", chart_filter);
+    env.add_filter("shift", move |value: Value, kwargs: Kwargs| {
+        shift::filter(format, value, kwargs)
+    });
     env.add_filter("pagebreak", move |state: &mut State, value: Value| {
         pagebreak(format, state, value)
     });
+    env.add_function(
+        "drop",
+        move |state: &mut State, element: Option<Value>, count: Option<Value>| {
+            drop::function(format, state, element, count)
+        },
+    );
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use axum::extract::{Multipart, State};
+use axum::extract::{Request, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::{Extension, Json};
@@ -10,12 +10,13 @@ use utoipa::ToSchema;
 
 use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
+use crate::jobs::Delivery;
 use crate::metrics::StageLabels;
 use crate::routes::form::{Form, request_id};
 use crate::routes::forms::{finish, finish_within};
 use crate::routes::{options, templates};
 use crate::state::AppState;
-use crate::webhook::{self, Hook, Webhook};
+use crate::webhook::{self, Hook};
 
 /// The multipart form `/v1/render` accepts. Documented here; parsed by hand.
 #[derive(ToSchema)]
@@ -24,8 +25,9 @@ pub struct RenderForm {
     /// The template file. Send this or `templateId`.
     #[schema(value_type = String, format = Binary)]
     pub template: Option<String>,
-    /// The id of a stored template, from `POST /v1/templates`. Send this or
-    /// `template`. Files in the form are then only further inputs, for `merge`.
+    /// The id of a stored template, from `POST /v1/templates`, or an alias as
+    /// `name` or `name@version`. Send this or `template`. Files in the form are
+    /// then only further inputs, for `merge`.
     #[schema(rename = "templateId")]
     pub template_id: Option<String>,
     /// JSON object the template sees as its root, sent as text or as a file.
@@ -33,8 +35,36 @@ pub struct RenderForm {
     pub data: Option<serde_json::Value>,
     /// JSON object visible as `ctx`, sent as text or as a file.
     pub ctx: Option<serde_json::Value>,
+    /// `true` prints a value missing from the data as nothing instead of
+    /// failing the render. Default `false`, so a misspelt name is an error.
+    #[schema(rename = "undefinedAsEmpty")]
+    pub undefined_as_empty: Option<bool>,
+    /// What an Office template's result may keep of what rendering takes
+    /// out, comma-separated: `macros`, `objects` (OLE objects and ActiveX
+    /// controls), `externalLinks`, `privateLinks` (hyperlinks to private
+    /// addresses), or `all`. Default: none of them.
+    #[schema(example = "privateLinks")]
+    pub keep: Option<String>,
+    /// The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins
+    /// over the template's `lang`: it picks translations for `t`, and when CLDR
+    /// has data for it, how `number`, `currency` and `date` write numbers,
+    /// money and month names.
+    #[schema(example = "fr-CA")]
+    pub lang: Option<String>,
+    /// Translations for `t`, by language, each a flat object of keys and texts.
+    /// They win over the service's dictionaries and the template's own. At most
+    /// 10,000 entries, keys of 256 bytes and texts of 16 KiB.
+    #[schema(value_type = Option<Object>, example = json!({"fr": {"total": "Montant"}, "en-gb": {"total": "Total"}}))]
+    pub translations: Option<serde_json::Value>,
+    /// The time zone `date` shows moments in: an offset such as `+02:00`, or an
+    /// IANA zone such as `Europe/Paris`. Wins over the template's.
+    #[schema(example = "Europe/Paris")]
+    pub timezone: Option<String>,
+    /// The currency `currency` uses when given none, such as `EUR`. Wins over
+    /// the template's.
+    pub currency: Option<String>,
     /// Comma-separated steps in order: `convert`, `pdfa`, `metadata`,
-    /// `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the
+    /// `encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the
     /// service's key; it must be last and cannot be combined with `encrypt`.
     #[schema(example = "convert,pdfa,encrypt")]
     pub steps: Option<String>,
@@ -56,6 +86,28 @@ pub struct RenderForm {
     /// For `sign`: the signer's name as shown.
     #[schema(rename = "signerName")]
     pub signer_name: Option<String>,
+    /// For `sign`: `b-b`, `b-t`, `b-lt` or `b-lta`, as on `/v1/pdf/sign`.
+    pub level: Option<String>,
+    /// For `sign`: certify with DocMDP permission `1`, `2` or `3` instead of
+    /// approving.
+    pub certify: Option<u8>,
+    /// For `sign`: a named key instead of the default one.
+    #[schema(rename = "signingKey")]
+    pub signing_key: Option<String>,
+    /// For `sign`: a PNG or JPEG to show the signature with, at `page`, `x`,
+    /// `y` and `width`. With `x` and `y` and no image, the signature is shown
+    /// as text: the signer, the date and the reason.
+    #[schema(rename = "signatureImage", value_type = String, format = Binary, required = false)]
+    pub signature_image: Option<String>,
+    /// For a visible `sign`: the 1-based page. Default 1.
+    pub page: Option<u32>,
+    /// For a visible `sign`: points from the page's left edge.
+    pub x: Option<f32>,
+    /// For a visible `sign`: points from the page's bottom edge.
+    pub y: Option<f32>,
+    /// For a visible `sign`: width in points. Default the image's natural
+    /// size, or 200 for text.
+    pub width: Option<f32>,
     /// File name of the result, without extension.
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
@@ -68,12 +120,96 @@ pub struct RenderForm {
     /// the whole page. Nothing is fetched from anywhere else.
     #[schema(value_type = Vec<String>, format = Binary, required = false)]
     pub assets: Option<Vec<String>>,
+    /// For `underlay`: the PDF the document is laid over, page by page, such
+    /// as letterhead or a pre-printed form.
+    #[schema(value_type = String, format = Binary)]
+    pub underlay: Option<String>,
     /// Further files, used by `merge`.
     #[schema(value_type = Vec<String>, format = Binary)]
     pub files: Option<Vec<String>>,
 }
 
+/// The JSON body `/v1/render`, `/v1/render/batch` and
+/// `/v1/templates/validate` accept with `Content-Type: application/json`, for a
+/// stored template: there are no files to send. Every text field of the
+/// multipart form is accepted under the same name, with the same meaning and
+/// limits; objects such as `data` and `metadata` are sent as JSON rather than as
+/// text, and `steps` may be a list. Fields that carry files cannot be sent.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct RenderJson {
+    /// The stored template: its id, or an alias as `name` or `name@version`.
+    #[schema(rename = "templateId", example = "invoice")]
+    pub template_id: String,
+    /// The object the template sees as its root.
+    #[schema(example = json!({"customer": {"name": "Ada"}}))]
+    pub data: Option<serde_json::Value>,
+    /// The object visible as `ctx`.
+    pub ctx: Option<serde_json::Value>,
+    /// `true` prints a value missing from the data as nothing.
+    #[schema(rename = "undefinedAsEmpty")]
+    pub undefined_as_empty: Option<bool>,
+    /// What an Office template's result may keep of what rendering takes
+    /// out, comma-separated: `macros`, `objects` (OLE objects and ActiveX
+    /// controls), `externalLinks`, `privateLinks` (hyperlinks to private
+    /// addresses), or `all`. Default: none of them.
+    #[schema(example = "privateLinks")]
+    pub keep: Option<String>,
+    /// The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins
+    /// over the template's `lang`: it picks translations for `t`, and when CLDR
+    /// has data for it, how `number`, `currency` and `date` write numbers,
+    /// money and month names.
+    #[schema(example = "fr-CA")]
+    pub lang: Option<String>,
+    /// Translations for `t`, by language, each a flat object of keys and texts.
+    /// They win over the service's dictionaries and the template's own. At most
+    /// 10,000 entries, keys of 256 bytes and texts of 16 KiB.
+    #[schema(value_type = Option<Object>, example = json!({"fr": {"total": "Montant"}, "en-gb": {"total": "Total"}}))]
+    pub translations: Option<serde_json::Value>,
+    /// The time zone `date` shows moments in: an offset such as `+02:00`, or an
+    /// IANA zone such as `Europe/Paris`. Wins over the template's.
+    #[schema(example = "Europe/Paris")]
+    pub timezone: Option<String>,
+    /// The currency `currency` uses when given none, such as `EUR`. Wins over
+    /// the template's.
+    pub currency: Option<String>,
+    /// The steps in order, as a list or as comma-separated text.
+    #[schema(value_type = Option<Vec<String>>, example = json!(["convert", "pdfa"]))]
+    pub steps: Option<serde_json::Value>,
+    /// Output format for `convert`. Default `pdf`.
+    pub to: Option<String>,
+    /// PDF/A level for `pdfa`.
+    pub pdfa: Option<String>,
+    /// Metadata fields for `metadata`.
+    pub metadata: Option<serde_json::Value>,
+    #[schema(rename = "userPassword")]
+    pub user_password: Option<String>,
+    #[schema(rename = "ownerPassword")]
+    pub owner_password: Option<String>,
+    /// File name of the result, without extension.
+    #[schema(rename = "outputFilename")]
+    pub output_filename: Option<String>,
+    /// `fulgur` (default) or `libreoffice`, for HTML.
+    #[schema(rename = "htmlEngine")]
+    pub html_engine: Option<String>,
+    /// For `/v1/render/batch`: the array to render once per element.
+    #[schema(rename = "splitBy")]
+    pub split_by: Option<String>,
+    /// For `/v1/render/batch`: each file's name, as a template.
+    #[schema(rename = "batchName")]
+    pub batch_name: Option<String>,
+    /// URLs to fetch as further inputs, as on the multipart form.
+    #[schema(rename = "downloadFrom", value_type = Option<Vec<Object>>)]
+    pub download_from: Option<serde_json::Value>,
+}
+
 /// Fills a template and runs the steps.
+///
+/// Send a multipart form, or JSON with a `templateId` (see `RenderJson`).
+///
+/// Add `Prefer: respond-async` to get 202 at once, with the job in the body and
+/// its address in `Location`, and fetch the result from `/v1/jobs/{id}/result`
+/// once it is done. This needs `RUSTICDOC_STORE`.
 ///
 /// Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.
 /// With `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its
@@ -84,13 +220,18 @@ pub struct RenderForm {
 /// when the service requires no credentials; `rusticdoc webhook-secret` prints it.
 #[utoipa::path(
     post, path = "/v1/render", tag = "render",
-    request_body(content_type = "multipart/form-data", content = RenderForm),
+    request_body(content(
+        (RenderForm = "multipart/form-data"),
+        (RenderJson = "application/json"),
+    )),
     params(
         ("X-Rusticdoc-Webhook-Url" = Option<String>, Header, description = "Deliver the result here instead of in the response"),
         ("X-Rusticdoc-Webhook-Error-Url" = Option<String>, Header, description = "Deliver failures here as JSON"),
+        ("Prefer" = Option<String>, Header, description = "`respond-async` to run in the background and answer 202"),
     ),
     responses(
         (status = 200, description = "The rendered file", content_type = "application/octet-stream", body = BinaryFile),
+        (status = 202, description = "Accepted as a background job (`Prefer: respond-async`)", body = crate::routes::jobs::JobSchema),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 401, description = "Credentials required", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
         (status = 501, description = "Not supported in this version", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
@@ -102,12 +243,13 @@ pub async fn render(
     Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
-    multipart: Multipart,
+    req: Request,
 ) -> ApiResult<Response> {
-    let mut form = Form::read(multipart, &state).await?;
+    let mut form = Form::from_request(req, &state).await?;
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = render_options(&mut form, &state)?;
     let stored = templates::named_in(&mut form, &state, &principal).await?;
     let from_store = stored.is_some();
     let template = match stored {
@@ -147,6 +289,7 @@ pub async fn render(
     let mut req = RenderRequest::new(template);
     req.data = data;
     req.ctx = ctx;
+    req.render_options = render_choices;
     let mut options = options::convert_options(&form)?;
     // Here PDF/A and PDF/UA happen where the step list says, not on every
     // conversion.
@@ -154,6 +297,8 @@ pub async fn render(
     options.pdfua = false;
     req.convert_options = options;
     req.steps = named_steps(&mut form)?;
+    sign_appearance(&mut form, &mut req.steps)?;
+    crate::signing::authorize_steps(&state.engines.signing, &principal, &req.steps)?;
     // Here, so a webhook request hears about a bad step list at once.
     state.engines.check_steps(&req.steps)?;
     req.output_name = form.output_name();
@@ -183,6 +328,7 @@ pub async fn render(
                 &options,
                 state.config.max_render_bytes,
                 state.config.api_timeout,
+                &req.render_options,
             )
             .await?;
         req.template = rusticdoc_core::Document::new(req.template.name.clone(), filled);
@@ -192,6 +338,82 @@ pub async fn render(
     run(state, hook, request_id(&headers), req).await
 }
 
+/// What the form asks of the template stage: `undefinedAsEmpty`, `lang`,
+/// `timezone`, `currency` and `translations`, checked here so a bad value is a
+/// 400 naming the field, and the service's dictionaries for the language.
+/// Reads `translations` as JSON, so call it before choosing the template: a
+/// `translations.json` file part is not one.
+pub(crate) fn render_options(
+    form: &mut Form,
+    state: &AppState,
+) -> ApiResult<rusticdoc_template::RenderOptions> {
+    use rusticdoc_template::locale;
+    let text = |name: &str| {
+        form.field(name)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let lang = match text("lang") {
+        None => None,
+        Some(raw) => Some(locale::normalize_lang(&raw).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "'lang' is {raw:?}, which is not a language tag such as fr, fr-CA or en-us"
+            ))
+        })?),
+    };
+    let timezone = text("timezone");
+    if let Some(tz) = &timezone {
+        locale::check_timezone(tz)
+            .map_err(|e| ApiError::bad_request(format!("'timezone': {e}")))?;
+    }
+    let currency = text("currency");
+    if let Some(code) = &currency
+        && (code.chars().count() > MAX_CURRENCY_CHARS || code.chars().any(char::is_control))
+    {
+        return Err(ApiError::bad_request(format!(
+            "'currency' is a code such as EUR, of at most {MAX_CURRENCY_CHARS} characters"
+        )));
+    }
+    let undefined_as_empty = form.bool("undefinedAsEmpty");
+    let mut keep = rusticdoc_template::Keep::default();
+    if let Some(list) = form.field("keep") {
+        for item in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            match item {
+                "macros" => keep.macros = true,
+                "objects" => keep.objects = true,
+                "externalLinks" => keep.external_links = true,
+                "privateLinks" => keep.private_links = true,
+                "all" => keep = rusticdoc_template::Keep::ALL,
+                other => {
+                    return Err(ApiError::bad_request(format!(
+                        "'keep' has '{other}'; use macros, objects, externalLinks, privateLinks or all"
+                    )));
+                }
+            }
+        }
+    }
+    let translations = match form.json("translations")? {
+        serde_json::Value::Object(map) if map.is_empty() => Default::default(),
+        value => rusticdoc_template::translate::parse_translations(&value, "translations")
+            .map_err(ApiError::bad_request)?,
+    };
+    let dictionary = state.dictionaries.for_lang(lang.as_deref());
+    Ok(rusticdoc_template::RenderOptions {
+        undefined_as_empty,
+        keep,
+        lang,
+        timezone,
+        currency,
+        translations,
+        dictionary,
+    })
+}
+
+/// Longest `currency` field: codes are three letters, and anything longer
+/// is printed as given.
+const MAX_CURRENCY_CHARS: usize = 16;
+
 /// The form's `steps` list. Steps that carry files or repeat
 /// (`watermark`, `stamp`, `embed`, `factur-x`) are built from their own
 /// fields, in the position the list names.
@@ -200,6 +422,10 @@ fn named_steps(form: &mut Form) -> ApiResult<Vec<Step>> {
     let carried = options::post_steps(form, false)?;
     let mut steps = Vec::new();
     for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        if name.eq_ignore_ascii_case("underlay") {
+            steps.push(options::underlay(form)?);
+            continue;
+        }
         let wanted: Option<fn(&Step) -> bool> = match name.to_ascii_lowercase().as_str() {
             "watermark" => Some(|s| matches!(s, Step::Watermark { .. })),
             "stamp" => Some(|s| matches!(s, Step::Stamp { .. })),
@@ -223,10 +449,38 @@ fn named_steps(form: &mut Form) -> ApiResult<Vec<Step>> {
     Ok(steps)
 }
 
+/// The `sign` step's appearance, from the fields `/v1/pdf/sign` reads: an
+/// image under `signatureImage` at `page`, `x`, `y` and `width`, or text at
+/// that place when no image is sent.
+fn sign_appearance(form: &mut Form, steps: &mut [Step]) -> ApiResult<()> {
+    let mut images = form.take_field("signatureImage");
+    if !steps.iter().any(|s| matches!(s, Step::Sign { .. })) {
+        if !images.is_empty() {
+            return Err(ApiError::bad_request(
+                "'signatureImage' is for the 'sign' step, and the steps have none",
+            ));
+        }
+        return Ok(());
+    }
+    if images.len() > 1 {
+        return Err(ApiError::bad_request(
+            "send at most one 'signatureImage' to show the signature with",
+        ));
+    }
+    let appearance = crate::routes::pdfops::appearance(form, images.pop())?;
+    for step in steps {
+        if let Step::Sign { options } = step {
+            options.appearance = appearance.clone();
+            options.validate()?;
+        }
+    }
+    Ok(())
+}
+
 /// Runs a request now, or hands it to a webhook task.
 pub async fn run(
     state: AppState,
-    hook: Option<Webhook>,
+    hook: Delivery,
     request_id: String,
     req: RenderRequest,
 ) -> ApiResult<Response> {
@@ -250,12 +504,17 @@ pub async fn run(
 /// `{{ batch.index }}`.
 #[utoipa::path(
     post, path = "/v1/render/batch", tag = "render",
-    request_body(content_type = "multipart/form-data", content = RenderForm),
+    request_body(content(
+        (RenderForm = "multipart/form-data"),
+        (RenderJson = "application/json"),
+    )),
     params(
         ("X-Rusticdoc-Webhook-Url" = Option<String>, Header, description = "Deliver the ZIP here instead of in the response"),
+        ("Prefer" = Option<String>, Header, description = "`respond-async` to run in the background and answer 202"),
     ),
     responses(
         (status = 200, description = "A ZIP of the rendered files", content_type = "application/zip", body = BinaryFile),
+        (status = 202, description = "Accepted as a background job (`Prefer: respond-async`)", body = crate::routes::jobs::JobSchema),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
     ),
@@ -266,14 +525,15 @@ pub async fn batch(
     Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
-    multipart: Multipart,
+    req: Request,
 ) -> ApiResult<Response> {
     // The route's time limit is the batch's; reading the form gets the usual one.
-    let read = Form::read(multipart, &state);
+    let read = Form::from_request(req, &state);
     let mut form = webhook::within(state.config.api_timeout, read).await?;
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = render_options(&mut form, &state)?;
     let stored = templates::named_in(&mut form, &state, &principal).await?;
     let template = match stored {
         Some(template) => template,
@@ -290,7 +550,9 @@ pub async fn batch(
             }
         },
     };
-    let steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
+    let mut steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
+    sign_appearance(&mut form, &mut steps)?;
+    crate::signing::authorize_steps(&state.engines.signing, &principal, &steps)?;
     state.engines.check_steps(&steps)?;
     let split_by = form
         .field("splitBy")
@@ -380,7 +642,7 @@ pub async fn batch(
                 }
             };
             let name = current
-                .text(&name_template, &one, MAX_BATCH_NAME_BYTES)
+                .text(&name_template, &one, MAX_BATCH_NAME_BYTES, &render_choices)
                 .await
                 .map_err(|e| match e {
                     rusticdoc_core::Error::Template(m) => {
@@ -388,7 +650,9 @@ pub async fn batch(
                     }
                     other => other,
                 })?;
-            let rendered = current.render(&template, &one, &ctx, max_render).await?;
+            let rendered = current
+                .render(&template, &one, &ctx, max_render, &render_choices)
+                .await?;
             if !steps.is_empty() {
                 session = None;
             }
@@ -469,24 +733,33 @@ pub struct Validation {
     /// `part`, `place` and `snippet` where known.
     #[schema(value_type = Vec<Object>)]
     pub diagnostics: Vec<serde_json::Value>,
+    /// Fonts the template names that the service has neither loaded nor
+    /// mapped to a substitute with the same metrics. Text set in them renders
+    /// in a fallback font, which moves line and page breaks. Each also appears
+    /// in `diagnostics` as a warning.
+    pub missing_fonts: Vec<String>,
 }
 
 /// Checks a template against sample data without converting anything.
 #[utoipa::path(
     post, path = "/v1/templates/validate", tag = "render",
-    request_body(content_type = "multipart/form-data", content = RenderForm),
+    request_body(content(
+        (RenderForm = "multipart/form-data"),
+        (RenderJson = "application/json"),
+    )),
     responses((status = 200, description = "The validation result", body = Validation), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn validate(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-    multipart: Multipart,
+    req: Request,
 ) -> ApiResult<Json<Validation>> {
-    let mut form = Form::read(multipart, &state).await?;
+    let mut form = Form::from_request(req, &state).await?;
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    let render_choices = render_options(&mut form, &state)?;
     let template = match templates::named_in(&mut form, &state, &principal).await? {
         Some(template) => template,
         None => form.require_file("a template file, or a 'templateId',")?,
@@ -509,8 +782,28 @@ pub async fn validate(
             &ctx,
             state.config.max_render_bytes,
             state.config.api_timeout,
+            &render_choices,
         )
         .await?;
+    let mut diagnostics = diagnostics;
+    let wanted = rusticdoc_core::fonts::referenced(&template);
+    let missing_fonts = if wanted.is_empty() {
+        Vec::new()
+    } else {
+        let loaded = crate::routes::fonts::loaded(&state).await?;
+        rusticdoc_core::fonts::missing(&wanted, &loaded)
+    };
+    for family in &missing_fonts {
+        diagnostics.push(rusticdoc_template::Diagnostic {
+            severity: rusticdoc_template::Severity::Warning,
+            message: format!(
+                "the template uses the font '{family}', which the service does not have; \
+                 another font will stand in, which can move line and page breaks. \
+                 Upload it to /v1/fonts or mount it in the fonts directory"
+            ),
+            location: None,
+        });
+    }
     let error = diagnostics
         .iter()
         .find(|d| matches!(d.severity, rusticdoc_template::Severity::Error))
@@ -528,5 +821,6 @@ pub async fn validate(
             .iter()
             .map(|d| serde_json::to_value(d).unwrap_or_default())
             .collect(),
+        missing_fonts,
     }))
 }

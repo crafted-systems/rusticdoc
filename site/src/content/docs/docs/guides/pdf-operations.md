@@ -138,13 +138,16 @@ head -c4 signed.pdf | grep -q %PDF
 
 #### With a certificate
 
-The service signs with the key and certificate in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT` (see [configuration](/docs/reference/configuration/#pdf-signing)). A request never carries a key. Without them configured, this answers `503` and says so.
+The service signs with the key and certificate in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or with a named key the request chooses (see [configuration](/docs/reference/configuration/#pdf-signing)). A request never carries a key. Without one configured, this answers `503` and says so.
 
 | Field | Required | Meaning |
 |---|---|---|
 | `files` | Yes | The PDF first, then at most one PNG or JPEG to show the signature with |
 | `signature` | Yes | `certificate` |
-| `page`, `x`, `y`, `width` | With an image | Where the image goes, as above. `page` defaults to 1. Without an image the signature is invisible, and these must be left out |
+| `page`, `x`, `y`, `width` | No | Where the signature is shown. With an image, the image goes there, as above. With no image, a box of text goes there: who signed (`signerName`, or the certificate's common name), the date and time, and the reason and location when given; `width` defaults to 200 points. `page` defaults to 1. Leave them all out for an invisible signature |
+| `level` | No | `b-b`, `b-t`, `b-lt` or `b-lta`; see [levels](#levels). Default `RUSTICDOC_SIGNING_LEVEL`, which is `b-b` unless set |
+| `certify` | No | Certify the document instead of approving it, with a DocMDP permission: `1` no changes at all, `2` filling forms and signing, `3` that and annotations. Only a document's first signature can certify |
+| `signingKey` | No | A named key from `RUSTICDOC_SIGNING_KEYS` instead of the default one. A caller not on its allow list gets `403` |
 | `reason` | No | Why the document was signed |
 | `location` | No | Where it was signed |
 | `contactInfo` | No | How to reach the signer |
@@ -154,7 +157,8 @@ Each text field holds at most 1,024 bytes.
 
 ```bash
 curl -F files=@contract.pdf -F signature=certificate \
-  -F reason=Approved -F location=Nairobi \
+  -F reason=Approved -F location=Nairobi -F level=b-lt \
+  -F x=360 -F y=72 \
   http://localhost:9027/v1/pdf/sign -o signed.pdf
 pdfsig signed.pdf
 ```
@@ -164,18 +168,31 @@ What the service writes:
 - An incremental update. The original bytes stay as they are, at the start of the file, and the signature follows them, so an earlier signature in the file stays valid for its revision.
 - A signature field in the AcroForm, with its widget on the page, and a `/Sig` dictionary with `/Filter /Adobe.PPKLite`, `/SubFilter /ETSI.CAdES.detached`, `/ByteRange` covering the whole file but the signature, and the signing time in `/M`.
 - In `/Contents`, a detached CMS signature over the SHA-256 of those byte ranges. Its signed attributes are content-type, message-digest and ESS signing-certificate-v2. It carries no signing-time attribute, because PAdES puts the time in `/M`. The signer's certificate and any chain certificates are included.
-- With an image, the image as the widget's appearance, so it is part of the signature rather than of the page.
+- With an image or text, that as the widget's appearance, so it is part of the signature rather than of the page.
+- When certifying, a `/Reference` to the DocMDP transform with the permission in its parameters, and the catalog's `/Perms /DocMDP` pointing at the signature. A document certified with permission 1 refuses later approval signatures with `400`.
 
-That is PAdES baseline B-B style. It has been checked with poppler's `pdfsig`, which reports the signature as valid and covering the total document, and with pyHanko, which reports it `VALID`. It has not been opened in Adobe Acrobat.
+##### Levels
+
+| `level` | Adds | Needs |
+|---|---|---|
+| `b-b` | The signature alone. A validator knows when it was made only from the signer's claim | A key |
+| `b-t` | An RFC 3161 timestamp over the signature value, from the timestamp authority, in the `id-aa-signatureTimeStampToken` unsigned attribute. The signing time is now attested by a third party | `RUSTICDOC_SIGNING_TSA_URL`, and `RUSTICDOC_SIGNING_TSA_CERT` to trust its tokens through |
+| `b-lt` | A second incremental update with a `/DSS`: every certificate of the signer's and the authority's chains, an OCSP response for each that names a responder and a CRL for each that names only a distribution point, and a `/VRI` entry for the signature keyed by the SHA-1 of its `/Contents`. The signature can be validated from the file alone, after the certificates expire or the responders go away | Responders and distribution points the service can reach |
+| `b-lta` | A third update: a document timestamp (`/Type /DocTimeStamp`, `/SubFilter /ETSI.RFC3161`) over the whole file, DSS included, which can be renewed later to keep the evidence alive | The same |
+
+The timestamp authority, OCSP responders, CRL distribution points and certificate issuers are reached under the [outbound rules](/docs/reference/configuration/#timestamps-and-validation-data) for signing: allow and deny lists, private addresses refused unless allowed, no redirects, and time and size limits. Nothing they send is taken on trust: a timestamp token must chain to `RUSTICDOC_SIGNING_TSA_CERT` with the timestamping usage, and OCSP responses and CRLs must be signed by the certificate's issuer (or a responder it authorised) and be current; see [configuration](/docs/reference/configuration/#timestamps-and-validation-data). If any of them fails, the request fails with `502` and names it; there is no file at a lower level than asked for. A certificate an OCSP responder or CRL reports revoked fails the request with `503`.
+
+Each level has been checked with poppler's `pdfsig`, which reports the signature valid (covering the total document for B-B and B-T, and its revision for B-LT and B-LTA, whose later updates it does not check), and with pyHanko 0.38, which reports it `VALID`. With the timestamp authority and revocation servers stopped, pyHanko validates the B-LT and B-LTA files with revocation checking on from what they hold, the B-LTA document timestamp included. `make sign-check` repeats this against a local timestamp authority, OCSP responder and CRL. Nothing has been opened in Adobe Acrobat.
 
 :::note[Limits]
-- There is no timestamp from a timestamp authority, so this is B-B, not B-T or LTV. A validator knows when the document was signed only from the signer's own claim, and cannot validate the signature once the certificate has expired.
-- One key per deployment, RSA or ECDSA P-256. Everyone who can call this route signs as that certificate, so put it behind [authentication](/docs/guides/authentication/).
+- RSA (PKCS#1 v1.5, SHA-256) or ECDSA P-256 keys, from PEM files or a PKCS#11 token. Everyone who can call this route signs with the default key unless `RUSTICDOC_SIGNING_ALLOW` restricts it, so put it behind [authentication](/docs/guides/authentication/).
 - One signature per request. To sign again, send the signed file back.
-- A self-signed certificate gives a signature that validates as intact, with the signer reported as untrusted.
+- A self-signed certificate gives a signature that validates as intact, with the signer reported as untrusted, and has nothing to put in a DSS.
+- Text appearances use Helvetica, so characters outside Windows-1252 show as `?`.
+- The document timestamp of B-LTA is not renewed by the service; renew it with a tool such as pyHanko's `ltaupdate` before the authority's certificate expires.
 :::
 
-`sign` is also a [pipeline step](/docs/guides/pipeline/), and `rusticdoc pdf sign --key key.pem --cert cert.pem` signs from the command line with local files.
+`sign` is also a [pipeline step](/docs/guides/pipeline/) with the same options, and `rusticdoc pdf sign --key key.pem --cert cert.pem` signs from the command line with local files or a `pkcs11:` key, with `--level`, `--certify` and `--tsa-url`.
 
 ## Finish and secure
 

@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod convert;
+pub mod dictionaries;
 pub mod error;
 pub mod fonts;
 pub mod html;

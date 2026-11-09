@@ -18,38 +18,45 @@ This page lists what does not work, what has not been checked, and what could su
 - **Word's default font, Aptos, is not in the image.** A document set in it converts to PDF in a substitute font, with different line breaks, until you [upload Aptos](/docs/guides/fonts/) or choose a font the image has.
 - **Chinese, Japanese and Korean text in a serif face comes out in sans serif.** Noto Serif CJK is left out of the image, which saves 53 MB, so text set in a face such as SimSun, MS Mincho or Batang converts in Noto Sans CJK. Upload or mount Noto Serif CJK and those faces use it with no other change. See [Chinese, Japanese and Korean fonts](/docs/guides/fonts/#chinese-japanese-and-korean-fonts).
 - **Barcodes have been read by software decoders, not by a scanner.** ZXing and ZBar decode every symbology to its exact value, from the document and from its PDF at 150 and 300 dpi. No hardware or phone reader has been tried.
-- **Repeating a whole sheet in XLSX or ODS is not supported,** only rows within one, and neither is a row loop nested in another row block of the same sheet.
-- **ODS formulas are not re-based.**
-- **Charts are not supported in ODF templates.**
-- **Macros and OLE objects in a template are not stripped.** LibreOffice will not run or fetch them when converting, but a request with no conversion step returns them in its output.
+- **A repeated sheet or rows are not followed everywhere.** Formulas, print areas, charts and tables on the repeated sheet follow its copies, and formulas follow repeated rows. Hyperlinks to a sheet, data validation, conditional formatting, pivot caches, charts that point at repeated rows, and formulas on one sheet that point at repeated rows on another are left as the template had them. A chart on an ODS sheet that a sheet loop repeats is not copied. See [spreadsheets](/docs/templates/office/).
+- **Rendering takes out macros, OLE objects, external links and private hyperlinks,** and refuses a template part it cannot read with certainty, such as one in an encoding other than UTF-8 or UTF-16, or a content-type entry naming no part. A template that relies on one of these needs `keep`. See [what rendering takes out](/docs/templates/office/#what-rendering-takes-out). The stand-ins for macro projects and OLE objects in its tests are not working macros, since none could be made without Office.
+- **Shapes that move along a loop are PowerPoint only.** `shift` refuses other formats.
 
 ## PDF output
 
 - **HTML is laid out by Fulgur, not a browser.** JavaScript never runs and no URL is rendered. Fulgur is before version 1.0: text in `@page` margin boxes ignores its alignment, and an image in a flex row with only one of its width and height set is not drawn. See [HTML to PDF](/docs/guides/html/#limits).
 - **Filled PDF forms have not been opened in Acrobat.** Editable and flattened forms show their values in Chrome and Preview.
-- **Text the service draws into a PDF is Latin only, in Helvetica.** That means field appearances and annotation values. Other characters draw as `?`. Field values are stored in full, so a viewer that redraws the field still shows them.
+- **Text the service draws into form fields and annotations uses the fonts the service has.** Latin text is drawn in Helvetica as before. Other scripts are shaped and drawn in a font found for them, so a script with no font in the image or the fonts directory draws nothing. Watermark and stamp text is still Latin only. Chrome has not been checked for these fields.
 - **`/v1/pdf/sign` places only a signature image unless you send `signature=certificate`.** The default is not a cryptographic signature.
 
 ## PDF signatures
 
-- **Signatures are PAdES B-B style only.** There is no timestamp from a timestamp authority (B-T), and no revocation data or document timestamp (B-LT, B-LTA). A validator has only the signer's claimed signing time, and cannot validate a signature after the certificate expires.
-- **Signed files have been validated with poppler's `pdfsig` and with pyHanko, not in Adobe Acrobat.**
-- **There is one signing key per deployment,** from `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`. Every caller who can reach the route signs as that certificate. Keys in an HSM or a cloud KMS are not supported, nor are encrypted key files.
+- **The service does not renew archive timestamps.** A B-LTA signature stays verifiable for as long as its document timestamp's certificate is valid. Extend it later with a tool such as pyHanko's `ltaupdate`.
+- **Signed files have been validated with poppler's `pdfsig` and with pyHanko at every level, not in Adobe Acrobat.**
+- **B-LT and B-LTA need certificates that name an OCSP responder or a CRL.** Without one, the request answers `502`. A timestamp authority needs a trust anchor in `RUSTICDOC_SIGNING_TSA_CERT` and an `https` URL.
 - **RSA and ECDSA P-256 keys only,** always with SHA-256.
-- **One signature per request.** The `sign` step on `/v1/render` is always invisible; a visible signature needs `/v1/pdf/sign`.
+- **One signature per request.**
 - **The signature image ignores page rotation,** and the image's transparency is dropped, as for stamps.
-- **A document certified with DocMDP is not checked** before another signature is added, so signing one that forbids changes breaks its certification.
+- **Keys in a cloud KMS and encrypted key files are not supported.** Keys are PEM files or live in a PKCS#11 token, which was tested with SoftHSM, not a hardware module.
 - **PDFs from LibreOffice are not byte-identical across architectures or runs.** Its layout moves text by up to hundredths of a point between processors, and each PDF gets its own dates and ids. `make golden` compares 14 outputs from the amd64 and arm64 images: the Office and text outputs and the PDF form the service fills itself are byte-identical, and LibreOffice's PDFs match as page images or in layout within 0.25 pt.
+
+## Languages
+
+- **Numbers, money and dates follow 62 languages and regions,** from CLDR 48. Another language falls back to its base language, then to the formatting used without one. See [translations and settings](/docs/templates/translations/).
+- **`words` spells numbers in English, French, Belgian and Swiss French, and Ukrainian only.** A template whose `lang` is another language gets English.
+- **`duration("human")` writes English.**
 
 ## Fonts
 
-- **A template that uses a font the service lacks is not reported.** Check `GET /v1/fonts` and the `x-fonts-used` header.
-- **Fonts are one set per deployment, not per caller.** Only admin keys can change them, not basic auth or OpenID Connect users.
+- **The missing-font report reads a document's text, styles and theme,** not fonts used only in an embedded object or a chart. See [find fonts a template needs](/docs/guides/fonts/#find-fonts-a-template-needs).
+- **Fonts are one set per deployment, not per caller.**
 
 ## Stored templates
 
-- **A stored template cannot be changed.** Store the new one and use its id. There are no versions or aliases yet.
-- **Replacing an API key leaves its templates behind** under the default `RUSTICDOC_STORE_SCOPE=caller`.
+- **A stored template cannot be changed.** Store the new one and point an [alias](/docs/guides/stored-templates/) at it.
+- **Replacing a key in `RUSTICDOC_API_KEYS` leaves its templates behind** under the default `RUSTICDOC_STORE_SCOPE=caller`. A key in `RUSTICDOC_TENANT_KEYS` belongs to its tenant, which keeps them. See [authentication](/docs/guides/authentication/).
+- **Background jobs, aliases, variables and previews need a store.** Without `RUSTICDOC_STORE` they answer `501`.
+- **OpenID Connect admin rules have been tested with local tokens,** not against a real identity provider.
 - **Replicas storing at the same moment can pass the store's limits** by what is in flight.
 
 ## Limits on rendering

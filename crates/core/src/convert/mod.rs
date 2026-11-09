@@ -139,6 +139,22 @@ struct Inner {
     queued: AtomicU64,
 }
 
+/// One conversion waiting for a worker, counted while it lives.
+struct Queued<'a>(&'a AtomicU64);
+
+impl<'a> Queued<'a> {
+    fn enter(count: &'a AtomicU64) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Self(count)
+    }
+}
+
+impl Drop for Queued<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// The seed directory: the bridge script and the initialised profile.
 struct Seed {
     _dir: tempfile::TempDir,
@@ -290,9 +306,11 @@ impl LibreOffice {
             )));
         }
         options.validate()?;
-        self.inner.queued.fetch_add(1, Ordering::Relaxed);
+        // Counted out by a guard, so a caller that hangs up while it waits
+        // leaves the queue too, rather than inflating it for good.
+        let waiting = Queued::enter(&self.inner.queued);
         let permit = self.inner.slots.clone().acquire_owned().await;
-        self.inner.queued.fetch_sub(1, Ordering::Relaxed);
+        drop(waiting);
         let permit =
             permit.map_err(|_| Error::EngineUnavailable("LibreOffice pool closed".into()))?;
         let dedicated = !options.fonts.is_empty();

@@ -26,9 +26,9 @@ use crate::job::Document;
 use crate::pdfops::fixtures;
 
 /// A throwaway key and a self-signed certificate for it, as PEM.
-struct TestKey {
-    key_pem: String,
-    cert_pem: String,
+pub(super) struct TestKey {
+    pub key_pem: String,
+    pub cert_pem: String,
 }
 
 fn params(name: &str) -> CertificateParams {
@@ -46,7 +46,7 @@ fn params(name: &str) -> CertificateParams {
     params
 }
 
-fn self_signed(alg: &'static rcgen::SignatureAlgorithm) -> TestKey {
+pub(super) fn self_signed(alg: &'static rcgen::SignatureAlgorithm) -> TestKey {
     let key = KeyPair::generate_for(alg).unwrap();
     let cert = params("rusticdoc test signer").self_signed(&key).unwrap();
     TestKey {
@@ -55,36 +55,61 @@ fn self_signed(alg: &'static rcgen::SignatureAlgorithm) -> TestKey {
     }
 }
 
-fn signer(key: &TestKey) -> Signer {
+pub(super) fn signer(key: &TestKey) -> Signer {
     Signer::from_pem_at(key.key_pem.as_bytes(), key.cert_pem.as_bytes(), now()).unwrap()
 }
 
-fn now() -> SystemTime {
+pub(super) fn now() -> SystemTime {
     // 2026-10-26T07:33:20Z, inside every test certificate's validity.
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_793_000_000)
 }
 
 /// What the checks found, for the tests to look at further.
-struct Verified {
-    signed_data: SignedData,
-    byte_range: [usize; 4],
+pub(super) struct Verified {
+    pub signed_data: SignedData,
+    pub byte_range: [usize; 4],
+    /// The bytes `/Contents` stands for, padding included.
+    pub contents: Vec<u8>,
+}
+
+/// Every `/ByteRange` in the file, in order.
+pub(super) fn byte_ranges(bytes: &[u8]) -> Vec<[usize; 4]> {
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(at) = bytes[from..].windows(11).position(|w| w == b"/ByteRange ") {
+        let rest = &bytes[from + at + 11..];
+        let open = rest.iter().position(|&b| b == b'[').unwrap();
+        let close = rest.iter().position(|&b| b == b']').unwrap();
+        let numbers: Vec<usize> = std::str::from_utf8(&rest[open + 1..close])
+            .unwrap()
+            .split_ascii_whitespace()
+            .map(|n| n.parse().unwrap())
+            .collect();
+        found.push(numbers.try_into().unwrap());
+        from += at + 11;
+    }
+    found
 }
 
 /// The last `/ByteRange` in the file.
 fn byte_range(bytes: &[u8]) -> [usize; 4] {
-    let at = bytes
-        .windows(11)
-        .rposition(|w| w == b"/ByteRange ")
-        .expect("a byte range");
-    let rest = &bytes[at + 11..];
-    let open = rest.iter().position(|&b| b == b'[').unwrap();
-    let close = rest.iter().position(|&b| b == b']').unwrap();
-    let numbers: Vec<usize> = std::str::from_utf8(&rest[open + 1..close])
-        .unwrap()
-        .split_ascii_whitespace()
-        .map(|n| n.parse().unwrap())
-        .collect();
-    numbers.try_into().unwrap()
+    *byte_ranges(bytes).last().expect("a byte range")
+}
+
+/// The bytes `/Contents` stands for in the signature with byte range `br`.
+pub(super) fn contents(signed: &[u8], br: [usize; 4]) -> Vec<u8> {
+    let contents = &signed[br[1]..br[2]];
+    assert_eq!(contents[0], b'<');
+    assert_eq!(contents[contents.len() - 1], b'>');
+    hex::decode(&contents[1..contents.len() - 1]).unwrap()
+}
+
+/// The SHA-256 of the two ranges of `br`.
+pub(super) fn ranges_digest(signed: &[u8], br: [usize; 4]) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(&signed[br[0]..br[0] + br[1]]);
+    hasher.update(&signed[br[2]..br[2] + br[3]]);
+    hasher.finalize().to_vec()
 }
 
 /// Checks a signature made over `original` without trusting the signer's
@@ -92,13 +117,26 @@ fn byte_range(bytes: &[u8]) -> [usize; 4] {
 /// `/Contents`, their SHA-256 is the message-digest attribute, and the
 /// signature verifies with the public key of `cert_pem`'s first certificate.
 fn verify(original: &[u8], signed: &[u8], cert_pem: &str) -> Verified {
+    let br = byte_range(signed);
+    assert_eq!(br[2] + br[3], signed.len(), "the ranges reach the end");
+    verify_revision(original, signed, cert_pem, byte_ranges(signed).len() - 1)
+}
+
+/// [`verify`] for the `nth` signature in the file, which later updates may
+/// follow.
+pub(super) fn verify_revision(
+    original: &[u8],
+    signed: &[u8],
+    cert_pem: &str,
+    nth: usize,
+) -> Verified {
     assert!(
         signed.starts_with(original),
         "the original bytes are a prefix"
     );
-    let br = byte_range(signed);
+    let br = byte_ranges(signed)[nth];
     assert_eq!(br[0], 0);
-    assert_eq!(br[2] + br[3], signed.len(), "the ranges reach the end");
+    assert!(br[2] + br[3] <= signed.len(), "the ranges stay in the file");
     assert!(br[1] > original.len(), "the signature is in the update");
     let contents = &signed[br[1]..br[2]];
     assert_eq!(contents[0], b'<');
@@ -121,10 +159,7 @@ fn verify(original: &[u8], signed: &[u8], cert_pem: &str) -> Verified {
     );
     assert_eq!(signed_data.encap_content_info.econtent_type, ID_DATA);
 
-    let mut hasher = Sha256::new();
-    hasher.update(&signed[br[0]..br[0] + br[1]]);
-    hasher.update(&signed[br[2]..br[2] + br[3]]);
-    let digest = hasher.finalize().to_vec();
+    let digest = ranges_digest(signed, br);
 
     let signer_info = signed_data.signer_infos.0.get(0).unwrap();
     let attrs = signer_info.signed_attrs.as_ref().unwrap();
@@ -186,11 +221,15 @@ fn verify(original: &[u8], signed: &[u8], cert_pem: &str) -> Verified {
     Verified {
         signed_data,
         byte_range: br,
+        contents: der,
     }
 }
 
 /// The signature field the update added, and its `/V`.
-fn signature_field(signed: &[u8], name: &str) -> (::lopdf::Dictionary, ::lopdf::Dictionary) {
+pub(super) fn signature_field(
+    signed: &[u8],
+    name: &str,
+) -> (::lopdf::Dictionary, ::lopdf::Dictionary) {
     let pdf = Pdf::load_mem(signed).unwrap();
     let acroform = match pdf.catalog().unwrap().get(b"AcroForm").unwrap() {
         Object::Reference(id) => pdf.get_dictionary(*id).unwrap().clone(),
@@ -222,7 +261,7 @@ fn rsa_invisible_signature_verifies_and_keeps_the_original() {
         location: Some("Nairobi".into()),
         contact_info: Some("signer@example.com".into()),
         signer_name: Some("Zoë Example".into()),
-        appearance: None,
+        ..SignOptions::default()
     };
     let signed = sign_at(
         &Document::new("in.pdf", original.clone()),
@@ -277,7 +316,7 @@ fn ecdsa_visible_signature_uses_the_image_as_its_appearance() {
             x: 100.0,
             y: 72.0,
             width: Some(150.0),
-            image: fixtures::PNG_DOT.to_vec(),
+            image: Some(fixtures::PNG_DOT.to_vec()),
             name: "sig.png".into(),
         }),
         ..SignOptions::default()
@@ -530,7 +569,7 @@ fn bad_requests_are_client_errors() {
             x: 0.0,
             y: 0.0,
             width: None,
-            image: fixtures::PNG_DOT.to_vec(),
+            image: Some(fixtures::PNG_DOT.to_vec()),
             name: "sig.png".into(),
         }),
         ..SignOptions::default()
@@ -541,7 +580,7 @@ fn bad_requests_are_client_errors() {
             x: 0.0,
             y: 0.0,
             width: None,
-            image: b"GIF89a".to_vec(),
+            image: Some(b"GIF89a".to_vec()),
             name: "sig.gif".into(),
         }),
         ..SignOptions::default()

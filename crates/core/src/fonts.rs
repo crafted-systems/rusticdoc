@@ -349,20 +349,41 @@ fn collect(xml: &str, needle: &str, out: &mut BTreeSet<String>) {
     }
 }
 
-/// The families in `wanted` that neither a loaded face nor a metric
-/// alias in the image's fontconfig can serve.
+/// The image's fontconfig rules, compiled in so the report below agrees with
+/// what LibreOffice and the PDF stage will actually substitute.
+const FONTS_CONF: &str = include_str!("../../../deploy/fonts.conf");
+
+/// Each aliased family in the image's fontconfig, lowercased, with the
+/// families it accepts in its place, in order.
+fn aliases() -> &'static [(String, Vec<String>)] {
+    static ALIASES: std::sync::OnceLock<Vec<(String, Vec<String>)>> = std::sync::OnceLock::new();
+    ALIASES.get_or_init(|| {
+        let families = |xml: &str| -> Vec<String> {
+            xml.split("<family>")
+                .skip(1)
+                .filter_map(|rest| rest.split_once("</family>"))
+                .map(|(name, _)| name.trim().to_lowercase())
+                .collect()
+        };
+        FONTS_CONF
+            .split("<alias")
+            .skip(1)
+            .filter_map(|rest| rest.split_once("</alias>").map(|(body, _)| body))
+            .filter_map(|body| {
+                let mut names = families(body);
+                (!names.is_empty()).then(|| {
+                    let from = names.remove(0);
+                    (from, names)
+                })
+            })
+            .collect()
+    })
+}
+
+/// The families in `wanted` that neither a loaded face nor an alias in the
+/// image's fontconfig can serve. Those render in some fallback font, which
+/// changes line breaks and can change page breaks.
 pub fn missing(wanted: &[String], loaded: &[FontInfo]) -> Vec<String> {
-    const ALIASES: &[(&str, &str)] = &[
-        ("arial", "liberation sans"),
-        ("helvetica", "liberation sans"),
-        ("times new roman", "liberation serif"),
-        ("times", "liberation serif"),
-        ("courier new", "liberation mono"),
-        ("courier", "liberation mono"),
-        ("calibri", "carlito"),
-        ("cambria", "caladea"),
-        ("segoe ui", "noto sans"),
-    ];
     let have: BTreeSet<String> = loaded.iter().map(|f| f.family.to_lowercase()).collect();
     wanted
         .iter()
@@ -371,9 +392,10 @@ pub fn missing(wanted: &[String], loaded: &[FontInfo]) -> Vec<String> {
             if have.contains(&lower) {
                 return false;
             }
-            !ALIASES
+            !aliases()
                 .iter()
-                .any(|(from, to)| *from == lower && have.contains(*to))
+                .filter(|(from, _)| *from == lower)
+                .any(|(_, to)| to.iter().any(|family| have.contains(family)))
         })
         .cloned()
         .collect()
@@ -474,6 +496,21 @@ mod tests {
             "carlito".into(),
         ];
         assert_eq!(missing(&wanted, &loaded), vec!["Comic Sans MS"]);
+    }
+
+    #[test]
+    fn the_report_follows_the_image_fontconfig() {
+        // Serif CJK names fall back to Noto Sans CJK when the serif is absent,
+        // as fonts.conf says; Aptos has no alias, so it is reported.
+        let loaded = vec![face("Noto Sans CJK SC"), face("Noto Sans CJK JP")];
+        let wanted = vec![
+            "SimSun".to_string(),
+            "MS Mincho".into(),
+            "Aptos".into(),
+            "Segoe UI".into(),
+        ];
+        assert_eq!(missing(&wanted, &loaded), vec!["Aptos", "Segoe UI"]);
+        assert!(aliases().len() > 40, "{}", aliases().len());
     }
 
     #[test]

@@ -1482,3 +1482,449 @@ async fn read_head(stream: &mut tokio::net::TcpStream) -> String {
         .unwrap_or(0);
     String::from_utf8_lossy(&buffer[..read]).into_owned()
 }
+
+/// True while a process with `pid` exists.
+fn process_exists(pid: i32) -> bool {
+    // SAFETY: kill(2) with signal 0 only checks for the process.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// A client that hangs up mid-conversion stops the work: its LibreOffice
+/// worker is killed, a conversion queued behind it never starts, and the pool
+/// is free again for the next caller.
+#[tokio::test]
+async fn a_client_that_disconnects_cancels_its_conversion() {
+    use tokio::io::AsyncWriteExt;
+    let dir = tempfile::tempdir().unwrap();
+    // The bridge records each request it takes and its "soffice" pid, then
+    // hangs on the first request until it is killed and answers later ones.
+    let script = dir.path().join("bridge.py");
+    std::fs::write(
+        &script,
+        format!(
+            r#"
+import json, os, subprocess, sys, time
+child = subprocess.Popen(["sleep", "3600"], start_new_session=True).pid
+log = {log:?}
+print(json.dumps({{"ready": True, "soffice_pid": child}}), flush=True)
+for line in sys.stdin:
+    req = json.loads(line)
+    with open(log, "a") as f:
+        f.write("%d %s\n" % (child, req["input"]))
+    if not os.path.exists(log + ".hung"):
+        open(log + ".hung", "w").close()
+        time.sleep(3600)
+    with open(req["output"], "w") as f:
+        f.write("%PDF-1.4 fake")
+    print(json.dumps({{"id": req["id"], "ok": True, "pages": 1, "ms": 1}}), flush=True)
+"#,
+            log = dir.path().join("taken").display().to_string()
+        ),
+    )
+    .unwrap();
+    let mut c = config();
+    c.api_timeout = Duration::from_secs(60);
+    let mut state = AppState::new(c);
+    let office = LibreOffice::new("/nonexistent/soffice".into(), 1).with_bridge(script);
+    let engines = Arc::new(Engines {
+        libreoffice: Some(office.clone()),
+        ..Engines::default()
+    });
+    state.pipeline = Pipeline::new(engines.clone(), state.config.api_timeout);
+    state.engines = engines;
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let limits = rusticdoc_server::ConnectionLimits {
+        header_timeout: Duration::from_secs(5),
+        max_connections: 16,
+        max_connections_per_peer: 0,
+        stall_timeout: Duration::from_secs(60),
+        write_timeout: Duration::from_secs(60),
+        body_timeout: Duration::from_secs(60),
+    };
+    let task = tokio::spawn(rusticdoc_server::serve_on(
+        listener,
+        app(state),
+        limits,
+        std::future::pending::<()>(),
+    ));
+    let request = |name: &str| {
+        let parts: [Part<'_>; 1] = [("files", Some(name), b"hello")];
+        let body = body_of(&parts);
+        let mut out = format!(
+            "POST /v1/convert HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary={BOUNDARY}\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(&body);
+        out
+    };
+    let taken = dir.path().join("taken");
+    let wait_for = |what: &'static str, check: Box<dyn Fn() -> bool>| async move {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !check() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+
+    // The first conversion reaches the worker and hangs; the second queues.
+    let mut first = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    first.write_all(&request("first.txt")).await.unwrap();
+    let log = taken.clone();
+    wait_for(
+        "the first conversion never started",
+        Box::new(move || log.exists()),
+    )
+    .await;
+    let mut second = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    second.write_all(&request("second.txt")).await.unwrap();
+    let pool = office.clone();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while pool.stats().0 != 1 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the second never queued"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let soffice: i32 = std::fs::read_to_string(&taken)
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(process_exists(soffice));
+
+    // Both hang up. The hung worker and its LibreOffice go, the queued
+    // conversion leaves the queue without reaching a worker.
+    drop(second);
+    drop(first);
+    wait_for(
+        "the hung LibreOffice outlived its client",
+        Box::new(move || !process_exists(soffice)),
+    )
+    .await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while office.stats().0 != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the queued conversion stayed queued"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let lines = std::fs::read_to_string(&taken).unwrap();
+    assert_eq!(
+        lines.lines().count(),
+        1,
+        "the queued conversion ran: {lines}"
+    );
+
+    // The pool serves the next caller.
+    let mut third = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    third.write_all(&request("third.txt")).await.unwrap();
+    let answer = read_head(&mut third).await;
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    task.abort();
+}
+
+// ---------------------------------------------------------------- admins and tenants
+
+/// A request to a route only an admin may use. Without a store an admin gets
+/// 501 and anyone else 403, so the answer says which the caller was.
+fn admin_only(auth: Option<(&str, String)>) -> Request<Body> {
+    let mut req = Request::delete(format!("/v1/fonts/{}", "a".repeat(64)));
+    if let Some((name, value)) = auth {
+        req = req.header(name, value);
+    }
+    req.body(Body::empty()).unwrap()
+}
+
+fn basic(user: &str, pass: &str) -> Option<(&'static str, String)> {
+    use base64::Engine as _;
+    let pair = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
+    Some(("authorization", format!("Basic {pair}")))
+}
+
+#[tokio::test]
+async fn the_basic_auth_user_is_an_admin_only_when_the_operator_says() {
+    let mut c = config();
+    c.basic_auth = Some(("ada".into(), "pw".into()));
+    let res = service(c.clone())
+        .oneshot(admin_only(basic("ada", "pw")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN, "not by default");
+    assert!(text(res).await.contains("RUSTICDOC_BASIC_AUTH_ADMIN"));
+
+    c.basic_auth_admin = true;
+    let res = service(c.clone())
+        .oneshot(admin_only(basic("ada", "pw")))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "past the admin check"
+    );
+    let res = service(c.clone())
+        .oneshot(admin_only(basic("ada", "wrong")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // An API key beside it is not an admin for that.
+    c.api_keys = vec!["caller".into()];
+    let res = service(c)
+        .oneshot(admin_only(Some(("x-api-key", "caller".into()))))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_settings_without_their_credentials_stop_the_service() {
+    let from = |vars: &[(&str, &str)]| {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Config::from_vars(&move |name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()))
+    };
+    for vars in [
+        &[("RUSTICDOC_BASIC_AUTH_ADMIN", "true")][..],
+        &[("RUSTICDOC_OIDC_ADMIN_SUBJECTS", "alice")],
+        &[("RUSTICDOC_OIDC_ADMIN_CLAIM", "groups=admins")],
+    ] {
+        assert!(from(vars).check().is_err(), "{vars:?}");
+    }
+}
+
+const OIDC_KEY: &str = "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgmJ9nJkaP9Rzg5Wma
+6ZS+eBkD12USL+y5CHfhMXkuEcahRANCAASsdQ+QOJ1w4B4l7IUIUui+zWM2m4Zj
+Yfo0bRmNQhP1WmUPaBpWQtZEqxmMlQWeJzftl7o5GzJCX1oJHh9aL/HF
+-----END PRIVATE KEY-----
+";
+const OIDC_JWKS: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","kid":"one","use":"sig","alg":"ES256",
+    "x":"rHUPkDidcOAeJeyFCFLovs1jNpuGY2H6NG0ZjUIT9Vo",
+    "y":"ZQ9oGlZC1kSrGYyVBZ4nN-2XujkbMkJfWgkeH1ov8cU"}]}"#;
+
+/// A provider serving the keys, and a configuration that trusts it.
+async fn oidc_config() -> Config {
+    let provider = Router::new().route("/jwks", axum::routing::get(|| async { OIDC_JWKS }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, provider).await });
+    let mut c = config();
+    c.oidc = Some(rusticdoc_core::config::OidcConfig {
+        issuer: "https://issuer.test/".into(),
+        audience: "rusticdoc".into(),
+        jwks_url: format!("http://127.0.0.1:{port}/jwks"),
+    });
+    c
+}
+
+fn token(claims: serde_json::Value) -> Option<(&'static str, String)> {
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut all =
+        serde_json::json!({"aud": "rusticdoc", "iss": "https://issuer.test/", "exp": now + 600});
+    for (k, v) in claims.as_object().unwrap() {
+        all[k] = v.clone();
+    }
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some("one".into());
+    let token = encode(
+        &header,
+        &all,
+        &EncodingKey::from_ec_pem(OIDC_KEY.as_bytes()).unwrap(),
+    )
+    .unwrap();
+    Some(("authorization", format!("Bearer {token}")))
+}
+
+#[tokio::test]
+async fn chosen_openid_connect_users_are_admins_and_others_are_not() {
+    let mut c = oidc_config().await;
+    let alice =
+        serde_json::json!({"sub": "alice", "realm_access": {"roles": ["rusticdoc-admin", "user"]}});
+    let bob = serde_json::json!({"sub": "bob", "realm_access": {"roles": ["user"]}});
+    let carol = serde_json::json!({"sub": "carol", "groups": "rusticdoc-admin"});
+
+    // Nobody, until the operator names someone.
+    let res = service(c.clone())
+        .oneshot(admin_only(token(alice.clone())))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    c.oidc_admin_claim = Some(("realm_access.roles".into(), "rusticdoc-admin".into()));
+    c.oidc_admin_subjects = vec!["carol".into()];
+    let app = service(c);
+    let res = app.clone().oneshot(admin_only(token(alice))).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "the claim holds the value"
+    );
+    let res = app.clone().oneshot(admin_only(token(bob))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN, "the claim lacks it");
+    let res = app.clone().oneshot(admin_only(token(carol))).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "a listed subject"
+    );
+    // A token that does not verify is no credential, whatever it claims.
+    let res = app
+        .clone()
+        .oneshot(admin_only(Some(("authorization", "Bearer forged".into()))))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_keys_still_work_beside_admin_users() {
+    let mut c = config();
+    c.api_keys = vec!["caller".into()];
+    c.admin_keys = vec!["admin".into()];
+    c.basic_auth = Some(("ada".into(), "pw".into()));
+    c.basic_auth_admin = true;
+    let app = service(c);
+    for (auth, expected) in [
+        (
+            Some(("x-api-key", "admin".to_string())),
+            StatusCode::NOT_IMPLEMENTED,
+        ),
+        (basic("ada", "pw"), StatusCode::NOT_IMPLEMENTED),
+        (
+            Some(("x-api-key", "caller".to_string())),
+            StatusCode::FORBIDDEN,
+        ),
+        (None, StatusCode::UNAUTHORIZED),
+    ] {
+        let res = app.clone().oneshot(admin_only(auth.clone())).await.unwrap();
+        assert_eq!(res.status(), expected, "{auth:?}");
+    }
+}
+
+#[tokio::test]
+async fn every_key_of_a_tenant_is_one_caller_and_signs_with_one_key() {
+    use rusticdoc_server::{auth, webhook};
+    let mut c = config();
+    c.api_keys = vec!["solo".into()];
+    c.tenant_keys = vec![("acme".into(), "old".into()), ("acme".into(), "new".into())];
+    let state = AppState::new(c.clone());
+    let as_key = |key: &str| {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-api-key", key.parse().unwrap());
+        headers
+    };
+    let old = auth::identify(&state, &as_key("old")).await.unwrap();
+    let new = auth::identify(&state, &as_key("new")).await.unwrap();
+    assert_eq!(old.0, "tenant:acme");
+    assert_eq!(new.0, old.0);
+    // An unnamed key keeps the principal it always had, so its data stays.
+    let solo = auth::identify(&state, &as_key("solo")).await.unwrap();
+    assert_eq!(solo.0, auth::key_principal("solo").0);
+    assert!(auth::identify(&state, &as_key("acme")).await.is_none());
+
+    // Deliveries for either key are signed with the tenant's key.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let receiver = Router::new().fallback(move |request: axum::extract::Request| {
+        let tx = tx.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let body = body.collect().await.unwrap().to_bytes();
+            tx.send((parts.headers, body)).await.unwrap();
+            StatusCode::OK
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, receiver).await });
+    c.webhook_allow_private = true;
+    c.webhook_secret = Some("master".into());
+    let app = service(c);
+    let tenant_key = webhook::signing_key("master", "tenant:acme");
+    for key in ["old", "new"] {
+        let pdf = fixtures::pages(1);
+        let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
+        let request = form("/v1/pdf/flatten", &parts)
+            .header("x-api-key", key)
+            .header(
+                "x-rusticdoc-webhook-url",
+                format!("http://127.0.0.1:{port}/done"),
+            )
+            .body(Body::from(body_of(&parts)))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        let (headers, body) = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let value = |name: &str| headers.get(name).unwrap().to_str().unwrap().to_string();
+        let timestamp: u64 = value(webhook::TIMESTAMP).parse().unwrap();
+        assert_eq!(
+            value(webhook::SIGNATURE),
+            webhook::sign(
+                &tenant_key,
+                timestamp,
+                &value(webhook::EVENT),
+                &value("x-request-id"),
+                &body
+            ),
+            "{key}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn tenant_keys_are_checked_before_the_service_starts() {
+    let from = |vars: &[(&str, &str)]| {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Config::from_vars(&move |name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()))
+    };
+    let good = from(&[("RUSTICDOC_TENANT_KEYS", "acme:one, acme:two,beta-2:three")]);
+    assert!(good.check().is_ok());
+    assert!(good.auth_configured());
+    assert_eq!(good.tenant_keys.len(), 3);
+    for bad in [
+        &[("RUSTICDOC_TENANT_KEYS", "nameless")][..],
+        &[("RUSTICDOC_TENANT_KEYS", "Acme:sekrit1")],
+        &[("RUSTICDOC_TENANT_KEYS", "ac.me:sekrit1")],
+        &[("RUSTICDOC_TENANT_KEYS", "acme:")],
+        &[("RUSTICDOC_TENANT_KEYS", " , ")],
+        &[("RUSTICDOC_TENANT_KEYS", "a:sekrit2,b:sekrit2")],
+        &[
+            ("RUSTICDOC_TENANT_KEYS", "a:sekrit2"),
+            ("RUSTICDOC_API_KEYS", "sekrit2"),
+        ],
+    ] {
+        let config = from(bad);
+        let err = config.check().unwrap_err();
+        // The message never repeats what may be a key.
+        assert!(!err.contains("sekrit"), "{bad:?}: {err}");
+    }
+}

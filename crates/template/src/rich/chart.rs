@@ -1,5 +1,7 @@
-//! Native charts for DOCX, PPTX and XLSX: `c:chartSpace` parts whose values
-//! are written inline as caches.
+//! Native charts. DOCX, PPTX and XLSX get `c:chartSpace` parts whose values
+//! are written inline as caches; ODT, ODS and ODP get an embedded chart
+//! document (`Object N/`) that carries its values in a local table, which is
+//! how LibreOffice stores a chart that does not read a sheet.
 
 use std::fmt::Write as _;
 
@@ -18,6 +20,27 @@ const MAX_GENERATED_LABEL_BYTES: usize = 16 * 1024 * 1024;
 
 const DEFAULT_WIDTH_PT: f64 = 450.0;
 const DEFAULT_HEIGHT_PT: f64 = 270.0;
+
+/// The colours of the series, or of a pie's slices, in turn: Office's default
+/// accents, so that a chart looks alike whichever format it was written in.
+/// OOXML charts take them from the theme; ODF charts must spell them out.
+const PALETTE: [&str; 6] = ["4472c4", "ed7d31", "a5a5a5", "ffc000", "5b9bd5", "70ad47"];
+
+const ODF_NS: &str = "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+     xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" \
+     xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" \
+     xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" \
+     xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" \
+     xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" \
+     xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+     xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" \
+     xmlns:chart=\"urn:oasis:names:tc:opendocument:xmlns:chart:1.0\" office:version=\"1.3\"";
+
+/// The `styles.xml` of an ODF chart object. The chart's look is all in the
+/// automatic styles of its content, but LibreOffice expects the part.
+pub const ODF_STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+     <office:document-styles xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+     office:version=\"1.3\"><office:styles/></office:document-styles>";
 
 const C_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
 const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -286,6 +309,201 @@ impl Chart {
         )
     }
 
+    /// The `content.xml` of an ODF chart object. The values sit in the
+    /// chart's own `local-table`, laid out as in [`Chart::sheet_rows`]: labels
+    /// in column A, one column per series, and a header row on top.
+    pub fn odf_content(&self) -> String {
+        let last_row = self.categories.len() + 1;
+        let last_col = num_to_col(self.series.len() as u32 + 1);
+        let (class, horizontal) = match self.kind {
+            Kind::Bar => ("chart:bar", true),
+            Kind::Column => ("chart:bar", false),
+            Kind::Line => ("chart:line", false),
+            Kind::Pie => ("chart:circle", false),
+        };
+        let pie = self.kind == Kind::Pie;
+        let mut styles = String::new();
+        let mut style = |name: &str, body: &str| {
+            let _ = write!(
+                styles,
+                "<style:style style:name=\"{name}\" style:family=\"chart\">{body}</style:style>"
+            );
+        };
+        let text = "<style:text-properties fo:font-size=\"10pt\"/>";
+        style(
+            "chMain",
+            "<style:graphic-properties draw:stroke=\"none\" draw:fill=\"solid\" \
+             draw:fill-color=\"#ffffff\"/>",
+        );
+        style(
+            "chTitle",
+            "<style:text-properties fo:font-size=\"13pt\" fo:font-weight=\"bold\"/>",
+        );
+        style("chLegend", text);
+        // Markers on lines, and gaps where a value is missing, belong to the plot.
+        let symbol = if self.kind == Kind::Line {
+            " chart:symbol-type=\"automatic\""
+        } else {
+            ""
+        };
+        style(
+            "chPlot",
+            &format!(
+                "<style:chart-properties chart:vertical=\"{horizontal}\" \
+                 chart:treat-empty-cells=\"leave-gap\"{symbol}/>"
+            ),
+        );
+        style(
+            "chAxis",
+            &format!(
+                "<style:chart-properties chart:display-label=\"true\"/>\
+                 <style:graphic-properties svg:stroke-color=\"#b3b3b3\"/>{text}"
+            ),
+        );
+        style(
+            "chGrid",
+            "<style:graphic-properties svg:stroke-color=\"#d9d9d9\"/>",
+        );
+        style(
+            "chWall",
+            "<style:graphic-properties draw:stroke=\"none\" draw:fill=\"none\"/>",
+        );
+        style(
+            "chPie",
+            "<style:graphic-properties draw:stroke=\"solid\" svg:stroke-color=\"#ffffff\"/>",
+        );
+        let colours = if pie {
+            self.categories.len()
+        } else {
+            self.series.len()
+        };
+        for k in 0..colours {
+            let colour = PALETTE[k % PALETTE.len()];
+            let body = if self.kind == Kind::Line {
+                format!(
+                    "<style:graphic-properties svg:stroke-width=\"0.08cm\" \
+                     svg:stroke-color=\"#{colour}\" draw:fill-color=\"#{colour}\"/>"
+                )
+            } else {
+                format!(
+                    "<style:graphic-properties draw:stroke=\"none\" draw:fill=\"solid\" \
+                     draw:fill-color=\"#{colour}\"/>"
+                )
+            };
+            style(&format!("chS{k}"), &body);
+        }
+
+        let title = match &self.title {
+            Some(t) => format!(
+                "<chart:title chart:style-name=\"chTitle\"><text:p>{}</text:p></chart:title>",
+                esc(t)
+            ),
+            None => String::new(),
+        };
+        let mut plot = format!(
+            "<chart:plot-area chart:style-name=\"chPlot\" \
+             table:cell-range-address=\"local-table.$A$1:.${last_col}${last_row}\" \
+             chart:data-source-has-labels=\"both\">"
+        );
+        let categories = format!(
+            "<chart:categories table:cell-range-address=\"local-table.$A$2:.$A${last_row}\"/>"
+        );
+        if pie {
+            // A pie draws no axes, but its slices take their names from the
+            // categories of the x axis.
+            let _ = write!(
+                plot,
+                "<chart:axis chart:dimension=\"x\" chart:name=\"primary-x\">{categories}\
+                 </chart:axis><chart:axis chart:dimension=\"y\" chart:name=\"primary-y\"/>"
+            );
+        } else {
+            let _ = write!(
+                plot,
+                "<chart:axis chart:dimension=\"x\" chart:name=\"primary-x\" \
+                 chart:style-name=\"chAxis\">{categories}</chart:axis>\
+                 <chart:axis chart:dimension=\"y\" chart:name=\"primary-y\" \
+                 chart:style-name=\"chAxis\"><chart:grid chart:class=\"major\" \
+                 chart:style-name=\"chGrid\"/></chart:axis>"
+            );
+        }
+        for k in 0..self.series.len() {
+            let col = num_to_col(k as u32 + 2);
+            let own_style = if pie {
+                " chart:style-name=\"chPie\"".to_string()
+            } else {
+                format!(" chart:style-name=\"chS{k}\"")
+            };
+            let _ = write!(
+                plot,
+                "<chart:series{own_style} chart:class=\"{class}\" \
+                 chart:values-cell-range-address=\"local-table.${col}$2:.${col}${last_row}\" \
+                 chart:label-cell-address=\"local-table.${col}$1\">"
+            );
+            if pie {
+                for i in 0..self.categories.len() {
+                    let _ = write!(plot, "<chart:data-point chart:style-name=\"chS{i}\"/>");
+                }
+            } else {
+                let _ = write!(
+                    plot,
+                    "<chart:data-point chart:repeated=\"{}\"/>",
+                    self.categories.len()
+                );
+            }
+            plot.push_str("</chart:series>");
+        }
+        if !pie {
+            plot.push_str(
+                "<chart:wall chart:style-name=\"chWall\"/>\
+                 <chart:floor chart:style-name=\"chWall\"/>",
+            );
+        }
+        plot.push_str("</chart:plot-area>");
+
+        let mut table = format!(
+            "<table:table table:name=\"local-table\"><table:table-header-columns>\
+             <table:table-column/></table:table-header-columns><table:table-columns>\
+             <table:table-column table:number-columns-repeated=\"{}\"/></table:table-columns>\
+             <table:table-header-rows><table:table-row><table:table-cell><text:p/>\
+             </table:table-cell>",
+            self.series.len()
+        );
+        for s in &self.series {
+            table.push_str(&odf_text_cell(&s.name));
+        }
+        table.push_str("</table:table-row></table:table-header-rows><table:table-rows>");
+        for (i, category) in self.categories.iter().enumerate() {
+            table.push_str("<table:table-row>");
+            table.push_str(&odf_text_cell(category));
+            for s in &self.series {
+                match s.values[i] {
+                    Some(v) => {
+                        let _ = write!(
+                            table,
+                            "<table:table-cell office:value-type=\"float\" office:value=\"{v}\">\
+                             <text:p>{v}</text:p></table:table-cell>"
+                        );
+                    }
+                    // An empty cell is a gap, as a missing point is in OOXML.
+                    None => table.push_str("<table:table-cell/>"),
+                }
+            }
+            table.push_str("</table:table-row>");
+        }
+        table.push_str("</table:table-rows></table:table>");
+
+        let (w, h) = (self.width_pt, self.height_pt);
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <office:document-content {ODF_NS}><office:automatic-styles>{styles}\
+             </office:automatic-styles><office:body><office:chart>\
+             <chart:chart svg:width=\"{w:.2}pt\" svg:height=\"{h:.2}pt\" \
+             chart:class=\"{class}\" chart:style-name=\"chMain\">{title}\
+             <chart:legend chart:legend-position=\"end\" chart:style-name=\"chLegend\"/>\
+             {plot}{table}</chart:chart></office:chart></office:body></office:document-content>"
+        )
+    }
+
     fn series_xml(&self, k: usize, s: &Series, sheet: &str, first: u32, last: u32) -> String {
         let col = num_to_col(k as u32 + 2);
         let (head, start) = (first, first + 1);
@@ -341,6 +559,13 @@ fn axes(horizontal: bool) -> String {
          <c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"out\"/>\
          <c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"50010\"/>\
          <c:crosses val=\"autoZero\"/><c:crossBetween val=\"between\"/></c:valAx>"
+    )
+}
+
+fn odf_text_cell(text: &str) -> String {
+    format!(
+        "<table:table-cell office:value-type=\"string\"><text:p>{}</text:p></table:table-cell>",
+        esc(text)
     )
 }
 

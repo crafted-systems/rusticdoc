@@ -39,9 +39,18 @@ pub struct Tag {
 #[derive(Debug, Clone)]
 pub enum TagKind {
     Expr(String),
-    Stmt { name: String, rest: String },
+    Stmt {
+        name: String,
+        rest: String,
+    },
     Comment,
     Settings,
+    /// `{% sheet for s in sites %}`: repeats the sheet it sits in, once per
+    /// item. Holds what follows `sheet`, which should start with `for`.
+    SheetLoop(String),
+    /// The end of a sheet loop. Authors never type it: the engine adds one
+    /// after the sheet a [`TagKind::SheetLoop`] repeats.
+    SheetEnd,
 }
 
 const OPENERS: &[&str] = &[
@@ -57,7 +66,7 @@ const OPENERS: &[&str] = &[
 ];
 
 impl Tag {
-    fn parse(raw: &str, loc: Location) -> Tag {
+    pub fn parse(raw: &str, loc: Location) -> Tag {
         let text: String = raw
             .chars()
             .map(|c| match c {
@@ -79,6 +88,8 @@ impl Tag {
             };
             if name == "settings" {
                 TagKind::Settings
+            } else if name == "sheet" {
+                TagKind::SheetLoop(rest.to_string())
             } else {
                 TagKind::Stmt {
                     name: name.to_string(),
@@ -118,6 +129,24 @@ impl Tag {
     pub fn is_for(&self) -> bool {
         matches!(self.stmt(), Some(("for", _)))
     }
+
+    /// The loop head of a sheet loop, `s in sites` for
+    /// `{% sheet for s in sites %}`, when it is written that way.
+    pub fn sheet_loop(&self) -> Option<&str> {
+        match &self.kind {
+            TagKind::SheetLoop(rest) => rest
+                .strip_prefix("for")
+                .filter(|r| r.starts_with(char::is_whitespace))
+                .map(str::trim)
+                .filter(|r| FOR_RE.is_match(r)),
+            _ => None,
+        }
+    }
+
+    /// A tag the engine made up, which the tag listing leaves out.
+    pub fn is_synthetic(&self) -> bool {
+        matches!(self.kind, TagKind::SheetEnd)
+    }
 }
 
 /// Where a tag sits, as paths into its part's tree.
@@ -136,6 +165,9 @@ pub struct RowBlock {
     pub start: u32,
     pub end: u32,
     pub is_loop: bool,
+    /// Which sheet the rows belong to when one part holds several: the
+    /// sheet's child index under `office:spreadsheet` in ODS, 0 in XLSX.
+    pub sheet: usize,
 }
 
 /// One ZIP part with its tree and the tags hoisted to its boundaries.
@@ -216,7 +248,8 @@ fn collect_fragments(
                 }
             }
             Node::Elem(e) => {
-                if d.paragraphs.contains(&e.name.as_str()) {
+                if d.paragraphs.contains(&e.name.as_str()) || d.alt_text.contains(&e.name.as_str())
+                {
                     continue;
                 }
                 if let Some((_, s)) = d.space_like.iter().find(|(n, _)| *n == e.name) {
@@ -559,7 +592,16 @@ impl Walker<'_> {
     }
 
     fn text(&mut self, t: &mut Text, path: Path) {
-        let Some(para) = self.nearest(self.d.paragraphs) else {
+        // Alt text is a paragraph of its own, inside a paragraph or not.
+        let holder = self
+            .anc
+            .iter()
+            .rev()
+            .find(|(n, _)| {
+                self.d.paragraphs.contains(&n.as_str()) || self.d.alt_text.contains(&n.as_str())
+            })
+            .map(|(_, p)| p.clone());
+        let Some(para) = holder else {
             return;
         };
         if let Some(leaves) = self.d.text_leaves {
@@ -649,22 +691,27 @@ fn snippet(s: &str) -> String {
     }
 }
 
-fn apply_settings(text: &str, settings: &mut Settings) {
+pub(crate) fn apply_settings(text: &str, settings: &mut Settings) {
     for cap in SETTING_RE.captures_iter(text) {
-        let key = &cap[1];
         let value = cap
             .get(2)
             .or_else(|| cap.get(3))
             .map(|m| m.as_str().to_string())
             .unwrap_or_default();
-        match key {
-            "lang" => settings.lang = Some(value),
-            "timezone" | "tz" => settings.timezone = Some(value),
-            "currency" => settings.currency = Some(value),
-            k => {
-                if let Some(t) = k.strip_prefix("t.") {
-                    settings.translations.insert(t.to_string(), value);
-                }
+        apply_setting(settings, &cap[1], value);
+    }
+}
+
+/// Applies one `key=value` setting, from the tag or from a document
+/// property. Unknown keys are ignored, as the tag has always done.
+pub fn apply_setting(settings: &mut Settings, key: &str, value: String) {
+    match key {
+        "lang" => settings.lang = Some(value),
+        "timezone" | "tz" => settings.timezone = Some(value),
+        "currency" => settings.currency = Some(value),
+        k => {
+            if let Some(t) = k.strip_prefix("t.") {
+                settings.translations.insert(t.to_string(), value);
             }
         }
     }
@@ -808,6 +855,71 @@ enum Target {
         part: usize,
         before: bool,
     },
+    /// Like `Node`, with a comment beside the tag that marks where each copy
+    /// of a shifted loop starts or ends (see `rich::shift`).
+    Shape {
+        part: usize,
+        path: Path,
+        before: bool,
+        marker: String,
+    },
+}
+
+/// A PPTX loop with `| shift(…)` repeats the shapes on the slide that hold
+/// its tags, a group counting as one shape, and marks each copy so that it
+/// can be moved after rendering.
+fn plan_shift(
+    parts: &[PartTree],
+    tags: &[Tag],
+    ctxs: &[TagCtx],
+    b: &Block,
+    step: crate::rich::shift::Step,
+) -> Result<Vec<(TagId, Target)>, String> {
+    let (o, c) = (&ctxs[b.open], &ctxs[b.close]);
+    let (open, close) = (&tags[b.open].text, &tags[b.close].text);
+    if o.part != c.part {
+        return Err(format!(
+            "'{open}' and '{close}' sit on different slides; shift moves shapes on one slide"
+        ));
+    }
+    if let Some(&m) = b.middles.first() {
+        return Err(format!(
+            "'{}' cannot sit in a loop that moves shapes with shift",
+            tags[m].text
+        ));
+    }
+    let nodes = &parts[o.part].nodes;
+    let shape = |para: &Path| -> Option<Path> {
+        (1..para.len())
+            .find(|&d| elem_at(nodes, &para[..d]).is_some_and(|e| e.name == "p:spTree"))
+            .map(|d| para[..=d].to_vec())
+    };
+    let (Some(unit_o), Some(unit_c)) = (shape(&o.para), shape(&c.para)) else {
+        return Err(format!(
+            "'{open}' moves shapes with shift, so it and '{close}' must sit in shapes on the slide"
+        ));
+    };
+    let (begin, end) = crate::rich::shift::markers(b.open, step);
+    Ok(vec![
+        (
+            b.open,
+            Target::Shape {
+                part: o.part,
+                path: unit_o,
+                before: true,
+                marker: begin,
+            },
+        ),
+        (
+            b.close,
+            Target::Shape {
+                part: o.part,
+                path: unit_c,
+                before: false,
+                marker: end,
+            },
+        ),
+    ])
 }
 
 fn siblings(a: &[usize], b: &[usize]) -> bool {
@@ -838,6 +950,15 @@ fn plan_block(
         format!("'{}' ({} {})", t.text, t.loc.part, t.loc.place)
     };
     let err = |msg: String| diag(Severity::Error, msg, Some(tags[b.open].loc.clone()));
+
+    if format == Format::Pptx && tags[b.open].is_for() {
+        let step = tags[b.open]
+            .stmt()
+            .and_then(|(_, rest)| crate::rich::shift::of_for(rest));
+        if let Some(step) = step {
+            return plan_shift(parts, tags, ctxs, b, step.map_err(err)?).map_err(err);
+        }
+    }
 
     if o.part != c.part {
         if format != Format::Pptx {
@@ -1025,7 +1146,26 @@ fn plan_block(
                 start,
                 end,
                 is_loop: tags[b.open].is_for(),
+                sheet: 0,
             });
+        }
+    }
+    // ODS rows carry no numbers, so a block is the span of positions its rows
+    // take in their sheet. Rows of a table nested in a cell are not sheet
+    // rows and get no block: their copies need no renumbering.
+    if format == Format::Ods && mode == UnitMode::Rows {
+        let nodes = &parts[part].nodes;
+        if let Some((sheet, table)) = crate::sheet::ods_sheet_of(nodes, &unit_o) {
+            let first = crate::sheet::ods_row_span(nodes, &table, &unit_o);
+            let last = crate::sheet::ods_row_span(nodes, &table, &unit_c);
+            if let (Some((start, _)), Some((last_start, count))) = (first, last) {
+                parts[part].row_blocks.push(RowBlock {
+                    start,
+                    end: last_start + count - 1,
+                    is_loop: tags[b.open].is_for(),
+                    sheet,
+                });
+            }
         }
     }
     Ok(h)
@@ -1072,34 +1212,32 @@ pub fn place_blocks(
                     parts[part].after.push(id);
                 }
             }
-        }
-    }
-    if format == Format::Xlsx {
-        for part in parts.iter_mut() {
-            let all = std::mem::take(&mut part.row_blocks);
-            let inside =
-                |a: &RowBlock, b: &RowBlock| a != b && a.start >= b.start && a.end <= b.end;
-            for a in &all {
-                if a.is_loop && all.iter().any(|b| inside(a, b)) {
-                    diags.push(diag(
-                        Severity::Error,
-                        format!(
-                            "{}: a row loop (rows {}-{}) cannot sit inside another row block in a sheet",
-                            part.name, a.start, a.end
-                        ),
-                        None,
-                    ));
+            // The marker sits inside the loop, so every copy carries one.
+            Target::Shape {
+                part,
+                path,
+                before,
+                marker,
+            } => {
+                if let Some(e) = elem_at_mut(&mut parts[part].nodes, &path) {
+                    if before {
+                        e.before.push(Piece::Tag(id));
+                        e.before.push(Piece::Lit(marker));
+                    } else {
+                        e.after.push(Piece::Lit(marker));
+                        e.after.push(Piece::Tag(id));
+                    }
                 }
             }
-            let mut top: Vec<RowBlock> = all
-                .iter()
-                .copied()
-                .filter(|a| !all.iter().any(|b| inside(a, b)))
-                .collect();
-            top.sort_by_key(|b| b.start);
-            top.dedup();
-            part.row_blocks = top;
         }
+    }
+    // Blocks nest, so a sheet keeps all of them: renumbering walks them as a
+    // tree. Two blocks over the same rows, such as two loops opened in one
+    // row, repeat those rows as one block would.
+    for part in parts.iter_mut() {
+        let blocks = &mut part.row_blocks;
+        blocks.sort_by_key(|b| (b.sheet, b.start, std::cmp::Reverse(b.end), !b.is_loop));
+        blocks.dedup_by(|a, b| a.sheet == b.sheet && a.start == b.start && a.end == b.end);
     }
 }
 
@@ -1221,6 +1359,16 @@ impl Writer<'_> {
             }
             (TagKind::Stmt { name, rest }, Mode::Render) => format!("{{% {name} {rest} %}}"),
             (TagKind::Stmt { name, rest }, Mode::Probe) => probe_stmt(name, rest, id),
+            (TagKind::SheetLoop(_), mode) => {
+                // A malformed head was reported at compile time; this only has
+                // to keep the template parseable.
+                let head = tag.sheet_loop().unwrap_or("__ in []");
+                match mode {
+                    Mode::Render => format!("{{% for {head} %}}"),
+                    Mode::Probe => probe_stmt("for", head, id),
+                }
+            }
+            (TagKind::SheetEnd, _) => "{% endfor %}".to_string(),
         };
         self.mark(id);
         self.out.push_str(&src);
@@ -1243,7 +1391,7 @@ impl Writer<'_> {
         self.out.push_str(concat!(
             "{% if __v is boolean %} t=\"b\"><v>{{ 1 if __v else 0 }}</v></c>",
             "{% elif __v is number %}><v>{{ __v }}</v></c>",
-            "{% elif __v is none %}/>",
+            "{% elif __v is __blank %}/>",
             "{% else %} t=\"inlineStr\"><is><t xml:space=\"preserve\">{{ __v }}</t></is></c>",
             "{% endif %}"
         ));
@@ -1357,6 +1505,7 @@ pub fn standalone_source(tag: &Tag) -> Option<String> {
             | "endfilter" | "endcall" | "endraw" | "endautoescape" => return None,
             _ => format!("{{% {name} {rest} %}}"),
         }),
+        TagKind::SheetLoop(_) => Some(format!("{{% for {} %}}{{% endfor %}}", tag.sheet_loop()?)),
         _ => None,
     }
 }

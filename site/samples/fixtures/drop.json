@@ -1,0 +1,18 @@
+{
+  "note": true,
+  "extra": true,
+  "discount": true,
+  "notes": true,
+  "logo": true,
+  "chart": true,
+  "stamp": true,
+  "two": true,
+  "appendix": true,
+  "details": true,
+  "total": 40,
+  "items": [
+    { "name": "Beans", "qty": 2, "discount": 1, "amount": 10, "hidden": false },
+    { "name": "Samples", "qty": 5, "discount": 4, "amount": 50, "hidden": true },
+    { "name": "Mugs", "qty": 3, "discount": 2, "amount": 30, "hidden": false }
+  ]
+}

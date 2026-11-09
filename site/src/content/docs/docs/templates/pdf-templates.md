@@ -91,13 +91,21 @@ Tagged annotations are removed from the output. Send `stripAnnotations=false` to
 
 ### Filters in PDF tags
 
-PDF tags have `currency` and the [built-in filters](/docs/templates/filters/#built-in-filters), such as `upper` and `default`. `date`, `t` and the rich content filters do not exist here. A tag using one is a `422`, with its place in the message:
+PDF tags have `currency`, `number`, `date`, `t` and the [built-in filters](/docs/templates/filters/#built-in-filters), such as `upper` and `default`. A PDF holds no `{% settings %}`, so the request's `lang`, `timezone`, `currency` and `translations` fields, and the service's dictionaries, are what they read. See [Translations and settings](/docs/templates/translations/).
 
-```text
-template error: annotation on page 1: unknown filter: filter date is unknown (in <string>:1)
+```bash test
+curl -F template=@form.pdf \
+  -F 'data={"name":"Ada","date":"2026-05-01","agree":true}' \
+  -F lang=de http://localhost:9027/v1/render -o filled.pdf
 ```
 
-A missing value is an error too, and names the place: ``template error: field `greeting`: undefined value``. Format dates before sending them.
+The rich content filters do not exist here. A tag using one is a `422`, with its place in the message:
+
+```text
+template error: annotation on page 1: unknown filter: filter image is unknown (in <string>:1)
+```
+
+A missing value is an error too, and names the place: ``template error: field `greeting`: undefined value``.
 
 ## Flatten
 
@@ -111,18 +119,26 @@ curl -F files=@flat.pdf http://localhost:9027/v1/pdf/forms/fields -o fields.json
 jq -e 'length == 0' fields.json
 ```
 
-## Text is drawn in Latin only
+## Text in any script
 
-Text the service draws itself, meaning field appearances and annotation values, uses Helvetica with Windows Latin encoding. That covers Western European text and symbols such as `€`. Other characters draw as `?`.
+Text the service draws itself, meaning field appearances and annotation values, is drawn one of two ways:
 
-| Value | Stored in the field | Drawn, including when flattened |
+- **Windows Latin text**, which covers Western European languages and symbols such as `€` and `“”`, is drawn in Helvetica. Every viewer has Helvetica built in, so nothing is embedded.
+- **Any other text**, such as Arabic, Hebrew, Greek, Cyrillic, Chinese, Japanese or Korean, is shaped and drawn with the service's own fonts. Arabic letters join, right-to-left text runs right to left, and a value that mixes scripts gets a font for each. Only the glyphs used are embedded, so a Chinese name adds kilobytes, not the 16 MB of the font. Copying or extracting the text gives the value back. Poppler's `pdftotext` is the one exception seen: it swaps the two letters of an Arabic lam-alef ligature, which the file maps in order.
+
+| Value | Drawn with, in the image | Added to the file |
 |---|---|---|
-| `é € ok` | `é € ok` | `é € ok` |
-| `Ωμέγα 日本` | `Ωμέγα 日本` | `????? ??` |
+| `é € ok` | Helvetica, built into viewers | Nothing |
+| `مرحبا بالعالم` | DejaVu Sans, which fontconfig picks for Arabic | About 13 KB |
+| `你好，世界` | Noto Sans CJK SC | About 4 KB |
 
-The value itself is stored in full, so a viewer that redraws the field can still show it. The service asks viewers to redraw, but flattening fixes the `?` characters into the page.
+The fonts are those [conversions use](/docs/guides/fonts/): the image's, the mounted fonts directory and uploaded fonts. Latin letters in such a value use Liberation Sans, Serif or Mono, whichever matches the field's font, and so do Greek, Cyrillic and Hebrew, which those fonts cover. Other scripts take the font fontconfig picks for them. Chinese characters use Noto Sans CJK in its Japanese form when the value has kana, its Korean form when it has Hangul, and its Simplified Chinese form otherwise. A character no font has draws as an empty box.
 
-For text outside Latin, build the document from an [Office template](/docs/templates/office/) and convert it, with the [fonts](/docs/guides/fonts/) it needs.
+Either way, the field's font size (`0` picks the largest that fits), its alignment and its multiline setting apply, and the text is cut at the edge of the box. An annotation value is drawn from the start of its rectangle: the left for left-to-right text, the right for right-to-left text.
+
+A filled form normally asks viewers to redraw its fields. One with text outside Latin does not, because viewers that redraw fields, such as Poppler's, draw it as blanks or `?`. The appearances drawn here stand, editable or flattened.
+
+To keep the work of one form bounded, the first 4,096 characters of a value are drawn, though the field stores all of it. A form may draw at most 2,000 boxes and 100,000 characters of such text, and more is a `400`.
 
 ## Overlay
 
@@ -140,6 +156,8 @@ test "$(head -c 4 on-letterhead.pdf)" = "%PDF"
 ```
 
 Anything other than two PDFs is a `400`.
+
+To do both in one request, render and convert the template on `/v1/render` with the [`underlay` step](/docs/guides/pipeline/#underlay), which lays it over a base PDF the same way.
 
 ## What is not supported
 

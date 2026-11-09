@@ -50,7 +50,7 @@ A step that needs a PDF, run on something else, is also here: `'letter.txt' is n
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `admin_required` | This route changes fonts, and the credential is not an admin key | Send one of `RUSTICDOC_ADMIN_KEYS`. See [fonts](/docs/guides/fonts/#admin-keys) |
+| `admin_required` | This route changes fonts, and the caller is not an admin | Send one of `RUSTICDOC_ADMIN_KEYS`, or make the caller an admin with `RUSTICDOC_BASIC_AUTH_ADMIN`, `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM`. See [authentication](/docs/guides/authentication/) |
 | `quota_exceeded` | Stored templates or fonts are at a limit | Delete some, or raise `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS` or `RUSTICDOC_MAX_FONT_STORAGE` |
 | `url_not_allowed` | A webhook or `downloadFrom` URL fails an allow or deny list | Change the URL, or the lists in `RUSTICDOC_WEBHOOK_ALLOW_LIST`, `RUSTICDOC_WEBHOOK_DENY_LIST`, `RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST` or `RUSTICDOC_DOWNLOAD_FROM_DENY_LIST` |
 
@@ -60,17 +60,25 @@ A private address is a `400`, not a `403`.
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `not_found` | No stored template or font with that id for this caller, including another caller's template | Check the id and the credential. See [scope](/docs/guides/stored-templates/#scope) |
+| `not_found` | No stored template, alias, font or job with that id or name for this caller, including another caller's, and a job whose result has expired | Check the id and the credential. See [scope](/docs/guides/stored-templates/#scope) |
 | `template_not_cached` | `templateHash` is not in this replica's memory | Send the file. See [sending a hash](/docs/guides/pipeline/#sending-a-hash) |
 
 ```bash test=fail
 curl -F templateHash=deadbeef -F "data=<letter.json" http://localhost:9027/v1/render
 ```
 
+### 409
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `job_not_done` | The [background job](/docs/guides/background-jobs/)'s result was asked for before the job ended | Poll `GET /v1/jobs/{id}` until `status` is `done`, waiting as `Retry-After` says |
+| `job_failed` | The job failed, so it has no result | Read `error` in `GET /v1/jobs/{id}`. A job that stopped because its container did has the code `job_lost` there; send the request again |
+
 ### 413
 
 | Code | Meaning | What to do |
 |---|---|---|
+| `payload_too_large` | A JSON request body is over `RUSTICDOC_BODY_LIMIT` | Send less data, or raise the limit |
 | `template_too_large` | A template to store is over `RUSTICDOC_MAX_TEMPLATE_BYTES` | Make it smaller, or raise the limit |
 | `reported` | A template, or an HTML page being laid out, needed more memory than one render may use, with the message `The document needs more memory than one render may use.` | Reduce the data or the page, or raise `RUSTICDOC_RENDER_MEMORY` |
 

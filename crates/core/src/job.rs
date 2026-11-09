@@ -203,6 +203,13 @@ pub enum Step {
     Stamp {
         overlay: pdfops::Overlay,
     },
+    /// Lay every page over the matching page of this PDF, as
+    /// `/v1/pdf/overlay` does: the base underneath, such as letterhead or a
+    /// pre-printed form. Extra pages of either are kept.
+    Underlay {
+        base: Vec<u8>,
+        name: String,
+    },
     Rotate {
         rotation: pdfops::Rotation,
         pages: String,
@@ -248,6 +255,7 @@ impl Step {
             Step::Split { .. } => "split",
             Step::Watermark { .. } => "watermark",
             Step::Stamp { .. } => "stamp",
+            Step::Underlay { .. } => "underlay",
             Step::Rotate { .. } => "rotate",
             Step::Flatten => "flatten",
             Step::Optimize => "optimize",
@@ -283,6 +291,9 @@ pub struct RenderRequest {
     /// Run the template stage. Off for plain conversions and PDF
     /// operations, whose inputs are documents, not templates.
     pub templating: bool,
+    /// Choices for the template stage, such as printing undefined values as
+    /// nothing.
+    pub render_options: rusticdoc_template::RenderOptions,
 }
 
 impl RenderRequest {
@@ -296,6 +307,7 @@ impl RenderRequest {
             convert_options: ConvertOptions::default(),
             output_name: None,
             templating: true,
+            render_options: Default::default(),
         }
     }
 }
@@ -409,23 +421,9 @@ pub fn parse_steps(list: &str, fields: &BTreeMap<String, String>) -> Result<Vec<
                     owner_password: owner,
                 }
             }
-            "sign" => {
-                let text = |name: &str| {
-                    fields
-                        .get(name)
-                        .map(|v| v.trim().to_string())
-                        .filter(|v| !v.is_empty())
-                };
-                let options = pdfops::sign::SignOptions {
-                    reason: text("reason"),
-                    location: text("location"),
-                    contact_info: text("contactInfo"),
-                    signer_name: text("signerName"),
-                    appearance: None,
-                };
-                options.validate()?;
-                Step::Sign { options }
-            }
+            "sign" => Step::Sign {
+                options: pdfops::sign::SignOptions::from_fields(&|name| fields.get(name).cloned())?,
+            },
             "merge" => Step::Merge,
             "flatten" => Step::Flatten,
             "optimize" => Step::Optimize,
@@ -487,7 +485,7 @@ pub fn parse_steps(list: &str, fields: &BTreeMap<String, String>) -> Result<Vec<
             }
             other => {
                 return Err(Error::InvalidRequest(format!(
-                    "unknown step '{other}'; file-carrying steps (watermark, stamp, embed, factur-x) take their own fields"
+                    "unknown step '{other}'; file-carrying steps (watermark, stamp, underlay, embed, factur-x) take their own fields"
                 )));
             }
         };

@@ -146,6 +146,19 @@ test "$(cat out.txt)" = "$(printf 'friend\nno phone\nRegular')"
 
 `default` covers one missing level. `{{ customer.phone.area | default("x") }}` still fails when `customer.phone` is missing.
 
+### Print every missing value as nothing
+
+When your data is sparse by design, `undefinedAsEmpty=true` on `/v1/render` or `/v1/render/batch` prints every missing value, and every missing field of one, as nothing for that request. `date`, `currency`, `round` and `abs` print nothing for a missing value too, and a spreadsheet cell holding only one is left empty.
+
+```bash test
+printf 'Dear {{ customer.name }}{{ customer.title }}.' > sparse.txt
+curl -F template=@sparse.txt -F 'data={"customer":{"name":"Ada"}}' \
+  -F undefinedAsEmpty=true http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = "Dear Ada."
+```
+
+This hides typos as well, so use it only where blanks are expected, and run [validation](/docs/templates/validate/) without it.
+
 ### Null is not missing
 
 A key whose value is `null` is defined, so it does not raise an error and `default("x")` does not replace it. Use `default("x", true)`, which also replaces `""`, `0`, `false` and empty lists.
@@ -216,8 +229,8 @@ A file with one of these extensions is rendered whole, as UTF-8 text. Office fil
 | `.json` | `application/json` | PDF |
 | `.svg` | `image/svg+xml` | PDF |
 
-:::caution[Text templates have fewer filters]
-Text templates have `currency` and the built-in filters. `date`, `t`, the rich content filters and `{% settings %}` work only in Office templates, and in a text template they fail with `unknown filter` or `unknown statement`. See [where each filter works](/docs/templates/filters/#where-each-filter-works).
+:::caution[Text templates have no rich content]
+Text templates have `currency`, `number`, `date`, `t`, `{% settings %}`, the [calculation helpers](/docs/templates/calculations/) and the built-in filters. The rich content filters work only in Office templates, and in a text template they fail with a clear error. See [where each filter works](/docs/templates/filters/#where-each-filter-works).
 :::
 
 ## Limits

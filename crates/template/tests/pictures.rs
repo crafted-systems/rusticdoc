@@ -191,11 +191,15 @@ fn placeholder_errors_say_which_picture() {
     let err = render_err(Format::Pptx, &pptx(&[shape]), data());
     assert!(err.message.contains("only a picture"), "{err}");
     assert!(err.location.unwrap().place.contains("Box"));
-
-    // Other tags in alt text stay as they were.
-    let other = docx(&word_picture("{{ customer }}"));
+    // Other tags in alt text are filled in as text, beside a placeholder too.
+    let other = docx(&word_picture("For {{ customer }} {{ logo | image }}"));
     let out = render(Format::Docx, &other, data());
-    assert!(part(&out, "word/document.xml").contains("descr=\"{{ customer }}\""));
+    let xml = part(&out, "word/document.xml");
+    assert!(xml.contains("descr=\"For Ada\""), "{xml}");
+    assert_eq!(
+        media_of(&out, "word/_rels/document.xml.rels", &xml),
+        "media/rich1.png"
+    );
 }
 
 #[test]

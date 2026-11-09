@@ -10,7 +10,7 @@ use crate::job;
 use crate::job::{Document, Format, Output, RenderRequest, Step};
 use crate::limits;
 use crate::pdfops::MultiEngine;
-use crate::pdfops::sign::{self, Signer};
+use crate::pdfops::sign::Signing;
 use crate::render::Renderer;
 use crate::template;
 
@@ -24,9 +24,9 @@ pub struct Engines {
     pub pdf: MultiEngine,
     /// `RUSTICDOC_CONVERT_DISABLED`: conversion steps refuse.
     pub office_routes_disabled: bool,
-    /// The key for cryptographic signatures, from `RUSTICDOC_SIGNING_KEY` and
-    /// `RUSTICDOC_SIGNING_CERT`. Without it, `sign` steps answer 503.
-    pub signer: Option<Arc<Signer>>,
+    /// The keys for cryptographic signatures, from `RUSTICDOC_SIGNING_*`, and
+    /// what levels beyond B-B need. Without a key, `sign` steps answer 503.
+    pub signing: Signing,
 }
 
 impl Engines {
@@ -52,13 +52,10 @@ impl Engines {
             // `Config::check` has refused a key that does not load before a
             // service starts; a library or CLI caller that skipped it gets no
             // signer and a 503 that says why.
-            signer: match config.signer() {
-                Ok(signer) => signer.map(Arc::new),
-                Err(problem) => {
-                    tracing::error!("{problem}");
-                    None
-                }
-            },
+            signing: config.signing().unwrap_or_else(|problem| {
+                tracing::error!("{problem}");
+                Signing::default()
+            }),
         }
     }
 
@@ -68,19 +65,7 @@ impl Engines {
             "libreoffice": self.libreoffice.as_ref().map(|l| l.bin().display().to_string()),
             "pdf": self.pdf.names(),
             "templates": { "text": template::TEXT_FORMATS, "office": template::OFFICE_FORMATS },
-            "signing": self.signer.is_some(),
-        })
-    }
-
-    /// The signing key, or why there is none: a 503 whose text the client
-    /// reads, since it names a setting and nothing internal.
-    pub fn signer(&self) -> Result<&Arc<Signer>> {
-        self.signer.as_ref().ok_or_else(|| {
-            Error::Status(
-                503,
-                "cryptographic signing is not configured on this service; its operator sets RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT"
-                    .into(),
-            )
+            "signing": self.signing.is_configured(),
         })
     }
 
@@ -88,8 +73,10 @@ impl Engines {
     /// cannot be combined with `encrypt`, and needs a key.
     pub fn check_steps(&self, steps: &[Step]) -> Result<()> {
         check_steps(steps)?;
-        if steps.iter().any(|s| matches!(s, Step::Sign { .. })) {
-            self.signer()?;
+        for step in steps {
+            if let Step::Sign { options } = step {
+                self.signing.check(options)?;
+            }
         }
         Ok(())
     }
@@ -181,6 +168,7 @@ impl Pipeline {
                     &req.ctx,
                     self.max_output,
                     self.timeout,
+                    &req.render_options,
                 )
                 .await?
         } else {
@@ -225,9 +213,19 @@ impl Pipeline {
                     out
                 }
                 _ => {
+                    // A step that adds to each document (an underlay's base, a
+                    // stamp) multiplies across many: the step's outputs share one
+                    // budget, as split's parts do.
                     let mut out = Vec::with_capacity(current.len());
+                    let mut produced = 0;
                     for doc in &current {
-                        out.push(self.one(step, doc, &req.convert_options).await?);
+                        let next = self.one(step, doc, &req.convert_options).await?;
+                        limits::charge_output(
+                            &mut produced,
+                            next.bytes.len(),
+                            limits::MAX_OUTPUT_BYTES,
+                        )?;
+                        out.push(next);
                     }
                     out
                 }
@@ -359,6 +357,7 @@ impl Pipeline {
             }
             Step::Watermark { overlay } => pdf.watermark(doc, overlay, t).await?,
             Step::Stamp { overlay } => pdf.stamp(doc, overlay, t).await?,
+            Step::Underlay { base, name } => underlay(doc, base, name, t).await?,
             Step::Rotate { rotation, pages } => pdf.rotate(doc, *rotation, pages, t).await?,
             Step::Flatten => pdf.flatten(doc, t).await?,
             Step::Optimize => pdf.optimize(doc, t).await?,
@@ -370,12 +369,31 @@ impl Pipeline {
                 user_password,
                 owner_password,
             } => pdf.encrypt(doc, user_password, owner_password, t).await?,
-            Step::Sign { options } => {
-                sign::sign(doc, self.engines.signer()?.clone(), options, t).await?
-            }
+            Step::Sign { options } => self.engines.signing.sign(doc, options, t).await?,
             Step::Merge | Step::Split { .. } => unreachable!("handled by run"),
         })
     }
+}
+
+/// Lays every page of `doc` over the matching page of the base PDF, as
+/// `/v1/pdf/overlay` does. The result is the base, with its page sizes and
+/// any pages past the end of `doc`; pages of `doc` past the end of the base
+/// are appended.
+async fn underlay(doc: &Document, base: &[u8], name: &str, timeout: Duration) -> Result<Document> {
+    crate::pdfops::require_pdf(doc).map_err(|_| {
+        Error::InvalidRequest(format!(
+            "'underlay' needs a PDF, and '{}' is not one; put 'convert' before it",
+            doc.name
+        ))
+    })?;
+    let base = Document::new(name, base.to_vec());
+    crate::pdfops::require_pdf(&base)?;
+    let over = doc.bytes.clone();
+    let bytes = crate::pdfops::blocking(timeout, move |_| {
+        crate::pdfform::overlay(&base.bytes, &over)
+    })
+    .await?;
+    Ok(Document::new(doc.with_extension("pdf"), bytes))
 }
 
 /// The order rules of `sign`, which need no engine to check. A signature
@@ -495,7 +513,7 @@ mod tests {
 
     fn sign_step() -> Step {
         Step::Sign {
-            options: sign::SignOptions::default(),
+            options: crate::pdfops::sign::SignOptions::default(),
         }
     }
 
@@ -529,16 +547,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn underlay_lays_the_document_over_the_base_page_by_page() {
+        // One rendered page over a two-page letterhead: the result keeps
+        // both base pages and draws the document over the first.
+        let mut req = RenderRequest::new(Document::new(
+            "letter.pdf",
+            crate::pdfops::fixtures::pages(1),
+        ));
+        req.templating = false;
+        req.steps = vec![Step::Underlay {
+            base: crate::pdfops::fixtures::pages(2),
+            name: "letterhead.pdf".into(),
+        }];
+        let out = pipeline().run(req).await.unwrap();
+        assert_eq!(out.name, "letter.pdf");
+        let doc = lopdf::Document::load_mem(&out.bytes).unwrap();
+        let pages = doc.get_pages();
+        assert_eq!(pages.len(), 2);
+        let first = String::from_utf8_lossy(&doc.get_page_content(pages[&1])).into_owned();
+        assert!(first.contains("/RdOv1 Do"), "{first}");
+        let second = String::from_utf8_lossy(&doc.get_page_content(pages[&2])).into_owned();
+        assert!(!second.contains(" Do"), "{second}");
+
+        // A document that is not a PDF yet is refused with what to do.
+        let mut req = RenderRequest::new(Document::new("letter.txt", b"Hello".to_vec()));
+        req.templating = false;
+        req.steps = vec![Step::Underlay {
+            base: crate::pdfops::fixtures::pages(1),
+            name: "letterhead.pdf".into(),
+        }];
+        let err = pipeline().run(req).await.unwrap_err();
+        assert!(err.to_string().contains("put 'convert' before it"), "{err}");
+
+        // So is a base that is not a PDF.
+        let mut req = RenderRequest::new(Document::new(
+            "letter.pdf",
+            crate::pdfops::fixtures::pages(1),
+        ));
+        req.templating = false;
+        req.steps = vec![Step::Underlay {
+            base: b"not a pdf".to_vec(),
+            name: "letterhead.png".into(),
+        }];
+        let err = pipeline().run(req).await.unwrap_err();
+        assert!(err.to_string().contains("letterhead.png"), "{err}");
+    }
+
+    #[tokio::test]
     async fn sign_as_a_step_appends_a_signature() {
         let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
         let cert = rcgen::CertificateParams::new(vec!["signer.test".to_string()])
             .unwrap()
             .self_signed(&key)
             .unwrap();
-        let signer =
-            Signer::from_pem(key.serialize_pem().as_bytes(), cert.pem().as_bytes()).unwrap();
+        let signer = crate::pdfops::sign::Signer::from_pem(
+            key.serialize_pem().as_bytes(),
+            cert.pem().as_bytes(),
+        )
+        .unwrap();
         let engines = Engines {
-            signer: Some(Arc::new(signer)),
+            signing: Signing::with_default(signer),
             ..Engines::default()
         };
         let original = crate::pdfops::fixtures::pages(1);

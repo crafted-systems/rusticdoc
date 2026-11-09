@@ -26,6 +26,8 @@ pub struct Config {
     pub pdfcpu_bin: Option<PathBuf>,
     /// Directory of extra fonts, mounted at runtime.
     pub fonts_dir: PathBuf,
+    /// `<lang>.json` translation dictionaries for `t`, when set.
+    pub translations_dir: Option<PathBuf>,
     /// Where uploaded templates and fonts live: `file:///path` or
     /// `s3://bucket/prefix`. Without it those routes answer 501.
     pub store: Option<String>,
@@ -50,8 +52,23 @@ pub struct Config {
     /// Accepted API keys for `Authorization: Bearer` or `X-Api-Key`. Empty
     /// means no key is required.
     pub api_keys: Vec<String>,
+    /// Keys that carry a tenant's name, as `(tenant, key)`. Every key of one
+    /// tenant is the same caller, so replacing a key keeps what it stored.
+    pub tenant_keys: Vec<(String, String)>,
     /// Basic auth credentials, when set.
     pub basic_auth: Option<(String, String)>,
+    /// The basic-auth user may change what every caller renders with.
+    pub basic_auth_admin: bool,
+    /// OpenID Connect subjects that are admins.
+    pub oidc_admin_subjects: Vec<String>,
+    /// A claim, as a dotted path, and the value that makes a token's holder an
+    /// admin: the claim equals it, or is a list holding it.
+    pub oidc_admin_claim: Option<(String, String)>,
+    /// How long a background job and its result are kept once it ends.
+    pub job_ttl: Duration,
+    /// Path to poppler's `pdftoppm`, which draws template previews. `None`
+    /// makes previews answer 503.
+    pub pdftoppm_bin: Option<PathBuf>,
     /// Secret for the HMAC signature on webhook deliveries.
     pub webhook_secret: Option<String>,
     /// PEM private key (PKCS#8, PKCS#1 or SEC1) for cryptographic PDF
@@ -59,6 +76,9 @@ pub struct Config {
     pub signing_key: Option<PathBuf>,
     /// PEM certificate for the signing key, then any chain certificates.
     pub signing_cert: Option<PathBuf>,
+    /// The rest of signing: named keys, PKCS#11, the timestamp authority, the
+    /// default level and the outbound rules for timestamps and revocation data.
+    pub signing: crate::pdfops::sign::Settings,
     /// Allow webhooks to private or loopback addresses. Off by default.
     pub webhook_allow_private: bool,
     /// Attempts per webhook delivery.
@@ -220,6 +240,7 @@ impl Default for Config {
                 "/usr/local/bin/pdfcpu",
             ]),
             fonts_dir: PathBuf::from("/fonts"),
+            translations_dir: None,
             store: None,
             store_scope: StoreScope::Caller,
             admin_keys: Vec::new(),
@@ -231,10 +252,21 @@ impl Default for Config {
             font_cache_dir: std::env::temp_dir().join("rusticdoc-stored-fonts"),
             store_sync_interval: Duration::from_secs(30),
             api_keys: Vec::new(),
+            tenant_keys: Vec::new(),
             basic_auth: None,
+            basic_auth_admin: false,
+            oidc_admin_subjects: Vec::new(),
+            oidc_admin_claim: None,
+            job_ttl: Duration::from_secs(3600),
+            pdftoppm_bin: first_existing(&[
+                "/usr/bin/pdftoppm",
+                "/opt/homebrew/bin/pdftoppm",
+                "/usr/local/bin/pdftoppm",
+            ]),
             webhook_secret: None,
             signing_key: None,
             signing_cert: None,
+            signing: Default::default(),
             webhook_allow_private: false,
             webhook_attempts: 3,
             cors_origins: Vec::new(),
@@ -340,6 +372,14 @@ impl Config {
                 Some(PathBuf::from(v))
             };
         }
+        if let Some(v) = get("PDFTOPPM_BIN") {
+            c.pdftoppm_bin = if v == "none" {
+                None
+            } else {
+                Some(PathBuf::from(v))
+            };
+        }
+        c.translations_dir = get("TRANSLATIONS_DIR").map(PathBuf::from);
         if let Some(v) = get("FONTS_DIR") {
             c.fonts_dir = PathBuf::from(v);
         }
@@ -426,6 +466,33 @@ impl Config {
                     .push("RUSTICDOC_API_KEYS is set but holds no key".into());
             }
         }
+        if let Some(v) = get("TENANT_KEYS") {
+            for entry in v.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+                match entry.split_once(':') {
+                    Some((tenant, key)) if is_tenant_name(tenant.trim()) && !key.trim().is_empty() => {
+                        c.tenant_keys
+                            .push((tenant.trim().to_string(), key.trim().to_string()));
+                    }
+                    // The entry may be a key: never repeat it.
+                    _ => c.problems.push(
+                        "RUSTICDOC_TENANT_KEYS: each entry is tenant:key, and a tenant is 1 to 64 lowercase letters, digits and hyphens".into(),
+                    ),
+                }
+            }
+            if c.tenant_keys.is_empty() {
+                c.problems
+                    .push("RUSTICDOC_TENANT_KEYS is set but holds no key".into());
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for (_, key) in &c.tenant_keys {
+                if !seen.insert(key.as_str()) || c.api_keys.contains(key) {
+                    c.problems.push(
+                        "RUSTICDOC_TENANT_KEYS: a key is listed twice, or is also in RUSTICDOC_API_KEYS; a key belongs to one caller".into(),
+                    );
+                    break;
+                }
+            }
+        }
         match (get("BASIC_AUTH_USERNAME"), get("BASIC_AUTH_PASSWORD")) {
             (Some(u), Some(p)) => c.basic_auth = Some((u, p)),
             (None, None) => {}
@@ -433,6 +500,22 @@ impl Config {
                 "RUSTICDOC_BASIC_AUTH_USERNAME and RUSTICDOC_BASIC_AUTH_PASSWORD go together"
                     .into(),
             ),
+        }
+        if let Some(v) = on("BASIC_AUTH_ADMIN") {
+            c.basic_auth_admin = v;
+            if v && c.basic_auth.is_none() {
+                c.problems.push(
+                    "RUSTICDOC_BASIC_AUTH_ADMIN is on but basic auth is not configured".into(),
+                );
+            }
+        }
+        if let Some(v) = get("JOB_TTL") {
+            match parse_duration(&v) {
+                Some(d) if !d.is_zero() => c.job_ttl = d,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_JOB_TTL: bad duration '{v}'")),
+            }
         }
         c.webhook_secret = get("WEBHOOK_SECRET");
         match (get("SIGNING_KEY"), get("SIGNING_CERT")) {
@@ -447,6 +530,7 @@ impl Config {
                 .problems
                 .push("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
         }
+        c.signing = crate::pdfops::sign::Settings::from_vars(vars, &mut c.problems);
         if let Some(v) = get("WEBHOOK_ALLOW_PRIVATE") {
             c.webhook_allow_private = matches!(v.as_str(), "1" | "true" | "yes");
         }
@@ -557,6 +641,22 @@ impl Config {
                 jwks_url: get("OIDC_JWKS_URL").unwrap_or_default(),
             });
         }
+        c.oidc_admin_subjects = list("OIDC_ADMIN_SUBJECTS");
+        if let Some(v) = get("OIDC_ADMIN_CLAIM") {
+            match v.split_once('=') {
+                Some((claim, value)) if !claim.trim().is_empty() && !value.trim().is_empty() => {
+                    c.oidc_admin_claim = Some((claim.trim().to_string(), value.trim().to_string()));
+                }
+                _ => c.problems.push(format!(
+                    "RUSTICDOC_OIDC_ADMIN_CLAIM is '{v}'; use claim=value, such as groups=rusticdoc-admins"
+                )),
+            }
+        }
+        if c.oidc.is_none() && (!c.oidc_admin_subjects.is_empty() || c.oidc_admin_claim.is_some()) {
+            c.problems.push(
+                "RUSTICDOC_OIDC_ADMIN_SUBJECTS and RUSTICDOC_OIDC_ADMIN_CLAIM need OpenID Connect configured".into(),
+            );
+        }
         c.webhook_allow_list = list("WEBHOOK_ALLOW_LIST");
         c.webhook_deny_list = list("WEBHOOK_DENY_LIST");
         c.webhook_error_allow_list = list("WEBHOOK_ERROR_ALLOW_LIST");
@@ -574,7 +674,17 @@ impl Config {
 
     /// True when requests must carry credentials.
     pub fn auth_configured(&self) -> bool {
-        !self.api_keys.is_empty() || self.basic_auth.is_some() || self.oidc.is_some()
+        !self.api_keys.is_empty()
+            || !self.tenant_keys.is_empty()
+            || self.basic_auth.is_some()
+            || self.oidc.is_some()
+    }
+
+    /// True when some credential other than an admin key can be an admin.
+    pub fn admin_users_configured(&self) -> bool {
+        self.basic_auth_admin
+            || !self.oidc_admin_subjects.is_empty()
+            || self.oidc_admin_claim.is_some()
     }
 
     /// True when `/metrics` needs credentials.
@@ -587,12 +697,26 @@ impl Config {
     /// the file, never what the key file holds.
     pub fn signer(&self) -> Result<Option<crate::pdfops::sign::Signer>, String> {
         match (&self.signing_key, &self.signing_cert) {
-            (Some(key), Some(cert)) => crate::pdfops::sign::Signer::from_files(key, cert)
-                .map(Some)
-                .map_err(|e| format!("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT: {e}")),
+            (Some(key), Some(cert)) => {
+                crate::pdfops::sign::load_key(&key.to_string_lossy(), cert, &self.signing.pkcs11)
+                    .map(Some)
+                    .map_err(|e| format!("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT: {e}"))
+            }
             (None, None) => Ok(None),
             _ => Err("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
         }
+    }
+
+    /// Every signing key, read and checked, with the timestamp authority and
+    /// the rest of [`Config::signing`]. Nothing configured is an empty service.
+    pub fn signing(&self) -> Result<crate::pdfops::sign::Signing, String> {
+        let key = self.signing_key.as_ref().map(|k| k.to_string_lossy());
+        let default = match (&key, &self.signing_cert) {
+            (Some(key), Some(cert)) => Some((key.as_ref(), cert.as_path())),
+            (None, None) => None,
+            _ => return Err("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
+        };
+        crate::pdfops::sign::Signing::load(default, &self.signing)
     }
 
     /// Settings the service refuses to start with.
@@ -603,7 +727,9 @@ impl Config {
         if let Some(url) = &self.store {
             crate::store::Store::open(url)?;
         }
-        self.signer()?;
+        self.signing()?;
+        // A dictionary that cannot be read stops the start, not the first render.
+        crate::dictionaries::Dictionaries::open(self.translations_dir.clone())?;
         for (variable, engines) in &self.engine_orders {
             for engine in engines {
                 if !matches!(
@@ -659,6 +785,16 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// A tenant's name: 1 to 64 lowercase ASCII letters, digits and hyphens. Kept
+/// that narrow so the name is also a path segment in the store, and two names
+/// can never become the same one there.
+pub fn is_tenant_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// True for an `https` URL, or an `http` one whose host is this machine.
@@ -939,6 +1075,55 @@ mod tests {
         ] {
             let err = from(bad).check().unwrap_err();
             assert!(err.contains(says), "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn tenants_admins_jobs_and_previews_are_read() {
+        let c = from(&[
+            ("RUSTICDOC_TENANT_KEYS", "acme:k1,acme:k2"),
+            ("RUSTICDOC_BASIC_AUTH_USERNAME", "u"),
+            ("RUSTICDOC_BASIC_AUTH_PASSWORD", "p"),
+            ("RUSTICDOC_BASIC_AUTH_ADMIN", "true"),
+            ("RUSTICDOC_OIDC_ISSUER", "https://idp.example.com"),
+            ("RUSTICDOC_OIDC_AUDIENCE", "a"),
+            ("RUSTICDOC_OIDC_ADMIN_SUBJECTS", "alice, bob"),
+            (
+                "RUSTICDOC_OIDC_ADMIN_CLAIM",
+                "realm_access.roles = rusticdoc-admin",
+            ),
+            ("RUSTICDOC_JOB_TTL", "10m"),
+            ("RUSTICDOC_PDFTOPPM_BIN", "none"),
+        ]);
+        assert!(c.check().is_ok(), "{:?}", c.check());
+        assert_eq!(
+            c.tenant_keys,
+            [("acme".into(), "k1".into()), ("acme".into(), "k2".into())]
+        );
+        assert!(c.basic_auth_admin && c.admin_users_configured());
+        assert_eq!(c.oidc_admin_subjects, ["alice", "bob"]);
+        assert_eq!(
+            c.oidc_admin_claim,
+            Some(("realm_access.roles".into(), "rusticdoc-admin".into()))
+        );
+        assert_eq!(c.job_ttl, Duration::from_secs(600));
+        assert!(c.pdftoppm_bin.is_none());
+        assert!(!Config::default().admin_users_configured());
+
+        for bad in [
+            &[("RUSTICDOC_JOB_TTL", "0s")][..],
+            &[("RUSTICDOC_JOB_TTL", "soon")],
+            &[
+                ("RUSTICDOC_OIDC_ISSUER", "https://idp.example.com"),
+                ("RUSTICDOC_OIDC_AUDIENCE", "a"),
+                ("RUSTICDOC_OIDC_ADMIN_CLAIM", "groups"),
+            ],
+        ] {
+            assert!(from(bad).check().is_err(), "{bad:?}");
+        }
+        assert!(is_tenant_name("acme-2"));
+        for bad in ["", "Acme", "a.b", "a_b", "a:b", &"a".repeat(65)] {
+            assert!(!is_tenant_name(bad), "{bad}");
         }
     }
 

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-This page shows how to place content that is more than text: a logo, a QR code, a link, coloured text, formatted HTML, a native chart or a page break. Each one is a filter, and each works in Office templates only.
+This page shows how to place content that is more than text: a logo, a QR code, a link, coloured text, formatted HTML, a native chart or a page break. Each one is a filter, and each works in Office templates only. The `shift` filter, which spreads a loop's shapes across a slide, is described with [PPTX loops](/docs/templates/office/#shapes-that-move-down-or-across-a-slide), and the `drop` function, which removes the element holding its tag, under [remove an element](/docs/templates/office/#remove-an-element).
 
 ## What works where
 
@@ -20,8 +20,12 @@ This page shows how to place content that is more than text: a logo, a QR code, 
 | `color` on a table cell or row | Yes | Yes | Yes | Yes | Yes | Yes |
 | `color` on a shape | Refused | Refused | Refused | Refused | Yes | Yes |
 | `html` | Native | Native | Plain text | Plain text | Plain text | Plain text |
-| `chart` | Yes | Refused | Yes | Refused | Yes | Refused |
+| `chart` | Yes | Yes | Yes | Yes | Yes | Yes |
 | `pagebreak` | Yes | Yes | Refused | Refused | Refused | Refused |
+| `shift` | Refused | Refused | Refused | Refused | Yes | Refused |
+| [`drop`](/docs/templates/office/#remove-an-element) | Yes | Yes | Yes | Yes | Yes | Yes |
+
+Which elements `drop` removes depends on the format: a DOCX has no slides and a sheet no paragraphs. The [table of elements](/docs/templates/office/#remove-an-element) says which.
 
 In a text template or a PDF tag these filters do not exist, and using one is a `422` with `unknown filter`.
 
@@ -398,7 +402,9 @@ Values must be numbers. A `null` or missing value is a gap, while a key with no 
 - **DOCX and PPTX.** The chart carries its values inline and has no embedded workbook. It renders, but its data cannot be edited in Word or PowerPoint.
 - **XLSX.** The chart is anchored at the tag's cell, and a hidden sheet named `RichChartData` holds the values.
 - **PPTX.** The chart goes at the position of the shape that held the tag. A placeholder PowerPoint has not moved has no position of its own, so the chart takes the one its layout or master gives it.
-- **ODT, ODS and ODP.** Refused: `charts are not supported in ODT templates yet`. To show a chart there, draw it yourself and print it with `image`.
+- **ODT, ODS and ODP.** The chart is an embedded chart object, `Object N/` in the package, as LibreOffice writes one. It carries its values in its own table and does not read a sheet, so in ODS it does not follow the cells around it. LibreOffice opens it as a chart whose data can be edited. In ODT it sits in the line where the tag is, in ODS it is a frame on the tag's cell, and in ODP it goes at the position of the shape that held the tag. Two charts or pictures for the same cell or shape are stacked, the second below the first.
+
+Every format draws the series, or a pie's slices, in the same colours in turn: blue, orange, grey, gold, light blue and green, Office's default accents. DOCX, XLSX and PPTX take them from the document's theme, so a template with another theme shows its own colours there. ODF charts have the colours written in.
 
 ## pagebreak
 

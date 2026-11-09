@@ -38,7 +38,7 @@ use tracing::Instrument;
 
 use crate::auth::Principal;
 use crate::error::ApiError;
-use crate::jobs::JobPermit;
+use crate::jobs::{Delivery, JobPermit};
 use crate::metrics::OutcomeLabels;
 use crate::state::AppState;
 
@@ -85,7 +85,11 @@ impl UrlPolicy {
         }
     }
 
-    fn compile(allow_private: bool, allow: &[String], deny: &[&String]) -> Result<Self, String> {
+    pub(crate) fn compile(
+        allow_private: bool,
+        allow: &[String],
+        deny: &[&String],
+    ) -> Result<Self, String> {
         let compile = |pattern: &String| Regex::new(pattern).map_err(|e| e.to_string());
         Ok(Self {
             allow_private,
@@ -172,10 +176,11 @@ pub struct Webhook {
     pub principal: String,
 }
 
-/// The webhook a `/v1/*` request asks for, with its place among the running
-/// jobs, or nothing when it runs synchronously. As an extractor it refuses before
-/// the body is read.
-pub struct Hook(pub Option<Webhook>);
+/// How a `/v1/*` request's result is to be delivered: in the response, to the
+/// webhook it names, or into the store as a background job when it says
+/// `Prefer: respond-async`. A webhook or a job comes with its place among the
+/// running jobs. As an extractor it refuses before the body is read.
+pub struct Hook(pub Delivery);
 
 impl FromRequestParts<AppState> for Hook {
     type Rejection = ApiError;
@@ -189,17 +194,30 @@ impl FromRequestParts<AppState> for Hook {
             .get::<Principal>()
             .map(|p| p.0.as_str())
             .unwrap_or("public");
+        let background = crate::jobs::prefers_async(&parts.headers);
         // `RUSTICDOC_WEBHOOK_DISABLED` means the headers are ignored.
-        if state.config.webhook_disabled {
-            return Ok(Self(None));
+        let webhook_asked =
+            !state.config.webhook_disabled && parts.headers.contains_key("x-rusticdoc-webhook-url");
+        // Before the URL is resolved: the request is wrong whatever it names.
+        if background && webhook_asked {
+            return Err(ApiError::bad_request(
+                "ask for a webhook or for 'Prefer: respond-async', not both",
+            ));
         }
-        let Some(mut hook) = Webhook::from_headers(&parts.headers, &state.url_policies).await?
-        else {
-            return Ok(Self(None));
+        let hook = if webhook_asked {
+            Webhook::from_headers(&parts.headers, &state.url_policies).await?
+        } else {
+            None
         };
-        hook.permit = Some(Arc::new(state.jobs.try_acquire(caller)?));
-        hook.principal = caller.to_string();
-        Ok(Self(Some(hook)))
+        match (hook, background) {
+            (Some(mut hook), _) => {
+                hook.permit = Some(Arc::new(state.jobs.try_acquire(caller)?));
+                hook.principal = caller.to_string();
+                Ok(Self(Delivery::Webhook(Box::new(hook))))
+            }
+            (None, true) => Ok(Self(Delivery::Job(crate::jobs::ticket(state, caller)?))),
+            (None, false) => Ok(Self(Delivery::Now)),
+        }
     }
 }
 

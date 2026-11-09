@@ -120,3 +120,107 @@ fn powerpoint_chart_and_picture_take_the_placeholder_position() {
     let p = pic.captures(&all).expect("a picture");
     assert_ne!((&p[1], &p[2]), ("0", "0"), "picture at the corner");
 }
+
+/// The deck's title slide with a card per product below the title: a filled
+/// rounded rectangle for the name and a text box for the description, shapes
+/// as PowerPoint writes them, with the loop moving each card 3 cm down.
+fn deck_with_cards() -> Vec<u8> {
+    let path = format!(
+        "{}/tests/fixtures/office/powerpoint-deck.pptx",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let deck = std::fs::read(path).unwrap();
+    let cards = r#"<p:sp><p:nvSpPr><p:cNvPr id="4" name="Rounded Rectangle 3"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4000000"/><a:ext cx="3600000" cy="900000"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr rtlCol="0" anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="en-US" sz="2400" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>{% for p in products | shift(y=“3cm”) %}{{ p.name }}</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="5" name="TextBox 4"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="4700000" y="4000000"/><a:ext cx="5000000" cy="900000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr wrap="square" rtlCol="0" anchor="ctr"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="2400" dirty="0"/><a:t>{{ p.description }}{% endfor %}</a:t></a:r></a:p></p:txBody></p:sp>"#;
+    let files: Vec<(String, Vec<u8>)> = entries(&deck)
+        .into_iter()
+        .map(|(name, data)| {
+            if name != "ppt/slides/slide1.xml" {
+                return (name, data);
+            }
+            let xml = String::from_utf8(data).unwrap();
+            // Keep the title; the subtitle gives way to the cards.
+            let subtitle = xml.find("<p:sp><p:nvSpPr><p:cNvPr id=\"3\"").unwrap();
+            let end = xml.find("</p:spTree>").unwrap();
+            let xml = format!("{}{cards}{}", &xml[..subtitle], &xml[end..]);
+            (name, xml.into_bytes())
+        })
+        .collect();
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    zip(&refs)
+}
+
+/// A loop across two shapes with `shift` repeats the shapes on its slide,
+/// each card 3 cm below the last, instead of repeating the slide.
+#[test]
+fn powerpoint_cards_move_down_the_slide_with_shift() {
+    let deck = deck_with_cards();
+    let out = compile(Format::Pptx, &deck)
+        .expect("compiles")
+        .render(&data())
+        .expect("renders");
+    let slides = names(&out)
+        .into_iter()
+        .filter(|n| n.starts_with("ppt/slides/slide") && n.ends_with(".xml"))
+        .count();
+    assert_eq!(slides, 5, "slide 1 is not repeated; slide 3 still is");
+    let slide = part(&out, "ppt/slides/slide1.xml");
+    let offsets: Vec<(String, String)> = Regex::new(r#"<a:off x="(\d+)" y="(\d+)"/>"#)
+        .unwrap()
+        .captures_iter(&slide)
+        .map(|c| (c[1].to_string(), c[2].to_string()))
+        .collect();
+    let want = [
+        ("0", "0"),
+        ("838200", "4000000"),
+        ("4700000", "4000000"),
+        ("838200", "5080000"),
+        ("4700000", "5080000"),
+    ];
+    let want: Vec<(String, String)> = want
+        .iter()
+        .map(|(x, y)| (x.to_string(), y.to_string()))
+        .collect();
+    assert_eq!(offsets, want, "{slide}");
+    let text = Regex::new("<[^>]+>").unwrap().replace_all(&slide, "|");
+    let order: Vec<&str> = [
+        "Quarterly review",
+        "House blend",
+        "Medium roast",
+        "Kenya AA",
+        "Bright",
+    ]
+    .iter()
+    .map(|w| {
+        assert!(text.contains(w), "missing {w} in {text}");
+        *w
+    })
+    .collect();
+    let mut at = 0;
+    for w in order {
+        let found = text[at..].find(w).expect("in order") + at;
+        at = found;
+    }
+
+    if !libreoffice_available() {
+        eprintln!("skipping the LibreOffice check: docker images not available");
+        return;
+    }
+    let keep = std::env::var("RICH_KEEP").ok();
+    let temp = tempfile::tempdir().unwrap();
+    let dir = keep.as_deref().unwrap_or(temp.path().to_str().unwrap());
+    std::fs::write(format!("{dir}/cards.pptx"), &out).unwrap();
+    assert!(soffice(dir, "pdf", "cards.pptx"), "conversion failed");
+    let text = pdf_text(dir, "cards.pdf");
+    for w in [
+        "Quarterly review",
+        "House blend",
+        "Medium roast",
+        "Kenya AA",
+        "Bright",
+    ] {
+        assert!(text.contains(w), "no {w:?} in {text}");
+    }
+}

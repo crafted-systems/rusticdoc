@@ -22,7 +22,7 @@ Needs credentials, if any are configured.
 ## POST /v1/fonts
 
 Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,
-or one such file. Takes an admin key. They are in use on this replica when this
+or one such file. Takes an admin. They are in use on this replica when this
 returns, and on the others within `syncIntervalSeconds`.
 
 Needs credentials, if any are configured.
@@ -41,13 +41,13 @@ Needs credentials, if any are configured.
 |---|---|---|
 | 201 | Stored | [`FontsStored`](/docs/reference/api/schemas/#fontsstored) |
 | 400 | Not fonts, or too large | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
-| 403 | Needs an admin key, or the store is full | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
+| 403 | Needs an admin, or the store is full | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 | 501 | RUSTICDOC_STORE is not set | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 | 503 | The store cannot be reached | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 
 ## DELETE /v1/fonts/{id}
 
-Deletes a stored font. Takes an admin key. It leaves this replica when this
+Deletes a stored font. Takes an admin. It leaves this replica when this
 returns, and the others within the sync interval. Documents that name it fall
 back to another font.
 
@@ -64,7 +64,7 @@ Needs credentials, if any are configured.
 | Status | Meaning | Body |
 |---|---|---|
 | 204 | Deleted |  |
-| 403 | Needs an admin key | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
+| 403 | Needs an admin | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 | 404 | No such stored font | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 | 501 | RUSTICDOC_STORE is not set | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 | 503 | The store cannot be reached | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |

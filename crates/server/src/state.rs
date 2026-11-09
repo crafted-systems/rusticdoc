@@ -35,11 +35,20 @@ pub struct AppState {
     pub fonts_synced: Arc<std::sync::atomic::AtomicBool>,
     /// One font upload at a time: unpacking holds a whole package in memory.
     pub font_uploads: Arc<tokio::sync::Semaphore>,
+    /// The translation dictionaries in `RUSTICDOC_TRANSLATIONS_DIR`.
+    pub dictionaries: Arc<rusticdoc_core::dictionaries::Dictionaries>,
 }
 
 impl AppState {
     pub fn new(config: Config) -> Self {
-        let engines = Arc::new(Engines::from_config(&config));
+        let mut engines = Engines::from_config(&config);
+        // Timestamps and validation data go out under the outbound rules.
+        engines.signing.set_outbound(Arc::new(
+            crate::signing::PolicyOutbound::from_config(&config)
+                .expect("patterns are checked before the service starts"),
+        ));
+        let engines = Arc::new(engines);
+        let libreoffice = engines.libreoffice.clone();
         let renderer = match config.render_mode {
             RenderMode::InProcess => Renderer::in_process(),
             RenderMode::Isolated => Renderer::isolated(
@@ -88,10 +97,22 @@ impl AppState {
             }),
             fonts_synced: Default::default(),
             font_uploads: Arc::new(tokio::sync::Semaphore::new(1)),
+            dictionaries: Arc::new(
+                rusticdoc_core::dictionaries::Dictionaries::open(config.translations_dir.clone())
+                    .unwrap_or_else(|e| {
+                        // `Config::check` refuses this before `serve` starts.
+                        tracing::error!(error = %e, "translations not loaded");
+                        rusticdoc_core::dictionaries::Dictionaries::none()
+                    }),
+            ),
             config: Arc::new(config),
             engines,
             pipeline,
-            metrics: Arc::new(Metrics::new()),
+            metrics: Arc::new({
+                let metrics = Metrics::new();
+                metrics.watch(libreoffice);
+                metrics
+            }),
             started: Instant::now(),
             fonts: Default::default(),
             fonts_reload: Default::default(),

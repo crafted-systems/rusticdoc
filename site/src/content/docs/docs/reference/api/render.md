@@ -11,7 +11,7 @@ sidebar:
 
 Fills a template and runs the steps.
 
-Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook. With `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its own key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of `<timestamp>.<event>.<request id>.<body>`, with the timestamp in `X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in `X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself when the service requires no credentials; `rusticdoc webhook-secret` prints it.
+Send a multipart form, or JSON with a `templateId` (see `RenderJson`). Add `Prefer: respond-async` to get 202 at once, with the job in the body and its address in `Location`, and fetch the result from `/v1/jobs/{id}/result` once it is done. This needs `RUSTICDOC_STORE`. Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook. With `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its own key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of `<timestamp>.<event>.<request id>.<body>`, with the timestamp in `X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in `X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself when the service requires no credentials; `rusticdoc webhook-secret` prints it.
 
 Needs credentials, if any are configured.
 
@@ -21,30 +21,33 @@ Needs credentials, if any are configured.
 |---|---|---|---|
 | `X-Rusticdoc-Webhook-Url` | header | No | Deliver the result here instead of in the response |
 | `X-Rusticdoc-Webhook-Error-Url` | header | No | Deliver failures here as JSON |
+| `Prefer` | header | No | `respond-async` to run in the background and answer 202 |
 
 ### Request
 
-`multipart/form-data`
+`application/json`
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `assets` | files | No | Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names by file name, as in `<img src="logo.png">`. Every stylesheet applies to the whole page. Nothing is fetched from anywhere else. |
-| `contactInfo` | string | No | For `sign`: how to reach the signer. |
-| `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
-| `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
-| `files` | files | No | Further files, used by `merge`. |
-| `htmlEngine` | string | No | What turns HTML into PDF: `fulgur` (default), a layout engine with no browser and no network, or `libreoffice`. |
-| `location` | string | No | For `sign`: where it was signed. |
-| `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
+| `templateId` | string | Yes | The stored template: its id, or an alias as `name` or `name@version`. |
+| `batchName` | string | No | For `/v1/render/batch`: each file's name, as a template. |
+| `ctx` | JSON | No | The object visible as `ctx`. |
+| `currency` | string | No | The currency `currency` uses when given none, such as `EUR`. Wins over the template's. |
+| `data` | JSON | No | The object the template sees as its root. |
+| `downloadFrom` | array | No | URLs to fetch as further inputs, as on the multipart form. |
+| `htmlEngine` | string | No | `fulgur` (default) or `libreoffice`, for HTML. |
+| `keep` | string | No | What an Office template's result may keep of what rendering takes out, comma-separated: `macros`, `objects` (OLE objects and ActiveX controls), `externalLinks`, `privateLinks` (hyperlinks to private addresses), or `all`. Default: none of them. |
+| `lang` | string | No | The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins over the template's `lang`: it picks translations for `t`, and when CLDR has data for it, how `number`, `currency` and `date` write numbers, money and month names. |
+| `metadata` | JSON | No | Metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |
 | `ownerPassword` | string | No |  |
-| `pdfa` | string | No | PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`. |
-| `reason` | string | No | For `sign`: why the document was signed. |
-| `signerName` | string | No | For `sign`: the signer's name as shown. |
-| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the service's key; it must be last and cannot be combined with `encrypt`. |
-| `template` | file | No | The template file. Send this or `templateId`. |
-| `templateId` | string | No | The id of a stored template, from `POST /v1/templates`. Send this or `template`. Files in the form are then only further inputs, for `merge`. |
+| `pdfa` | string | No | PDF/A level for `pdfa`. |
+| `splitBy` | string | No | For `/v1/render/batch`: the array to render once per element. |
+| `steps` | array | No | The steps in order, as a list or as comma-separated text. |
+| `timezone` | string | No | The time zone `date` shows moments in: an offset such as `+02:00`, or an IANA zone such as `Europe/Paris`. Wins over the template's. |
 | `to` | string | No | Output format for `convert`. Default `pdf`. |
+| `translations` | object | No | Translations for `t`, by language, each a flat object of keys and texts. They win over the service's dictionaries and the template's own. At most 10,000 entries, keys of 256 bytes and texts of 16 KiB. |
+| `undefinedAsEmpty` | boolean | No | `true` prints a value missing from the data as nothing. |
 | `userPassword` | string | No |  |
 
 ### Responses
@@ -52,6 +55,7 @@ Needs credentials, if any are configured.
 | Status | Meaning | Body |
 |---|---|---|
 | 200 | The rendered file | File |
+| 202 | Accepted as a background job (`Prefer: respond-async`) | [`JobSchema`](/docs/reference/api/schemas/#jobschema) |
 | 204 | Accepted; the result goes to the webhook |  |
 | 400 | The request is wrong | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 | 401 | Credentials required | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
@@ -73,30 +77,33 @@ Needs credentials, if any are configured.
 | Name | In | Required | Description |
 |---|---|---|---|
 | `X-Rusticdoc-Webhook-Url` | header | No | Deliver the ZIP here instead of in the response |
+| `Prefer` | header | No | `respond-async` to run in the background and answer 202 |
 
 ### Request
 
-`multipart/form-data`
+`application/json`
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `assets` | files | No | Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names by file name, as in `<img src="logo.png">`. Every stylesheet applies to the whole page. Nothing is fetched from anywhere else. |
-| `contactInfo` | string | No | For `sign`: how to reach the signer. |
-| `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
-| `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
-| `files` | files | No | Further files, used by `merge`. |
-| `htmlEngine` | string | No | What turns HTML into PDF: `fulgur` (default), a layout engine with no browser and no network, or `libreoffice`. |
-| `location` | string | No | For `sign`: where it was signed. |
-| `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
+| `templateId` | string | Yes | The stored template: its id, or an alias as `name` or `name@version`. |
+| `batchName` | string | No | For `/v1/render/batch`: each file's name, as a template. |
+| `ctx` | JSON | No | The object visible as `ctx`. |
+| `currency` | string | No | The currency `currency` uses when given none, such as `EUR`. Wins over the template's. |
+| `data` | JSON | No | The object the template sees as its root. |
+| `downloadFrom` | array | No | URLs to fetch as further inputs, as on the multipart form. |
+| `htmlEngine` | string | No | `fulgur` (default) or `libreoffice`, for HTML. |
+| `keep` | string | No | What an Office template's result may keep of what rendering takes out, comma-separated: `macros`, `objects` (OLE objects and ActiveX controls), `externalLinks`, `privateLinks` (hyperlinks to private addresses), or `all`. Default: none of them. |
+| `lang` | string | No | The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins over the template's `lang`: it picks translations for `t`, and when CLDR has data for it, how `number`, `currency` and `date` write numbers, money and month names. |
+| `metadata` | JSON | No | Metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |
 | `ownerPassword` | string | No |  |
-| `pdfa` | string | No | PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`. |
-| `reason` | string | No | For `sign`: why the document was signed. |
-| `signerName` | string | No | For `sign`: the signer's name as shown. |
-| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the service's key; it must be last and cannot be combined with `encrypt`. |
-| `template` | file | No | The template file. Send this or `templateId`. |
-| `templateId` | string | No | The id of a stored template, from `POST /v1/templates`. Send this or `template`. Files in the form are then only further inputs, for `merge`. |
+| `pdfa` | string | No | PDF/A level for `pdfa`. |
+| `splitBy` | string | No | For `/v1/render/batch`: the array to render once per element. |
+| `steps` | array | No | The steps in order, as a list or as comma-separated text. |
+| `timezone` | string | No | The time zone `date` shows moments in: an offset such as `+02:00`, or an IANA zone such as `Europe/Paris`. Wins over the template's. |
 | `to` | string | No | Output format for `convert`. Default `pdf`. |
+| `translations` | object | No | Translations for `t`, by language, each a flat object of keys and texts. They win over the service's dictionaries and the template's own. At most 10,000 entries, keys of 256 bytes and texts of 16 KiB. |
+| `undefinedAsEmpty` | boolean | No | `true` prints a value missing from the data as nothing. |
 | `userPassword` | string | No |  |
 
 ### Responses
@@ -104,6 +111,7 @@ Needs credentials, if any are configured.
 | Status | Meaning | Body |
 |---|---|---|
 | 200 | A ZIP of the rendered files | File |
+| 202 | Accepted as a background job (`Prefer: respond-async`) | [`JobSchema`](/docs/reference/api/schemas/#jobschema) |
 | 204 | Accepted; the result goes to the webhook |  |
 | 400 | The request is wrong | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
 | 422 | The template failed to render | [`ErrorBody`](/docs/reference/api/schemas/#errorbody) |
@@ -116,27 +124,29 @@ Needs credentials, if any are configured.
 
 ### Request
 
-`multipart/form-data`
+`application/json`
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `assets` | files | No | Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names by file name, as in `<img src="logo.png">`. Every stylesheet applies to the whole page. Nothing is fetched from anywhere else. |
-| `contactInfo` | string | No | For `sign`: how to reach the signer. |
-| `ctx` | JSON | No | JSON object visible as `ctx`, sent as text or as a file. |
-| `data` | JSON | No | JSON object the template sees as its root, sent as text or as a file. |
-| `files` | files | No | Further files, used by `merge`. |
-| `htmlEngine` | string | No | What turns HTML into PDF: `fulgur` (default), a layout engine with no browser and no network, or `libreoffice`. |
-| `location` | string | No | For `sign`: where it was signed. |
-| `metadata` | JSON | No | JSON object of metadata fields for `metadata`. |
+| `templateId` | string | Yes | The stored template: its id, or an alias as `name` or `name@version`. |
+| `batchName` | string | No | For `/v1/render/batch`: each file's name, as a template. |
+| `ctx` | JSON | No | The object visible as `ctx`. |
+| `currency` | string | No | The currency `currency` uses when given none, such as `EUR`. Wins over the template's. |
+| `data` | JSON | No | The object the template sees as its root. |
+| `downloadFrom` | array | No | URLs to fetch as further inputs, as on the multipart form. |
+| `htmlEngine` | string | No | `fulgur` (default) or `libreoffice`, for HTML. |
+| `keep` | string | No | What an Office template's result may keep of what rendering takes out, comma-separated: `macros`, `objects` (OLE objects and ActiveX controls), `externalLinks`, `privateLinks` (hyperlinks to private addresses), or `all`. Default: none of them. |
+| `lang` | string | No | The language, such as `fr`, `fr-CA` or `en-us`, in any case. It wins over the template's `lang`: it picks translations for `t`, and when CLDR has data for it, how `number`, `currency` and `date` write numbers, money and month names. |
+| `metadata` | JSON | No | Metadata fields for `metadata`. |
 | `outputFilename` | string | No | File name of the result, without extension. |
 | `ownerPassword` | string | No |  |
-| `pdfa` | string | No | PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`. |
-| `reason` | string | No | For `sign`: why the document was signed. |
-| `signerName` | string | No | For `sign`: the signer's name as shown. |
-| `steps` | string | No | Comma-separated steps in order: `convert`, `pdfa`, `metadata`, `encrypt`, `merge`, `sign`. `sign` signs cryptographically with the service's key; it must be last and cannot be combined with `encrypt`. |
-| `template` | file | No | The template file. Send this or `templateId`. |
-| `templateId` | string | No | The id of a stored template, from `POST /v1/templates`. Send this or `template`. Files in the form are then only further inputs, for `merge`. |
+| `pdfa` | string | No | PDF/A level for `pdfa`. |
+| `splitBy` | string | No | For `/v1/render/batch`: the array to render once per element. |
+| `steps` | array | No | The steps in order, as a list or as comma-separated text. |
+| `timezone` | string | No | The time zone `date` shows moments in: an offset such as `+02:00`, or an IANA zone such as `Europe/Paris`. Wins over the template's. |
 | `to` | string | No | Output format for `convert`. Default `pdf`. |
+| `translations` | object | No | Translations for `t`, by language, each a flat object of keys and texts. They win over the service's dictionaries and the template's own. At most 10,000 entries, keys of 256 bytes and texts of 16 KiB. |
+| `undefinedAsEmpty` | boolean | No | `true` prints a value missing from the data as nothing. |
 | `userPassword` | string | No |  |
 
 ### Responses

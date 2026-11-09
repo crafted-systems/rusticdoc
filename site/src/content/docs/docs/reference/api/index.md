@@ -14,8 +14,9 @@ Requests are multipart forms unless a route says otherwise. Send credentials wit
 
 - [Render](/docs/reference/api/render/): Templates in, documents out
 - [Convert](/docs/reference/api/convert/): Documents in, converted documents out
-- [Stored templates](/docs/reference/api/templates/): Store a template and render it by id from any replica
+- [Stored templates](/docs/reference/api/templates/): Store a template, name it with an alias, and render it by id or alias from any replica
 - [Fonts](/docs/reference/api/fonts/): List, upload and delete fonts, and reload a mounted directory
 - [PDF operations](/docs/reference/api/pdf/): PDF operations
 - [PDF forms](/docs/reference/api/pdf-forms/): PDF templates: form fields, tags in annotations, overlays
+- [Background jobs](/docs/reference/api/jobs/): Requests run in the background with `Prefer: respond-async`, and their results
 - [Service](/docs/reference/api/service/): Health, version, metrics

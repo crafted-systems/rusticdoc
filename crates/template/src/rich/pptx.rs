@@ -164,7 +164,7 @@ fn run(rpr: &Elem, raw_text: &str) -> Node {
 }
 
 /// The shape's own offset, when its properties give one.
-fn offset_of(shape: &Elem) -> Option<(i64, i64)> {
+pub(super) fn offset_of(shape: &Elem) -> Option<(i64, i64)> {
     let off = shape.find("a:off")?;
     let at = |name: &str| off.attr(name).and_then(|v| v.parse::<i64>().ok());
     Some((at("x")?, at("y")?))
@@ -191,15 +191,23 @@ fn linked_part(entries: &[Entry], part: &str, rel_suffix: &str) -> Option<String
         .map(|(_, _, target)| target)
 }
 
-/// The offset of the placeholder in `part` that a slide's placeholder takes
-/// after: the same `idx` on a layout when there is one, else the same kind.
-fn placeholder_offset(
+/// The shape's own size, when its properties give one.
+pub(super) fn extent_of(shape: &Elem) -> Option<(i64, i64)> {
+    let ext = shape.find("a:ext")?;
+    let at = |name: &str| ext.attr(name).and_then(|v| v.parse::<i64>().ok());
+    Some((at("cx")?, at("cy")?))
+}
+
+/// The placeholder in `part` that a slide's placeholder takes after, when it
+/// has a position: the same `idx` on a layout when there is one, else the same
+/// kind.
+fn placeholder_shape(
     entries: &[Entry],
     part: &str,
     idx: Option<&str>,
     ty: Option<&str>,
     by_kind_only: bool,
-) -> Option<(i64, i64)> {
+) -> Option<Elem> {
     let nodes = xml::parse(&package::text_of(entries, part)?).ok()?;
     let tree = xml::root(&nodes)?.find("p:spTree")?;
     let shapes: Vec<&Elem> = tree
@@ -223,7 +231,21 @@ fn placeholder_offset(
             })
         })
     })?;
-    offset_of(found)
+    offset_of(found).map(|_| (*found).clone())
+}
+
+/// The layout or master placeholder that gives a slide's placeholder its
+/// position when the slide does not say: PowerPoint leaves the position out
+/// of a slide's placeholders until they are moved, and takes it from the
+/// slide's layout, or failing that its master.
+pub(super) fn inherited_shape(entries: &[Entry], part: &str, shape: &Elem) -> Option<Elem> {
+    let ph = shape.find("p:ph")?;
+    let (idx, ty) = (ph.attr("idx"), ph.attr("type"));
+    let layout = linked_part(entries, part, "/slideLayout")?;
+    placeholder_shape(entries, &layout, idx.as_deref(), ty.as_deref(), false).or_else(|| {
+        let master = linked_part(entries, &layout, "/slideMaster")?;
+        placeholder_shape(entries, &master, idx.as_deref(), ty.as_deref(), true)
+    })
 }
 
 impl Pptx<'_, '_> {
@@ -231,18 +253,9 @@ impl Pptx<'_, '_> {
         misplaced(self.part, "slide", message)
     }
 
-    /// Where a placeholder sits when the slide does not say: PowerPoint leaves
-    /// the position out of a slide's placeholders until they are moved, and
-    /// takes it from the slide's layout, or failing that its master.
+    /// Where a placeholder sits when the slide does not say.
     fn inherited_offset(&self, shape: &Elem) -> Option<(i64, i64)> {
-        let ph = shape.find("p:ph")?;
-        let (idx, ty) = (ph.attr("idx"), ph.attr("type"));
-        let entries: &[Entry] = self.pkg.entries;
-        let layout = linked_part(entries, self.part, "/slideLayout")?;
-        placeholder_offset(entries, &layout, idx.as_deref(), ty.as_deref(), false).or_else(|| {
-            let master = linked_part(entries, &layout, "/slideMaster")?;
-            placeholder_offset(entries, &master, idx.as_deref(), ty.as_deref(), true)
-        })
+        offset_of(&inherited_shape(self.pkg.entries, self.part, shape)?)
     }
 
     /// Goes through a shape tree or group. New shapes join the same container
@@ -455,6 +468,7 @@ impl Pptx<'_, '_> {
                     }
                 }
                 Rich::PageBreak => return Err(self.fail("a slide has no page breaks")),
+                Rich::Drop(_) => return Err(self.fail("drop() cannot sit here")),
             }
         }
         Ok(())

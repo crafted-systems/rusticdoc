@@ -104,7 +104,7 @@ fn append_page(base: &mut Document, imported: Imported) -> Result<()> {
 
 /// A page attribute, looked up through the page tree when the page itself
 /// lacks it. References are kept as they are.
-fn inherited(doc: &Document, page: &Dictionary, key: &[u8]) -> Option<Object> {
+pub(super) fn inherited(doc: &Document, page: &Dictionary, key: &[u8]) -> Option<Object> {
     let mut node = page;
     for _ in 0..64 {
         if let Ok(value) = node.get(key) {

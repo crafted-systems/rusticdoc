@@ -26,7 +26,8 @@ jq -e '.ok == true and .diagnostics == []' result.json
   "format": "docx",
   "engine": "office",
   "error": null,
-  "diagnostics": []
+  "diagnostics": [],
+  "missing_fonts": []
 }
 ```
 
@@ -42,6 +43,7 @@ The status is `200` whatever it finds, so read `ok`. A `400` means the request i
 | `engine` | `office`, `text` or `none` |
 | `error` | The first error as one line, or `null` |
 | `diagnostics` | Every finding |
+| `missing_fonts` | Fonts the template names that the service lacks, as in [fonts](/docs/guides/fonts/#find-fonts-a-template-needs) |
 
 Each finding has these fields:
 
@@ -118,6 +120,7 @@ In an Office template:
 | A bad argument to a rich filter | `image: too many arguments: unknown keyword argument 'foo'` |
 | A loop over something that is not a list | A warning: `loop over a number rather than an array: {% for i in n %}` |
 | Text that looks like a broken tag | A warning: `text looks like an unterminated tag` |
+| A font the service has neither loaded nor mapped to a substitute | A warning: `the template uses the font 'Aptos', which the service does not have; ...` |
 
 Syntax problems stop the check before the test render, so missing values show up after they are fixed. In the same way, a value that reaches a built-in filter such as `upper` may be reported only after the errors before it are gone. **Fix what it lists and run it again until `ok` is `true`.**
 

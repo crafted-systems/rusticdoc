@@ -24,6 +24,10 @@ hex = "0.4.3"
 image = { version = "0.25.6", default-features = false, features = ["jpeg"] }
 libc = "0.2"
 lopdf = { version = "0.47.0", features = ["embed_image"] }
+# Form text outside Latin: Fulgur's own text engine and PDF writer, used
+# directly to shape it and embed subset fonts.
+parley = "0.6.0"
+krilla = "0.7.0"
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
 quick-xml = "0.41.0"
 rusticdoc-template = { version = "0.1.0", path = "../template" }
@@ -41,6 +45,10 @@ zip = { version = "9.4.0", default-features = false, features = ["deflate"] }
 object_store = { version = "0.14.2", default-features = false, features = ["aws", "fs"] }
 futures-util = "0.3.34"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+x509-tsp = "0.1.0"
+x509-ocsp = "0.2.1"
+cryptoki = "0.12.1"
+cmpv2 = "0.2.0"
 
 [dev-dependencies]
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }

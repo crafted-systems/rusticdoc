@@ -58,16 +58,16 @@ Send a `.pdf` to `/v1/render` as the template, or use `/v1/pdf/forms/fill`, to f
 
 ## Signing PDFs
 
-`/v1/pdf/sign` does two different things. By default (`signature=image`) it places signature images at exact coordinates, which is not a cryptographic signature. With `signature=certificate` it signs cryptographically with the deployment's key: an incremental update that leaves the original bytes untouched and adds a signature field and a `/Sig` dictionary (`/Adobe.PPKLite`, `/ETSI.CAdES.detached`) holding a detached CMS signature over SHA-256 of the byte ranges, with content-type, message-digest and ESS signing-certificate-v2 as signed attributes and the signer's certificate and chain included. That is PAdES baseline B-B style. The signature is invisible, or shown with the one PNG or JPEG sent (`page`, `x`, `y`, `width`); `reason`, `location`, `contactInfo` and `signerName` go into the signature dictionary, and the signing time into its `/M`.
+`/v1/pdf/sign` does two different things. By default (`signature=image`) it places signature images at exact coordinates, which is not a cryptographic signature. With `signature=certificate` it signs cryptographically with the deployment's key: an incremental update that leaves the original bytes untouched and adds a signature field and a `/Sig` dictionary (`/Adobe.PPKLite`, `/ETSI.CAdES.detached`) holding a detached CMS signature over SHA-256 of the byte ranges, with content-type, message-digest and ESS signing-certificate-v2 as signed attributes and the signer's certificate and chain included. That is PAdES baseline B-B. `level` goes further: `b-t` adds an RFC 3161 timestamp from the configured timestamp authority, `b-lt` a DSS with the chains' certificates and their OCSP responses or CRLs, and `b-lta` a document timestamp over it all; a timestamp authority or revocation source that fails is a `502`, never a file at a lower level. `certify=1|2|3` certifies (DocMDP) instead of approving. The signature is invisible, shown with the one PNG or JPEG sent, or shown as text (signer, date, reason) at `page`, `x`, `y` and `width`; `reason`, `location`, `contactInfo` and `signerName` go into the signature dictionary, and the signing time into its `/M`.
 
 ```bash
 curl -F files=@contract.pdf -F signature=certificate -F reason=Approved \
   http://localhost:9027/v1/pdf/sign -o signed.pdf
 ```
 
-The key comes from the deployment, never from a request: set `RUSTICDOC_SIGNING_KEY` (a PEM private key, RSA or ECDSA P-256, in PKCS#8, PKCS#1 or SEC1) and `RUSTICDOC_SIGNING_CERT` (PEM, the signer's certificate first, then any chain). They are checked at start: the key must match the certificate and the certificate must be within its validity period, or the service does not start, and one without the other stops it too. A certificate without digitalSignature or nonRepudiation in its key usage, a self-signed one, or a key file other users can read gets a warning. Without them, `signature=certificate` answers 503 and image signing works as before. `sign` is also a step on `/v1/render`, which must be last and cannot be combined with `encrypt`, and `rusticdoc pdf sign --key key.pem --cert cert.pem` does the same from the command line.
+The key comes from the deployment, never from a request: set `RUSTICDOC_SIGNING_KEY` (a PEM private key, RSA or ECDSA P-256, in PKCS#8, PKCS#1 or SEC1) and `RUSTICDOC_SIGNING_CERT` (PEM, the signer's certificate first, then any chain). They are checked at start: the key must match the certificate and the certificate must be within its validity period, or the service does not start, and one without the other stops it too. A certificate without digitalSignature or nonRepudiation in its key usage, a self-signed one, or a key file other users can read gets a warning. Without them, `signature=certificate` answers 503 and image signing works as before. Named keys (`RUSTICDOC_SIGNING_KEYS`, chosen with `signingKey`) each have an allow list of callers, and any key can live on a PKCS#11 token (`pkcs11:<label>`, with `RUSTICDOC_PKCS11_*`). `sign` is also a step on `/v1/render` with the same options, which must be last and cannot be combined with `encrypt`, and `rusticdoc pdf sign --key key.pem --cert cert.pem` does the same from the command line.
 
-Output has been checked with poppler's `pdfsig` (signature valid, total document signed) and pyHanko (`VALID`, also in its AdES report); `make sign-check` repeats the `pdfsig` check. It has not been opened in Adobe Acrobat. There is no RFC 3161 timestamp, so it is B-B, not B-T or LTV: a validator has only the signer's claimed time.
+Output has been checked with poppler's `pdfsig` (signature valid) and pyHanko (`VALID`; B-LT and B-LTA files also validate offline, with revocation checking on, from what they hold); `make sign-check` repeats both against a local timestamp authority, OCSP responder and CRL, and keys on SoftHSM2 have signed at every level. It has not been opened in Adobe Acrobat.
 
 ## Fonts
 
@@ -117,7 +117,7 @@ Replicas share nothing but the store: no messages, locks or leader. Everything w
 | `POST /v1/templates/validate` | Reports template errors against sample data without converting. Takes a file or a `templateId` |
 | `POST /v1/convert` | Convert one or more files; several come back as a ZIP, or one PDF with `merge=true` |
 | `POST /v1/pdf/*` | `merge`, `split`, `rotate`, `flatten`, `optimize`, `encrypt`, `convert`, `watermark`, `stamp`, `overlay`, `sign`, `embed`, `factur-x`, `metadata/read`, `metadata/write`, `bookmarks/read`, `bookmarks/write`, `forms/fields`, `forms/fill` |
-| `POST /v1/pdf/sign` with `signature=certificate` | A cryptographic PAdES B-B style signature with the deployment's key; 503 when none is configured. See [Signing PDFs](#signing-pdfs) |
+| `POST /v1/pdf/sign` with `signature=certificate` | A cryptographic PAdES signature, B-B to B-LTA, approving or certifying, with the deployment's key or a named one; 503 when none is configured. See [Signing PDFs](#signing-pdfs) |
 | `GET /v1/fonts`, `POST /v1/fonts/reload` | List the fonts and pick up new ones |
 | `POST /v1/fonts`, `DELETE /v1/fonts/{id}` | Upload a ZIP of fonts, or delete one, for every caller and replica. Needs a store and an admin key |
 | `GET /health`, `/ready`, `/openapi.json` | Open. With credentials configured, `/health` and `/ready` show only the status to a caller without them. With a store, `/ready` waits for this replica's fonts |
@@ -177,7 +177,7 @@ Environment variables, all optional:
 | `RUSTICDOC_FONT_CACHE_DIR` | the temp directory | This replica's copy of the stored fonts. Local to it, and rebuilt when it starts. It must be a real directory owned by the service's user that no one else can write to; anything else stops the font sync and keeps the replica unready |
 | `RUSTICDOC_STORE_SYNC_INTERVAL` | `30s` | How often a replica looks for fonts added or deleted elsewhere |
 | `RUSTICDOC_WEBHOOK_SECRET` | none | Secret that callers' signing keys derive from. Unset, deliveries are not signed, and the service warns at start |
-| `RUSTICDOC_SIGNING_KEY`, `RUSTICDOC_SIGNING_CERT` | none | PEM private key (RSA or ECDSA P-256; PKCS#8, PKCS#1 or SEC1, unencrypted) and its PEM certificate, then any chain, for `signature=certificate` and the `sign` step. Both or neither: one alone, a key that does not match, or a certificate outside its validity stops the service from starting. Unset, cryptographic signing answers 503 |
+| `RUSTICDOC_SIGNING_KEY`, `RUSTICDOC_SIGNING_CERT` | none | PEM private key (RSA or ECDSA P-256; PKCS#8, PKCS#1 or SEC1, unencrypted), or `pkcs11:<label>`, and its PEM certificate, then any chain, for `signature=certificate` and the `sign` step. Both or neither: one alone, a key that does not match, or a certificate outside its validity stops the service from starting. Unset, cryptographic signing answers 503. Named keys, PKCS#11, the timestamp authority and the rest are in the [configuration reference](site/src/content/docs/docs/reference/configuration.md#pdf-signing) |
 | `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhooks to private addresses |
 | `RUSTICDOC_DOWNLOAD_FROM_ALLOW_PRIVATE` | `false` | The same for `downloadFrom` |
 | `RUSTICDOC_WEBHOOK_DISABLED` | `false` | Ignore the webhook headers, on every route |
@@ -234,7 +234,7 @@ make disk        # one conversion cannot fill the disk
 make replicas    # several containers on one store: a bucket, then a shared volume
 ```
 
-`make sign-check` needs no Docker but openssl and poppler's `pdfsig`: it signs PDFs with the CLI using throwaway keys and has `pdfsig`, and pyHanko when installed, validate them.
+`make sign-check` needs no Docker but openssl, python3, curl and poppler's `pdfsig`: it signs PDFs with the CLI using throwaway keys and a test CA with a local timestamp authority, OCSP responder and CRL, at every level, and has `pdfsig`, and pyHanko when installed, validate them. `test/sign/softhsm.sh` signs with keys on SoftHSM2 in a Debian container.
 
 ## Security
 
@@ -266,7 +266,7 @@ A compromised LibreOffice still runs as the service's user, in the service's con
 - Noto Serif CJK is left out of the image to save 53 MB, so Chinese, Japanese and Korean text in a serif face converts in Noto Sans CJK until Noto Serif CJK is uploaded or mounted at `/fonts`.
 - Barcodes have been read by ZXing and ZBar (`test/barcodes`), not by a hardware or phone scanner.
 - Filled PDF forms show their values in Chrome and Preview, and have not been opened in Acrobat.
-- Text the service draws into a PDF, meaning field appearances and annotation values, is Latin only, in Helvetica. Other characters draw as `?`. Field values are stored in full, so a viewer that redraws the field still shows them.
+- Text the service draws into a PDF form outside Windows Latin, such as Arabic or Chinese, is shaped and embedded as subset fonts. It has been checked with Poppler (`pdftoppm`, `pdftotext`) and macOS Quick Look, not in Chrome or Acrobat. Poppler extracts an Arabic lam-alef ligature with its two letters swapped; the file maps them in order. Comb fields are drawn as one line. Marks drawn by `watermark` and `stamp` are still Latin only, in Helvetica.
 - A template that uses a font the service lacks is not reported. Check `GET /v1/fonts` and the `x-fonts-used` header.
 - Macros and OLE objects in a template are not stripped. LibreOffice will not run or fetch them when converting, but a request with no conversion step returns them in its output.
 - A stored template cannot be changed: store the new one and use its id. There are no versions or aliases yet.

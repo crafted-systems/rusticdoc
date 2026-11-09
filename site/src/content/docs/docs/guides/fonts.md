@@ -8,7 +8,7 @@ A document that names a font the service lacks comes out in a fallback font, wit
 
 | Way | Needs | Applies to | Survives a restart |
 |---|---|---|---|
-| Upload to the store | `RUSTICDOC_STORE` and an admin key | Every caller and replica | Yes |
+| Upload to the store | `RUSTICDOC_STORE` and an admin | Every caller and replica | Yes |
 | Mount at `/fonts` | A volume, then a reload | This replica, for every caller | As long as the mount does |
 | Send with a request | Nothing | That request | No |
 
@@ -113,21 +113,23 @@ jq -e 'map(.family) | index("Caladea") != null' fonts.json
 
 ## Delete
 
-`DELETE /v1/fonts/{id}` removes a stored font and answers `204`. It takes an admin key. An unknown id answers `404`. Documents that name the font then fall back to another one, with no error.
+`DELETE /v1/fonts/{id}` removes a stored font and answers `204`. It takes an admin. An unknown id answers `404`. Documents that name the font then fall back to another one, with no error.
 
 A font from the image or a mount has no `id` and cannot be deleted this way.
 
 ## Admin keys
 
-Fonts are shared by every caller, and a font decides what the digits look like in everyone's documents, so changing them takes an admin key.
+Fonts are shared by every caller, and a font decides what the digits look like in everyone's documents, so changing them takes an admin.
 
 | Service is configured with | Who may upload and delete fonts |
 |---|---|
-| `RUSTICDOC_ADMIN_KEYS` | Only those keys, in `X-Api-Key` or `Authorization: Bearer` |
-| Other credentials but no admin keys | Nobody. The answer is `403 admin_required` |
-| No credentials at all | Anyone who can reach the service |
+| `RUSTICDOC_ADMIN_KEYS` | Those keys, in `X-Api-Key` or `Authorization: Bearer` |
+| `RUSTICDOC_BASIC_AUTH_ADMIN=true` | The basic-auth user |
+| `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM` | The OpenID Connect users they name |
+| Other credentials but none of these | Nobody. The answer is `403 admin_required` |
+| No credentials at all | Anyone who can reach the service, unless admin keys are set |
 
-A valid API key, a basic-auth user and an OpenID Connect token are all refused unless they are an admin key. See [authentication](/docs/guides/authentication/).
+Any other API key, tenant key, basic-auth user or token is refused. See [admins](/docs/guides/authentication/#admins).
 
 ## Chinese, Japanese and Korean fonts
 
@@ -144,6 +146,22 @@ The image has Noto Sans CJK but not Noto Serif CJK, which would add 53 MB. Windo
 The names also match in their own scripts, such as 宋体 and ＭＳ 明朝. None of these keep the original's line breaks, because no free font matches their widths.
 
 To get the serif faces back, add `NotoSerifCJK-Regular.ttc` and `NotoSerifCJK-Bold.ttc` in any of the three ways above. They are under the SIL Open Font License, from the [Noto CJK releases](https://github.com/notofonts/noto-cjk/releases) or Debian's `fonts-noto-cjk`. Each is about 27 MB, under the 128 MB limit for one font. Nothing else needs to change: the serif names above ask for Noto Serif CJK first.
+
+## Find fonts a template needs
+
+[Validation](/docs/templates/validate/) lists the fonts a DOCX, XLSX, PPTX, ODT, ODS or ODP template names that the service can neither find nor substitute, in `missing_fonts`, with a warning for each:
+
+```bash
+curl -F template=@letter.docx http://localhost:9027/v1/templates/validate | jq .missing_fonts
+```
+
+```json
+["Aptos"]
+```
+
+A name counts as found when a loaded font has that family, or when the image maps it to a font with the same metrics, such as Calibri to Carlito. The mapping is the image's fontconfig file, so the report agrees with what a conversion does. Text in a missing font still renders, in a fallback font, so its line and page breaks can move. Upload the font or mount it to fix that.
+
+Validation reads the fonts the document's text, styles and theme name. A font used only in an embedded object or a chart is not checked.
 
 ## Check what a document used
 

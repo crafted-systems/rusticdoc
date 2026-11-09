@@ -13,10 +13,20 @@ soffice() {
 soffice --terminate_after_init || true
 soffice --convert-to docx --outdir /w /w/invoice.fodt
 soffice --convert-to xlsx --outdir /w /w/invoice.fods
-for name in rich placeholder; do
-  for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
-    soffice --convert-to "${pair%:*}" --outdir /w "/w/$name.${pair#*:}"
-  done
+for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
+  soffice --convert-to "${pair%:*}" --outdir /w "/w/rich.${pair#*:}"
+  # Basic macros, links and a linked workbook, for the sanitiser.
+  soffice --convert-to "${pair%:*}" --outdir /w "/w/sanitize.${pair#*:}"
+  # Pictures whose alt text holds an image or barcode tag.
+  soffice --convert-to "${pair%:*}" --outdir /w "/w/placeholder.${pair#*:}"
 done
+soffice --convert-to xlsx --outdir /w /w/sheets.fods
+soffice --convert-to ods --outdir /w /w/sheets.fods
+# A drop() tag for each element, on a condition the data sets.
+for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
+  soffice --convert-to "${pair%:*}" --outdir /w "/w/drop.${pair#*:}"
+done
+python3 drop_fix.py drop.pptx drop.xlsx
+cp drop.docx drop.xlsx drop.pptx ../../../../site/samples/fixtures/
 rm -rf profile
-ls -la invoice.docx invoice.xlsx rich.* placeholder.*
+ls -la invoice.docx invoice.xlsx rich.* sanitize.* sheets.xlsx sheets.ods drop.* placeholder.*

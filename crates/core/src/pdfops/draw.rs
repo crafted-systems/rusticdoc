@@ -27,7 +27,7 @@ const HELVETICA: [u16; 95] = [
     222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
 ];
 
-fn width(c: char) -> f32 {
+pub(super) fn width(c: char) -> f32 {
     match c as u32 {
         32..=126 => HELVETICA[c as usize - 32] as f32,
         _ => 556.0,
@@ -35,7 +35,7 @@ fn width(c: char) -> f32 {
 }
 
 /// A character in WinAnsiEncoding; `?` for anything outside it.
-fn winansi(c: char) -> u8 {
+pub(super) fn winansi(c: char) -> u8 {
     match c {
         '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' => c as u8,
         '€' => 0x80,
