@@ -814,17 +814,30 @@ fn decode_all(png: &[u8]) -> Vec<String> {
         let height = (band * 2).min(h - top);
         let rows = &img.as_raw()[(top * w) as usize..((top + height) * w) as usize];
         found.extend(detect(rows.to_vec(), height));
-        // The multiple reader does not always look for Aztec's bullseye.
-        if let Ok(aztec) = rxing::helpers::detect_in_luma(
-            rows.to_vec(),
-            w,
-            height,
-            Some(rxing::BarcodeFormat::AZTEC),
-        ) {
-            found.push(aztec.getText().to_string());
-        }
-
         top += band;
+    }
+    // rxing looks for an Aztec bullseye from the middle of the image, so it
+    // finds one only in a window around it.
+    let win = (w / 4).max(64).min(w).min(h);
+    let step = (win / 3).max(1);
+    let mut y = 0;
+    'scan: while y + win <= h {
+        let mut x = 0;
+        while x + win <= w {
+            let mut tile = Vec::with_capacity((win * win) as usize);
+            for row in y..y + win {
+                let at = (row * w + x) as usize;
+                tile.extend_from_slice(&img.as_raw()[at..at + win as usize]);
+            }
+            if let Ok(aztec) =
+                rxing::helpers::detect_in_luma(tile, win, win, Some(rxing::BarcodeFormat::AZTEC))
+            {
+                found.push(aztec.getText().to_string());
+                break 'scan;
+            }
+            x += step;
+        }
+        y += step;
     }
     found
 }

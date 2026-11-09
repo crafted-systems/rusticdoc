@@ -507,6 +507,9 @@ fn encode(kind: Kind, value: &str, ec: Option<&str>) -> Result<Symbol, String> {
             if !value.len().is_multiple_of(2) {
                 return Err("itf takes an even number of digits; add a leading 0".into());
             }
+            if value.len() > 80 {
+                return Err("itf takes at most 80 digits".into());
+            }
             layout = Some(Layout::Centred(value.to_string()));
             value.to_string()
         }
@@ -604,8 +607,10 @@ fn retail(
 /// A whole number of device pixels per module, so edges stay crisp; as many as
 /// the size asks for, as far as the image stays within its pixel limit.
 pub fn module_px(size_pt: f64, columns: usize, lines: usize) -> usize {
-    let wanted = ((size_pt * 4.0 / columns as f64).ceil() as usize).clamp(2, 16);
-    let fits = (MAX_BARCODE_PIXELS / (columns * lines).max(1)).isqrt();
+    let wanted = ((size_pt * 4.0 / columns.max(1) as f64).ceil() as usize).clamp(2, 16);
+    let fits = columns
+        .checked_mul(lines)
+        .map_or(0, |cells| (MAX_BARCODE_PIXELS / cells.max(1)).isqrt());
     wanted.min(fits).max(1)
 }
 
@@ -637,8 +642,10 @@ fn draw(kind: Kind, symbol: &Symbol, opts: &Options) -> Result<(Media, (f64, f64
                 left: l, right: r, ..
             }) = &symbol.layout
             {
-                let digit =
-                    (font_pt * font::ADVANCE as f64 / 1000.0 / module_pt).ceil() as usize + 1;
+                // At most the widest quiet zone, however large the text.
+                let digit = ((font_pt * font::ADVANCE as f64 / 1000.0 / module_pt).ceil() as usize
+                    + 1)
+                .min(MAX_QUIET as usize);
                 if l.is_some() {
                     left = left.max(digit);
                 }
@@ -649,8 +656,20 @@ fn draw(kind: Kind, symbol: &Symbol, opts: &Options) -> Result<(Media, (f64, f64
         }
         let total = cols + left + right;
         let module_pt = width_pt / total as f64;
+        if total > MAX_BARCODE_MODULES {
+            return Err(format!(
+                "the value is too long to print as {} with its text: {total} modules",
+                name(kind)
+            ));
+        }
         let band = if text { font_pt * 1.3 } else { 0.0 };
         height_pt = opts.height.unwrap_or(module_pt * lines as f64 + band);
+        if !height_pt.is_finite() || height_pt > MAX_SIDE_PT {
+            return Err(format!(
+                "the barcode would print taller than {MAX_SIDE_PT} points"
+            ));
+        }
+
         if height_pt <= band + module_pt {
             return Err(format!(
                 "height {height_pt} leaves no room for the bars under a {font_pt}-point text"
@@ -785,11 +804,17 @@ struct Canvas {
 
 impl Canvas {
     fn new(w: usize, h: usize, opts: &Options) -> Result<Canvas, String> {
-        if w * h > MAX_BARCODE_PIXELS * 2 {
-            return Err("the barcode is too large to draw".into());
+        let too_large = || "the barcode is too large to draw".to_string();
+        if w.checked_mul(h)
+            .is_none_or(|area| area > MAX_BARCODE_PIXELS * 2)
+        {
+            return Err(too_large());
         }
-        let mut pixmap =
-            Pixmap::new(w as u32, h as u32).ok_or("the barcode is too large to draw")?;
+        let (w, h) = (
+            u32::try_from(w).map_err(|_| too_large())?,
+            u32::try_from(h).map_err(|_| too_large())?,
+        );
+        let mut pixmap = Pixmap::new(w, h).ok_or_else(too_large)?;
         let ink = opts.color.as_deref().map_or([0, 0, 0], rgb);
         let paper = if opts.transparent {
             None
@@ -1098,6 +1123,65 @@ mod tests {
         assert_eq!(module_px(MAX_SIDE_PT, 4096, 400), 1);
         assert_eq!(module_px(100.0, 29, 29), 14);
         assert_eq!(module_px(MAX_SIDE_PT, 185, 185), 10);
+    }
+
+    #[test]
+    fn extreme_sizes_are_refused_or_bounded_never_a_crash() {
+        let run = |kind: &str, value: &str, f: &dyn Fn(&mut Options)| {
+            let mut opts = Options::default();
+            f(&mut opts);
+            barcode(kind, value, &opts)
+        };
+        // A huge text on a tiny code would widen the quiet zones without end.
+        let err = run("upca", "03600029145", &|o| {
+            o.text = true;
+            o.width = Some(1.0);
+            o.font_size = Some(MAX_SIDE_PT);
+        })
+        .unwrap_err();
+        assert!(err.contains("taller"), "{err}");
+        let (media, printed) = run("upca", "03600029145", &|o| {
+            o.text = true;
+            o.width = Some(10.0);
+            o.font_size = Some(200.0);
+        })
+        .unwrap();
+        assert!(media.px.0 as usize * media.px.1 as usize <= MAX_BARCODE_PIXELS * 2);
+        assert_eq!(printed.0, 10.0);
+
+        // A long value whose text-widened zones pass the module limit.
+        let long = "1".repeat(78);
+        let err = run("itf", &long, &|o| {
+            o.quiet_zone = Some(MAX_QUIET);
+            o.text = true;
+            o.font_size = Some(MAX_SIDE_PT);
+            o.width = Some(1.0);
+        });
+        assert!(
+            err.as_ref()
+                .is_ok_and(|(m, _)| m.px.0 as usize * m.px.1 as usize <= MAX_BARCODE_PIXELS * 2)
+                || err
+                    .as_ref()
+                    .is_err_and(|e| e.contains("too") || e.contains("taller")),
+            "{:?}",
+            err.as_ref().err()
+        );
+        // Tall and thin: refused, not an enormous canvas.
+        for kind in ["code128", "pdf417"] {
+            let result = run(kind, "x", &|o| {
+                o.width = Some(0.01);
+                o.height = Some(MAX_SIDE_PT);
+            });
+            match result {
+                Ok((media, _)) => {
+                    assert!(media.px.0 as usize * media.px.1 as usize <= MAX_BARCODE_PIXELS * 2)
+                }
+                Err(e) => assert!(e.contains("too large") || e.contains("taller"), "{e}"),
+            }
+        }
+        assert_eq!(module_px(1.0, usize::MAX, 2), 1);
+        assert!(Canvas::new(usize::MAX, 2, &Options::default()).is_err());
+        assert!(Canvas::new(1 << 33, 1, &Options::default()).is_err());
     }
 
     #[test]

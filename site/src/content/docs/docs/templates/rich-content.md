@@ -86,7 +86,7 @@ The bytes decide the type, not a name or the `mime`.
 | WebP | Converted to PNG, since office suites do not all read WebP |
 | SVG | A cleaned copy of the drawing, with a PNG of it for readers that do not show SVG. DOCX, XLSX and PPTX carry the PNG as the picture and the SVG as Office's SVG extension; ODF frames list the SVG first and the PNG after it |
 
-An SVG is rebuilt from what draws, element by element. Scripts, event attributes such as `onload`, animation, `foreignObject`, styles that `@import` or point outside the file, and links to other files or addresses are all removed. A picture inside an SVG stays only as embedded PNG, JPEG or GIF data. A DTD is refused. The PNG beside it is drawn by the service, with the fonts of the machine it runs on, at up to 2000 pixels on the long side.
+An SVG is rebuilt from what draws, element by element. Scripts, event attributes such as `onload`, animation, `foreignObject`, `<style>` stylesheets, and links to other files or addresses are all removed. A `style` attribute keeps only presentation properties such as `fill`, `stroke` and `font-size`, which become attributes, and every value must be plain: no backslash escapes, comments or `@`, and no function but colours, transforms and `url(#id)` pointing inside the file. References are followed before anything is drawn, so `use` elements and patterns that draw each other cannot turn a small file into millions of shapes: past 1,000,000 elements the image is refused. A picture inside an SVG stays only as embedded PNG, JPEG or GIF data. A DTD is refused. The PNG beside it is drawn by the service, with the fonts of the machine it runs on, at up to 2000 pixels on the long side.
 
 ```bash test
 mkdir t && cd t && unzip -q ../invoice.docx
@@ -148,7 +148,7 @@ To control exactly where a picture goes and how it looks, put a real picture in 
 {{ sku | barcode("ean13", text=true) }}
 ```
 
-The alt text holds one tag, and it must end in `image` or `barcode`. Text around it stays as the picture's alt text. Any other tag in alt text is left alone, as before. A placeholder takes its size from its frame, so `width`, `height` and `size` are refused there: `a placeholder picture takes its size from its frame`. Choose how the image sits with `fit`, whose default in a placeholder is `contain`.
+The alt text holds one tag, and it must end in `image` or `barcode`. Text around it stays as the picture's alt text. Any other tag in the same alt text is filled in as text, as alt text tags are. A placeholder takes its size from its frame, so `width`, `height` and `size` are refused there: `a placeholder picture takes its size from its frame`. Choose how the image sits with `fit`, whose default in a placeholder is `contain`.
 
 ```bash test
 jq -n --arg photo "$(base64 < logo.png | tr -d '\n')" '{photo: $photo}' > photo.json
@@ -200,7 +200,7 @@ The first argument is required and names the symbology. There is no default.
 | `ean8` | 7 digits, or 8 with a correct check digit |
 | `upca` | 11 digits, or 12 with a correct check digit |
 | `upce` | 7 digits starting with 0 or 1, or 8 with a correct check digit |
-| `itf` | An even number of digits. Add a leading 0 to an odd one |
+| `itf` | An even number of digits, at most 80. Add a leading 0 to an odd one |
 | `itf14` | 13 digits, or 14 with a correct check digit. Bearer bars are drawn above and below |
 | `codabar` | Digits and `- $ : / . +`, between optional start and stop letters A to D |
 
@@ -441,7 +441,7 @@ curl -F template=@tagged.pptx -F 'data={"_":1}' http://localhost:9027/v1/render 
 | What | Limit |
 |---|---|
 | One image | 20 MB |
-| One SVG image | 5 MB, 200,000 nodes, 19200 pixels a side |
+| One SVG image | 5 MB, 200,000 nodes, 1,000,000 elements once references are expanded, 19200 pixels a side |
 | A picture inside an SVG | 16 megapixels |
 | One WebP image | 25 megapixels, 16384 pixels a side |
 | Images and barcodes in one render | 200 |

@@ -6,6 +6,14 @@
 //! file are dropped, so neither the service nor whoever opens the document
 //! loads anything from elsewhere. Embedded pictures stay only as PNG, JPEG or
 //! GIF data whose size is checked before anything decodes them.
+//!
+//! CSS is never filtered by looking for bad substrings, which escapes and
+//! comments defeat. `<style>` elements are dropped; a `style` attribute keeps
+//! only listed presentation properties, written out as attributes; and every
+//! value must be plain: no backslash, `@`, comment or brace, and no function
+//! but colours, transforms and `url(#id)`. References are followed before
+//! drawing, so `use` and patterns cannot multiply a small file into millions
+//! of elements, and the PNG is at most 2000 pixels a side.
 
 use std::fmt::Write as _;
 use std::io::Cursor;
@@ -21,6 +29,8 @@ use resvg::usvg;
 pub const MAX_SVG_BYTES: usize = 5 * 1024 * 1024;
 /// The most XML nodes an SVG image may hold.
 const MAX_NODES: u32 = 200_000;
+/// The most elements an SVG image may draw once its references are expanded.
+const MAX_EXPANDED: u64 = 1_000_000;
 /// The most pixels a picture embedded in an SVG may have.
 const MAX_EMBEDDED_PIXELS: u64 = 16_000_000;
 /// The longest side of the PNG drawn for readers without SVG.
@@ -86,7 +96,6 @@ const ELEMENTS: &[&str] = &[
     "feTurbulence",
     "title",
     "desc",
-    "style",
 ];
 
 /// A checked SVG image.
@@ -224,9 +233,88 @@ pub fn sanitize(text: &str) -> Result<String, String> {
     if root.tag_name().name() != "svg" || root.tag_name().namespace() != Some(SVG_NS) {
         return Err("an SVG image must have an svg root element in the SVG namespace".into());
     }
+    check_expansion(&doc)?;
     let mut out = String::with_capacity(text.len());
     element(root, &mut out, true)?;
     Ok(out)
+}
+
+/// The ids an element refers to: its `href` and every `url(#id)`.
+fn references<'a>(node: roxmltree::Node<'a, 'a>) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    for attr in node.attributes() {
+        let value = attr.value().trim();
+        if attr.name() == "href" {
+            if let Some(id) = value.strip_prefix('#') {
+                out.push(id);
+            }
+            continue;
+        }
+        let mut rest = value;
+        while let Some(at) = rest.find("url(") {
+            let after = &rest[at + 4..];
+            let end = after.find(')').unwrap_or(after.len());
+            let inner = after[..end].trim().trim_matches(['"', '\'']);
+            if let Some(id) = inner.strip_prefix('#') {
+                out.push(id);
+            }
+            rest = &after[end..];
+        }
+    }
+    out
+}
+
+/// Refuses a document whose references expand it past [`MAX_EXPANDED`]
+/// elements once every `use`, pattern, marker, filter, mask and clip path is
+/// drawn where it is referred to, as a renderer would.
+fn check_expansion(doc: &roxmltree::Document) -> Result<(), String> {
+    use std::collections::HashMap;
+    let ids: HashMap<&str, roxmltree::NodeId> = doc
+        .descendants()
+        .filter(|n| n.is_element())
+        .filter_map(|n| Some((n.attribute("id")?, n.id())))
+        .collect();
+    let mut memo: HashMap<roxmltree::NodeId, u64> = HashMap::new();
+    let mut active = std::collections::HashSet::new();
+    fn cost<'a>(
+        node: roxmltree::Node<'a, 'a>,
+        doc: &'a roxmltree::Document<'a>,
+        ids: &HashMap<&str, roxmltree::NodeId>,
+        memo: &mut HashMap<roxmltree::NodeId, u64>,
+        active: &mut std::collections::HashSet<roxmltree::NodeId>,
+    ) -> u64 {
+        if let Some(found) = memo.get(&node.id()) {
+            return *found;
+        }
+        // A reference back into itself is a loop renderers refuse to draw.
+        if !active.insert(node.id()) {
+            return 0;
+        }
+        let mut total: u64 = 1;
+        for child in node.children().filter(|c| c.is_element()) {
+            total = total.saturating_add(cost(child, doc, ids, memo, active));
+            if total > MAX_EXPANDED {
+                break;
+            }
+        }
+        for id in references(node) {
+            if let Some(target) = ids.get(id).and_then(|i| doc.get_node(*i)) {
+                total = total.saturating_add(cost(target, doc, ids, memo, active));
+            }
+            if total > MAX_EXPANDED {
+                break;
+            }
+        }
+        active.remove(&node.id());
+        memo.insert(node.id(), total);
+        total
+    }
+    if cost(doc.root_element(), doc, &ids, &mut memo, &mut active) > MAX_EXPANDED {
+        return Err(format!(
+            "the SVG image expands to more than {MAX_EXPANDED} elements through its references"
+        ));
+    }
+    Ok(())
 }
 
 fn element(node: roxmltree::Node, out: &mut String, root: bool) -> Result<(), String> {
@@ -236,6 +324,8 @@ fn element(node: roxmltree::Node, out: &mut String, root: bool) -> Result<(), St
     if root {
         let _ = write!(out, " xmlns=\"{SVG_NS}\" xmlns:xlink=\"{XLINK_NS}\"");
     }
+    let mut attrs: Vec<(String, String)> = Vec::new();
+    let mut styled: Vec<(String, String)> = Vec::new();
     for attr in node.attributes() {
         let key = match attr.namespace() {
             None => attr.name().to_string(),
@@ -245,19 +335,27 @@ fn element(node: roxmltree::Node, out: &mut String, root: bool) -> Result<(), St
             }
             Some(_) => continue,
         };
-        if keep_attribute(name, &key, attr.value())? {
-            let _ = write!(out, " {key}=\"{}\"", escape(attr.value(), true));
+        if key == "style" {
+            styled = style_declarations(attr.value());
+            continue;
         }
+        if keep_attribute(name, &key, attr.value())? {
+            attrs.push((key, attr.value().to_string()));
+        }
+    }
+    // Declarations from `style` win over presentation attributes, as in CSS.
+    for (key, value) in styled {
+        attrs.retain(|(k, _)| *k != key);
+        attrs.push((key, value));
+    }
+    for (key, value) in &attrs {
+        let _ = write!(out, " {key}=\"{}\"", escape(value, true));
     }
     out.push('>');
     for child in node.children() {
         match child.node_type() {
             roxmltree::NodeType::Text => {
-                let text = child.text().unwrap_or_default();
-                if name == "style" && !safe_css(text) {
-                    continue;
-                }
-                out.push_str(&escape(text, false));
+                out.push_str(&escape(child.text().unwrap_or_default(), false));
             }
             roxmltree::NodeType::Element => {
                 let child_name = child.tag_name().name();
@@ -285,6 +383,120 @@ fn element(node: roxmltree::Node, out: &mut String, root: bool) -> Result<(), St
     Ok(())
 }
 
+/// Properties a `style` attribute may set, which become attributes.
+const STYLE_PROPERTIES: &[&str] = &[
+    "fill",
+    "fill-opacity",
+    "fill-rule",
+    "stroke",
+    "stroke-width",
+    "stroke-opacity",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-miterlimit",
+    "stroke-dasharray",
+    "stroke-dashoffset",
+    "opacity",
+    "stop-color",
+    "stop-opacity",
+    "color",
+    "display",
+    "visibility",
+    "clip-path",
+    "clip-rule",
+    "mask",
+    "filter",
+    "marker-start",
+    "marker-mid",
+    "marker-end",
+    "paint-order",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "font-variant",
+    "text-anchor",
+    "dominant-baseline",
+    "letter-spacing",
+    "word-spacing",
+    "text-decoration",
+    "flood-color",
+    "flood-opacity",
+    "lighting-color",
+];
+
+/// The declarations of a `style` attribute that may stay, as attributes.
+/// Anything else, and any value that is not plainly safe, is dropped.
+fn style_declarations(style: &str) -> Vec<(String, String)> {
+    style
+        .split(';')
+        .filter_map(|decl| {
+            let (prop, value) = decl.split_once(':')?;
+            let prop = prop.trim().to_ascii_lowercase();
+            let value = value.trim();
+            (STYLE_PROPERTIES.contains(&prop.as_str()) && plain_value(value))
+                .then(|| (prop, value.to_string()))
+        })
+        .collect()
+}
+
+/// Functions a value may call.
+const FUNCTIONS: &[&str] = &[
+    "url",
+    "rgb",
+    "rgba",
+    "hsl",
+    "hsla",
+    "matrix",
+    "translate",
+    "scale",
+    "rotate",
+    "skewx",
+    "skewy",
+];
+
+/// Whether a value is plainly safe: no escapes, no at-rules or comments, and
+/// no function but colours, transforms and `url(#id)`.
+fn plain_value(value: &str) -> bool {
+    if value.contains(['\\', '@', '<', '>', '{', '}']) || value.contains("/*") {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while let Some(open) = value[i..].find('(').map(|p| p + i) {
+        let start = value[..open]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .map_or(0, |p| p + 1);
+        let name = value[start..open].to_ascii_lowercase();
+        if !FUNCTIONS.contains(&name.as_str()) {
+            return false;
+        }
+        let Some(close) = value[open..].find(')').map(|p| p + open) else {
+            return false;
+        };
+        let inner = &value[open + 1..close];
+        if name == "url" {
+            let id = inner.trim().trim_matches(['"', '\'']);
+            let ok = id.strip_prefix('#').is_some_and(|id| {
+                !id.is_empty()
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_-.:".contains(&b))
+            });
+            if !ok {
+                return false;
+            }
+        } else if inner.contains('(') {
+            return false;
+        }
+        i = close + 1;
+        if i >= bytes.len() {
+            break;
+        }
+    }
+    true
+}
+
 /// Whether an attribute may stay: no event handlers, and references only to
 /// the document itself or, on `image`, to embedded picture data.
 fn keep_attribute(element: &str, key: &str, value: &str) -> Result<bool, String> {
@@ -297,26 +509,17 @@ fn keep_attribute(element: &str, key: &str, value: &str) -> Result<bool, String>
         if value.starts_with('#') {
             return Ok(true);
         }
-        if element == "image" && value.len() > 5 && value[..5].eq_ignore_ascii_case("data:") {
+        let data = value
+            .as_bytes()
+            .get(..5)
+            .is_some_and(|p| p.eq_ignore_ascii_case(b"data:"));
+        if element == "image" && data {
             check_embedded(value)?;
             return Ok(true);
         }
         return Ok(false);
     }
-    Ok(safe_css(value))
-}
-
-/// Whether a value or stylesheet refers only to the document itself.
-fn safe_css(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    if lower.contains("@import") || lower.contains("expression(") || lower.contains("javascript:") {
-        return false;
-    }
-    lower.match_indices("url(").all(|(at, _)| {
-        let rest = lower[at + 4..].trim_start();
-        let rest = rest.trim_start_matches(['"', '\'']).trim_start();
-        rest.starts_with('#')
-    })
+    Ok(plain_value(value))
 }
 
 /// Checks a picture embedded as a data URL before anything decodes it.
@@ -411,6 +614,93 @@ mod tests {
             clean.contains("<g><circle r=\"2\"></circle></g>"),
             "{clean}"
         );
+    }
+
+    #[test]
+    fn css_tricks_do_not_reach_out() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">\
+            <style>rect { fill: u\\rl(http://evil/a) }</style>\
+            <rect fill=\"\\75 rl(http://evil/b)\" width=\"1\" height=\"1\"/>\
+            <rect fill=\"u\\rl(http://evil/c)\" width=\"1\" height=\"1\"/>\
+            <rect fill=\"image-set(&quot;http://evil/d&quot; 1x)\" width=\"1\" height=\"1\"/>\
+            <rect fill=\"url(/**/http://evil/e)\" width=\"1\" height=\"1\"/>\
+            <rect fill=\"url( 'http://evil/f' )\" width=\"1\" height=\"1\"/>\
+            <rect style=\"fill:url(http://evil/g);stroke:#c00;behavior:url(x)\" width=\"1\" height=\"1\"/>\
+            <rect style=\"fill:#0c0;background:url(http://evil/h)\" fill=\"#00c\" width=\"1\" height=\"1\"/>\
+            <rect style=\"fill:url(#ok)\" width=\"1\" height=\"1\"/></svg>";
+        let clean = sanitize(svg).unwrap();
+        assert!(!clean.contains("evil"), "{clean}");
+        assert!(!clean.contains("<style"), "{clean}");
+        assert!(!clean.contains("style="), "{clean}");
+        assert!(clean.contains("stroke=\"#c00\""), "{clean}");
+        // A style declaration wins over the attribute it repeats.
+        assert!(
+            clean.contains("fill=\"#0c0\"") && !clean.contains("#00c"),
+            "{clean}"
+        );
+        assert!(clean.contains("fill=\"url(#ok)\""), "{clean}");
+        for value in ["rgb(1,2,3)", "#fff", "none", "matrix(1 0 0 1 2 3)"] {
+            assert!(plain_value(value), "{value}");
+        }
+        for value in [
+            "url(#a b)",
+            "var(--x)",
+            "rgb(url(#a))",
+            "url(#a",
+            "a\\b",
+            "@x",
+            "x/*y*/",
+        ] {
+            assert!(!plain_value(value), "{value}");
+        }
+    }
+
+    #[test]
+    fn a_multibyte_href_is_refused_not_a_crash() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">\
+                   <image href=\"dat\u{e9}:x\" width=\"1\" height=\"1\"/>\
+                   <image href=\"\u{1f600}\u{1f600}\" width=\"1\" height=\"1\"/></svg>";
+        let clean = sanitize(svg).unwrap();
+        assert!(!clean.contains("href"), "{clean}");
+    }
+
+    #[test]
+    fn references_cannot_multiply_the_drawing() {
+        // Each level draws the one below ten times: 10^7 rectangles from a
+        // file of a few hundred bytes.
+        let mut svg = String::from(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+             xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"10\" height=\"10\"><defs>\
+             <rect id=\"l0\" width=\"1\" height=\"1\"/>",
+        );
+        for level in 1..=7 {
+            svg.push_str(&format!("<g id=\"l{level}\">"));
+            for _ in 0..10 {
+                svg.push_str(&format!("<use xlink:href=\"#l{}\"/>", level - 1));
+            }
+            svg.push_str("</g>");
+        }
+        svg.push_str("</defs><use xlink:href=\"#l7\"/></svg>");
+        let err = sanitize(&svg).unwrap_err();
+        assert!(err.contains("expands to more than"), "{err}");
+        // The same through patterns filled by url(#id).
+        let mut svg = String::from(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><defs>\
+             <pattern id=\"p0\"><rect width=\"1\" height=\"1\"/></pattern>",
+        );
+        for level in 1..=7 {
+            svg.push_str(&format!("<pattern id=\"p{level}\">"));
+            for _ in 0..10 {
+                svg.push_str(&format!("<rect fill=\"url(#p{})\"/>", level - 1));
+            }
+            svg.push_str("</pattern>");
+        }
+        svg.push_str("</defs><rect fill=\"url(#p7)\"/></svg>");
+        assert!(sanitize(&svg).is_err());
+        // A loop is not an expansion.
+        let looped = "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+            xmlns:xlink=\"http://www.w3.org/1999/xlink\"><g id=\"a\"><use xlink:href=\"#a\"/></g></svg>";
+        assert!(sanitize(looped).is_ok());
     }
 
     #[test]
