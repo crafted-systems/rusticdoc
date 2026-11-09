@@ -13,8 +13,10 @@ soffice() {
 soffice --terminate_after_init || true
 soffice --convert-to docx --outdir /w /w/invoice.fodt
 soffice --convert-to xlsx --outdir /w /w/invoice.fods
-for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
-  soffice --convert-to "${pair%:*}" --outdir /w "/w/rich.${pair#*:}"
+for name in rich placeholder; do
+  for pair in docx:fodt odt:fodt xlsx:fods ods:fods pptx:fodp odp:fodp; do
+    soffice --convert-to "${pair%:*}" --outdir /w "/w/$name.${pair#*:}"
+  done
 done
 rm -rf profile
-ls -la invoice.docx invoice.xlsx rich.docx rich.odt rich.xlsx rich.ods rich.pptx rich.odp
+ls -la invoice.docx invoice.xlsx rich.* placeholder.*

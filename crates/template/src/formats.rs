@@ -100,7 +100,11 @@ pub fn is_text_part(format: Format, name: &str) -> bool {
         }
         Format::Odt => name == "content.xml" || name == "styles.xml",
         Format::Ods | Format::Odp => name == "content.xml",
-        Format::Xlsx => name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml"),
+        Format::Xlsx => {
+            // Drawings hold no text tags, only placeholder pictures.
+            (name.starts_with("xl/worksheets/sheet") || name.starts_with("xl/drawings/drawing"))
+                && name.ends_with(".xml")
+        }
         Format::Pptx => name.starts_with("ppt/slides/slide") && name.ends_with(".xml"),
     }
 }

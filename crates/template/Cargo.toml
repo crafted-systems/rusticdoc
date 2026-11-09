@@ -7,15 +7,16 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-barcoders = { version = "2", default-features = false, features = ["std"] }
 base64 = "0.23.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 hex = "0.4.3"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
-qrcode = { version = "0.14", default-features = false }
 quick-xml = "0.41.0"
 regex = "1.13.1"
+resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+roxmltree = "0.20.0"
+rxing = { version = "0.9.4", default-features = false, features = ["encoders", "encoding_rs", "oned", "qrcode", "datamatrix", "pdf417", "aztec"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.0"
@@ -24,4 +25,5 @@ tracing = "0.1.44"
 zip = { version = "9.4.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+rxing = { version = "0.9.4", default-features = false, features = ["decoders", "multi_barcode_readers", "encoding_rs", "oned", "qrcode", "datamatrix", "pdf417", "aztec"] }
 tempfile = "3.27.0"

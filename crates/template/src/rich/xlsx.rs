@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use crate::package;
 use crate::rich::pkg::{
-    relative, Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_DRAWING, REL_HYPERLINK, REL_IMAGE,
-    REL_STYLES, REL_WORKSHEET,
+    relative, Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_DRAWING, REL_HYPERLINK, REL_STYLES,
+    REL_WORKSHEET,
 };
 use crate::rich::{
-    emu, ensure_ns, esc, has_mark, html, insert_ordered, max_id, misplaced, segments, text_node,
-    Rich, Seg,
+    docx::framed_crop, emu, ensure_ns, esc, has_mark, html, insert_ordered, max_id, misplaced,
+    placeholder, segments, text_node, Rich, Scope, Seg,
 };
 use crate::sheet::{col_to_num, split_ref};
 use crate::xml::{self, Elem, Node};
@@ -354,11 +354,24 @@ pub fn rewrite(
     };
     for row in data.children.iter_mut() {
         let Node::Elem(row) = row else { continue };
+        let mut row_format = CellFormat::default();
         for cell in row.children.iter_mut() {
             let Node::Elem(c) = cell else { continue };
             if c.name == "c" && has_mark(&c.children) {
-                resolve_cell(pkg, book, items, part, c, &mut placements, &mut links)?;
+                resolve_cell(
+                    pkg,
+                    book,
+                    items,
+                    part,
+                    c,
+                    &mut placements,
+                    &mut links,
+                    &mut row_format,
+                )?;
             }
+        }
+        if !row_format.is_empty() {
+            color_row(pkg, book, row, &row_format)?;
         }
     }
     if !links.is_empty() {
@@ -382,7 +395,32 @@ pub fn rewrite(
     Ok(())
 }
 
+/// Gives every cell of a row, and the row itself for the cells it does not
+/// list, the colours a `scope="row"` asked for.
+fn color_row(
+    pkg: &mut Pkg,
+    book: &mut Book,
+    row: &mut Elem,
+    format: &CellFormat,
+) -> Result<(), TemplateError> {
+    for cell in row.children.iter_mut() {
+        let Node::Elem(c) = cell else { continue };
+        if c.name != "c" {
+            continue;
+        }
+        let base = c.attr("s").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let variant = book.format_cell(pkg, base, format)?;
+        c.set_attr("s", &variant.to_string());
+    }
+    let base = row.attr("s").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let variant = book.format_cell(pkg, base, format)?;
+    row.set_attr("s", &variant.to_string());
+    row.set_attr("customFormat", "1");
+    Ok(())
+}
+
 /// Replaces the markers in one cell's text.
+#[allow(clippy::too_many_arguments)]
 fn resolve_cell(
     pkg: &mut Pkg,
     book: &mut Book,
@@ -391,6 +429,7 @@ fn resolve_cell(
     c: &mut Elem,
     placements: &mut Vec<Placement>,
     links: &mut Vec<(String, String)>,
+    row_format: &mut CellFormat,
 ) -> Result<(), TemplateError> {
     let at = c.attr("r").unwrap_or_default();
     let (col, row) = split_ref(&at)
@@ -442,9 +481,15 @@ fn resolve_cell(
                                 text,
                                 color,
                                 background,
+                                scope,
                             } => {
-                                format.color.clone_from(color);
-                                format.background.clone_from(background);
+                                let target = if *scope == Scope::Row {
+                                    &mut *row_format
+                                } else {
+                                    &mut format
+                                };
+                                target.color.clone_from(color);
+                                target.background.clone_from(background);
                                 out.push_str(&esc(text));
                             }
                             Rich::Html(blocks) => {
@@ -531,10 +576,10 @@ fn place_all(
     for (id, placement) in (first_id..).zip(placements) {
         let (body, cx, cy) = match &*placement.item {
             Rich::Picture(p) => {
-                let media = pkg.media_part(&p.media, "xl/media")?;
-                let rid = pkg.rel_to(&drawing, REL_IMAGE, &media)?;
+                let blip = placeholder::blip(pkg, &drawing, "xl/media", &p.media)?;
+                let blip = format!("{blip}{}", framed_crop(p));
                 let (cx, cy) = (emu(p.width_pt), emu(p.height_pt));
-                (pic_xml(id, &rid, cx, cy), cx, cy)
+                (pic_xml(id, &blip, cx, cy), cx, cy)
             }
             Rich::Chart(chart) => {
                 let xml = book.chart_xml(pkg, chart);
@@ -559,11 +604,11 @@ fn place_all(
     Ok(())
 }
 
-fn pic_xml(id: u64, rid: &str, cx: i64, cy: i64) -> String {
+fn pic_xml(id: u64, blip: &str, cx: i64, cy: i64) -> String {
     format!(
         "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {id}\"/><xdr:cNvPicPr>\
          <a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>\
-         <a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>\
+         {blip}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>\
          <a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>\
          <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>"
     )

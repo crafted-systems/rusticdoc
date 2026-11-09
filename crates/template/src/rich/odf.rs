@@ -8,10 +8,12 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use crate::rich::html::{self, Block, Inline, Style};
+use crate::rich::media::{self, Fit, Media};
 use crate::rich::pkg::Pkg;
+use crate::rich::placeholder;
 use crate::rich::{
     blank, ensure_ns, esc, esc_attr, has_mark, insert_ordered, marker, misplaced, segments, shell,
-    text_node, Picture, Rich, Seg, MARK_OPEN,
+    text_node, Picture, Rich, Scope, Seg, MARK_OPEN,
 };
 use crate::xml::{self, Elem, Node};
 use crate::{Format, TemplateError};
@@ -33,8 +35,8 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("xlink", "http://www.w3.org/1999/xlink"),
 ];
 
-const STYLE_CHILD_ORDER: &str =
-    "style:table-cell-properties style:paragraph-properties style:text-properties";
+const STYLE_CHILD_ORDER: &str = "style:graphic-properties style:table-cell-properties \
+                                 style:paragraph-properties style:text-properties";
 /// What the markup around one table cell comes to, roughly.
 const CELL_MARKUP: usize = 100;
 
@@ -218,6 +220,42 @@ struct Odf<'a, 'b> {
     /// Pictures of the page being walked (ODP), and where its shape sits.
     page_frames: Vec<Node>,
     origin: (String, String),
+    /// Colours waiting for the paragraph, cell, row or shape around them.
+    effects: Vec<(Scope, Option<String>, Option<String>)>,
+}
+
+/// A length such as `2.5cm` in points.
+fn length_pt(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let at = value
+        .find(|c: char| c.is_ascii_alphabetic() || c == '%')
+        .unwrap_or(value.len());
+    let n: f64 = value[..at].trim().parse().ok()?;
+    let per = match &value[at..] {
+        "pt" => 1.0,
+        "in" => 72.0,
+        "cm" => 72.0 / 2.54,
+        "mm" => 72.0 / 25.4,
+        "pc" => 12.0,
+        "px" => 0.75,
+        _ => return None,
+    };
+    Some(n * per).filter(|n| n.is_finite() && *n > 0.0)
+}
+
+/// `fo:clip` for a crop of media, in the image's own size as office suites
+/// read it.
+fn clip(media: &Media, crop: [f64; 4]) -> String {
+    let (w, h) = (media.physical_pt.0 / 72.0, media.physical_pt.1 / 72.0);
+    // No "-0.0000in" for a crop that rounds to nothing.
+    let n = |v: f64| if v.abs() < 0.00005 { 0.0 } else { v };
+    format!(
+        "rect({:.4}in, {:.4}in, {:.4}in, {:.4}in)",
+        n(crop[1] * h),
+        n(crop[2] * w),
+        n(crop[3] * h),
+        n(crop[0] * w)
+    )
 }
 
 pub fn rewrite(
@@ -244,8 +282,20 @@ pub fn rewrite(
         cell_color: None,
         page_frames: Vec::new(),
         origin: ("0pt".to_string(), "0pt".to_string()),
+        effects: Vec::new(),
     };
+    ctx.placeholders(&mut root.children)?;
     ctx.walk(&mut root.children, "")?;
+    if let Some((scope, ..)) = ctx.effects.first() {
+        let what = match scope {
+            Scope::Shape => "a shape".to_string(),
+            other => format!("a table {}", other.name()),
+        };
+        return Err(ctx.fail(&format!(
+            "scope=\"{}\" needs the tag inside {what}",
+            scope.name()
+        )));
+    }
     let book = std::mem::replace(
         &mut ctx.book,
         StyleBook {
@@ -269,6 +319,201 @@ impl Odf<'_, '_> {
         misplaced(self.part, "paragraph", message)
     }
 
+    /// Frames whose title or description holds an image tag show its image.
+    fn placeholders(&mut self, nodes: &mut [Node]) -> Result<(), TemplateError> {
+        for node in nodes.iter_mut() {
+            let Node::Elem(e) = node else { continue };
+            if !has_mark(&e.children) {
+                continue;
+            }
+            if e.name == "draw:frame" {
+                self.placeholder(e)?;
+            }
+            self.placeholders(&mut e.children)?;
+        }
+        Ok(())
+    }
+
+    fn placeholder(&mut self, frame: &mut Elem) -> Result<(), TemplateError> {
+        let place = match frame.attr("draw:name") {
+            Some(name) => format!("picture {name:?}"),
+            None => "picture".to_string(),
+        };
+        let mut ids = Vec::new();
+        for node in frame.children.iter_mut() {
+            if let Node::Elem(e) = node {
+                if e.name == "svg:title" || e.name == "svg:desc" {
+                    ids.extend(placeholder::take_markers(e, self.part, &place)?);
+                }
+            }
+        }
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let picture = placeholder::picture(self.items, &ids, self.part, &place)?;
+        let first = frame
+            .children
+            .iter()
+            .position(|n| matches!(n, Node::Elem(e) if e.name == "draw:image"))
+            .ok_or_else(|| {
+                misplaced(
+                    self.part,
+                    &place,
+                    "only a picture can be a placeholder; this frame holds no image",
+                )
+            })?;
+        let size = frame
+            .attr("svg:width")
+            .and_then(|w| length_pt(&w))
+            .zip(frame.attr("svg:height").and_then(|h| length_pt(&h)))
+            .ok_or_else(|| {
+                misplaced(
+                    self.part,
+                    &place,
+                    "the placeholder picture has no size in points",
+                )
+            })?;
+        let fit = picture.fit.unwrap_or(Fit::Contain);
+        let placed = media::place(size, picture.media.aspect(), fit);
+        let images = self.images(&picture.media)?;
+        frame
+            .children
+            .retain(|n| !matches!(n, Node::Elem(e) if e.name == "draw:image"));
+        frame.children.splice(
+            first.min(frame.children.len())..first.min(frame.children.len()),
+            images,
+        );
+        let base = frame.attr("draw:style-name");
+        let style = self.book.derived(
+            "RichG",
+            "graphic",
+            base.as_deref(),
+            &[(
+                "style:graphic-properties",
+                vec![("fo:clip", clip(&picture.media, placed.crop))],
+            )],
+        );
+        frame.set_attr("draw:style-name", &style);
+        if let Some(height) = placed.height {
+            frame.set_attr("svg:height", &format!("{height:.2}pt"));
+        }
+        Ok(())
+    }
+
+    /// The `draw:image` elements for media: an SVG comes with its PNG.
+    fn images(&mut self, media: &Media) -> Result<Vec<Node>, TemplateError> {
+        let mut out = Vec::new();
+        for m in std::iter::once(media).chain(media.fallback.as_deref()) {
+            let path = self.pkg.media_part(m, "Pictures")?;
+            out.push(Node::Raw(format!(
+                "<draw:image xlink:href=\"{path}\" xlink:type=\"simple\" xlink:show=\"embed\" \
+                 xlink:actuate=\"onLoad\" draw:mime-type=\"{}\"/>",
+                m.mime
+            )));
+        }
+        Ok(out)
+    }
+
+    fn take_effects(
+        &mut self,
+        mark: usize,
+        scope: Scope,
+    ) -> Vec<(Scope, Option<String>, Option<String>)> {
+        let mut taken = Vec::new();
+        let mut i = mark;
+        while i < self.effects.len() {
+            if self.effects[i].0 == scope {
+                taken.push(self.effects.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        taken
+    }
+
+    /// Gives every paragraph under `e` a text colour.
+    fn color_paragraphs(&mut self, e: &mut Elem, color: &str) {
+        if matches!(e.name.as_str(), "text:p" | "text:h") {
+            let base = e.attr("text:style-name");
+            let style = self.book.derived(
+                "RichP",
+                "paragraph",
+                base.as_deref(),
+                &[(
+                    "style:text-properties",
+                    vec![("fo:color", format!("#{}", color.to_lowercase()))],
+                )],
+            );
+            e.set_attr("text:style-name", &style);
+            return;
+        }
+        for node in e.children.iter_mut() {
+            if let Node::Elem(child) = node {
+                self.color_paragraphs(child, color);
+            }
+        }
+    }
+
+    fn color_cell(&mut self, cell: &mut Elem, color: Option<&str>, background: Option<&str>) {
+        let mut props = Vec::new();
+        if let Some(bg) = background {
+            let bg = format!("#{}", bg.to_lowercase());
+            props.push(if self.format == Format::Odp {
+                (
+                    "style:graphic-properties",
+                    vec![("draw:fill", "solid".to_string()), ("draw:fill-color", bg)],
+                )
+            } else {
+                (
+                    "style:table-cell-properties",
+                    vec![("fo:background-color", bg)],
+                )
+            });
+        }
+        if let (Some(color), Format::Ods) = (color, self.format) {
+            props.push((
+                "style:text-properties",
+                vec![("fo:color", format!("#{}", color.to_lowercase()))],
+            ));
+        }
+        if !props.is_empty() {
+            let base = cell.attr("table:style-name");
+            let name = self
+                .book
+                .derived("RichC", "table-cell", base.as_deref(), &props);
+            cell.set_attr("table:style-name", &name);
+        }
+        if let (Some(color), false) = (color, self.format == Format::Ods) {
+            self.color_paragraphs(cell, color);
+        }
+    }
+
+    fn color_shape(&mut self, shape: &mut Elem, color: Option<&str>, background: Option<&str>) {
+        let mut props = Vec::new();
+        if let Some(bg) = background {
+            props.push((
+                "style:graphic-properties",
+                vec![
+                    ("draw:fill", "solid".to_string()),
+                    ("draw:fill-color", format!("#{}", bg.to_lowercase())),
+                ],
+            ));
+        }
+        if !props.is_empty() {
+            let (attr, family) = if shape.attr("presentation:style-name").is_some() {
+                ("presentation:style-name", "presentation")
+            } else {
+                ("draw:style-name", "graphic")
+            };
+            let base = shape.attr(attr);
+            let name = self.book.derived("RichS", family, base.as_deref(), &props);
+            shape.set_attr(attr, &name);
+        }
+        if let Some(color) = color {
+            self.color_paragraphs(shape, color);
+        }
+    }
+
     fn is_block(&self, id: usize) -> bool {
         self.format == Format::Odt && matches!(&*self.items[id], Rich::Html(_) | Rich::PageBreak)
     }
@@ -287,6 +532,7 @@ impl Odf<'_, '_> {
                     e.attr("svg:y").unwrap_or_else(|| "0pt".to_string()),
                 );
             }
+            let before = self.effects.len();
             // Frames nest paragraphs inside paragraphs: inner ones first.
             self.walk(&mut e.children, &name)?;
             if matches!(name.as_str(), "text:p" | "text:h") && has_mark(&e.children) {
@@ -294,11 +540,61 @@ impl Odf<'_, '_> {
                 else {
                     continue;
                 };
-                let out = self.paragraph(p, parent)?;
+                let mark = self.effects.len();
+                let mut out = self.paragraph(p, parent)?;
+                for (_, color, background) in self.take_effects(mark, Scope::Paragraph) {
+                    let mut props = Vec::new();
+                    if let Some(bg) = background {
+                        props.push((
+                            "style:paragraph-properties",
+                            vec![("fo:background-color", format!("#{}", bg.to_lowercase()))],
+                        ));
+                    }
+                    if let Some(color) = color {
+                        props.push((
+                            "style:text-properties",
+                            vec![("fo:color", format!("#{}", color.to_lowercase()))],
+                        ));
+                    }
+                    for node in out.iter_mut() {
+                        if let Node::Elem(p) = node {
+                            let base = p.attr("text:style-name");
+                            let style =
+                                self.book
+                                    .derived("RichP", "paragraph", base.as_deref(), &props);
+                            p.set_attr("text:style-name", &style);
+                        }
+                    }
+                }
                 let count = out.len();
                 children.splice(i..=i, out);
                 i += count;
                 continue;
+            }
+            match name.as_str() {
+                "table:table-cell" => {
+                    for (_, color, background) in self.take_effects(before, Scope::Cell) {
+                        self.color_cell(e, color.as_deref(), background.as_deref());
+                    }
+                }
+                "table:table-row" => {
+                    for (_, color, background) in self.take_effects(before, Scope::Row) {
+                        for cell in e.children.iter_mut() {
+                            if let Node::Elem(c) = cell {
+                                if c.name == "table:table-cell" {
+                                    self.color_cell(c, color.as_deref(), background.as_deref());
+                                }
+                            }
+                        }
+                    }
+                }
+                "draw:frame" | "draw:custom-shape" | "draw:rect" | "draw:ellipse"
+                | "draw:polygon" | "draw:path" => {
+                    for (_, color, background) in self.take_effects(before, Scope::Shape) {
+                        self.color_shape(e, color.as_deref(), background.as_deref());
+                    }
+                }
+                _ => {}
             }
             if name == "table:table-cell" && self.format == Format::Ods {
                 self.finish_cell(e);
@@ -525,9 +821,15 @@ impl Odf<'_, '_> {
                 text,
                 color,
                 background,
+                scope,
             } => {
-                if self.format == Format::Ods {
+                if self.format == Format::Ods && *scope != Scope::Row {
                     self.cell_color = Some((color.clone(), background.clone()));
+                    return Ok(vec![Node::Raw(text_markup(text))]);
+                }
+                if *scope != Scope::Text {
+                    self.effects
+                        .push((*scope, color.clone(), background.clone()));
                     return Ok(vec![Node::Raw(text_markup(text))]);
                 }
                 let mut attrs = Vec::new();
@@ -560,7 +862,35 @@ impl Odf<'_, '_> {
     }
 
     fn frame(&mut self, picture: &Picture) -> Result<Node, TemplateError> {
-        let path = self.pkg.media_part(&picture.media, "Pictures")?;
+        let images: String = self
+            .images(&picture.media)?
+            .into_iter()
+            .map(|n| match n {
+                Node::Raw(s) => s,
+                _ => String::new(),
+            })
+            .collect();
+        let style = match picture.fit {
+            Some(fit @ (Fit::Contain | Fit::Cover)) if picture.sized => {
+                let crop = media::place(
+                    (picture.width_pt, picture.height_pt),
+                    picture.media.aspect(),
+                    fit,
+                )
+                .crop;
+                let name = self.book.derived(
+                    "RichG",
+                    "graphic",
+                    None,
+                    &[(
+                        "style:graphic-properties",
+                        vec![("fo:clip", clip(&picture.media, crop))],
+                    )],
+                );
+                format!(" draw:style-name=\"{name}\"")
+            }
+            _ => String::new(),
+        };
         let n = self.frames;
         self.frames += 1;
         let (w, h) = (picture.width_pt, picture.height_pt);
@@ -574,9 +904,8 @@ impl Odf<'_, '_> {
             ),
         };
         Ok(Node::Raw(format!(
-            "<draw:frame draw:name=\"Rich{n}\" {place} svg:width=\"{w:.2}pt\" \
-             svg:height=\"{h:.2}pt\"><draw:image xlink:href=\"{path}\" xlink:type=\"simple\" \
-             xlink:show=\"embed\" xlink:actuate=\"onLoad\"/></draw:frame>"
+            "<draw:frame draw:name=\"Rich{n}\"{style} {place} svg:width=\"{w:.2}pt\" \
+             svg:height=\"{h:.2}pt\">{images}</draw:frame>"
         )))
     }
 

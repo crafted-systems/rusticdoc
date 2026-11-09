@@ -132,7 +132,8 @@ fn bad_images_are_template_errors() {
     let cases = [
         (json!("http://example.com/logo.png"), "URLs are not fetched"),
         (json!("not base64!"), "base64"),
-        (json!(b64(b"GIF89a12345")), "only PNG and JPEG"),
+        (json!(b64(b"BM12345")), "only PNG, JPEG, GIF, SVG and WebP"),
+        (json!(b64(b"GIF89a12345")), "dimensions"),
         (json!(b64(b"\x89PNG\r\n\x1a\nthis is no png")), "dimensions"),
         (
             json!({"data": b64(&png(2, 2)), "mime": "image/jpeg"}),
@@ -496,12 +497,16 @@ fn barcodes_become_real_pngs_in_every_format() {
 fn barcode_values_are_checked() {
     let doc = docx(&p("{{ v | barcode(k) }}"));
     for (k, v, expected) in [
-        ("ean13", "5901234123458", "not a valid ean13"),
-        ("ean13", "123", "not a valid ean13"),
-        ("ean8", "abcdefgh", "not a valid ean8"),
-        ("code39", "lower", "not a valid code39"),
+        (
+            "ean13",
+            "5901234123458",
+            "wrong check digit: EAN-13 expects 7",
+        ),
+        ("ean13", "123", "EAN-13 takes 12 digits"),
+        ("ean8", "abcdefgh", "EAN-8 takes digits only"),
+        ("code39", "lower", "code39 takes upper-case letters"),
         ("code128", "caf\u{e9}", "printable ASCII"),
-        ("pdf417", "x", "unknown symbology"),
+        ("maxicode", "x", "unknown symbology"),
     ] {
         let err = render_err(Format::Docx, &doc, json!({"k": k, "v": v}));
         assert!(err.contains(expected), "{expected:?} not in {err}");

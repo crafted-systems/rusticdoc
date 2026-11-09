@@ -8,6 +8,8 @@ from pathlib import Path
 
 import fitz
 from docx import Document
+from docx.shared import Inches
+
 from openpyxl import Workbook
 from PIL import Image, ImageDraw
 from pptx import Presentation
@@ -59,3 +61,15 @@ pdf.save(out / "form.pdf")
 logo = Image.new("RGB", (120, 40), (18, 58, 107))
 ImageDraw.Draw(logo).rectangle((8, 8, 32, 32), fill=(184, 67, 26))
 logo.save(out / "logo.png")
+
+# A placeholder picture: a grey square whose alt text holds an image tag,
+# as Word's Alt Text pane writes it.
+grey = Image.new("RGB", (60, 60), (200, 200, 200))
+grey.save(out / "grey.png")
+badge = Document()
+badge.add_paragraph("Badge")
+run = badge.add_paragraph().add_run()
+shape = run.add_picture(str(out / "grey.png"), width=Inches(1.5), height=Inches(1.5))
+shape._inline.docPr.set("descr", '{{ photo | image(fit="cover") }}')
+badge.save(out / "badge.docx")
+(out / "grey.png").unlink()

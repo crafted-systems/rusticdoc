@@ -379,6 +379,8 @@ struct Walker<'a> {
     table_rows: Vec<usize>,
     cell: Option<String>,
     preserve: Vec<Path>,
+    /// The name of the ODF frame being walked, for placeholder errors.
+    frame: Option<String>,
 }
 
 impl Walker<'_> {
@@ -408,6 +410,12 @@ impl Walker<'_> {
                     if self.d.sheet && name == "c" {
                         self.cell = e.attr("r");
                     }
+                    if name == "draw:frame" {
+                        self.frame = e.attr("draw:name");
+                    }
+                    if self.alt_text(e, &path) {
+                        continue;
+                    }
                     self.anc.push((name, path.clone()));
                     self.walk(&mut e.children, &path);
                     self.anc.pop();
@@ -419,6 +427,109 @@ impl Walker<'_> {
                 Node::Raw(_) => {}
             }
         }
+    }
+
+    /// Picks up placeholder pictures: an `image` or `barcode` tag in a
+    /// picture's alt text. DrawingML keeps alt text in attributes, so the tag
+    /// is cut out of them and printed just before the element; ODF keeps it
+    /// in `svg:title` and `svg:desc`, whose text the tag stays in. Returns
+    /// whether the element's content is handled.
+    fn alt_text(&mut self, e: &mut Elem, path: &Path) -> bool {
+        let in_frame = self.anc.last().is_some_and(|(n, _)| n == "draw:frame");
+        match e.name.as_str() {
+            "wp:docPr" | "p:cNvPr" | "xdr:cNvPr" | "pic:cNvPr" => {
+                // Word's inner picture repeats the drawing's alt text: it is
+                // cleaned, and the drawing's carries the tag.
+                let strip_only = e.name == "pic:cNvPr";
+                for attr in ["descr", "title"] {
+                    let Some(value) = e.attr(attr) else { continue };
+                    let spans: Vec<(usize, usize)> = find_tags(&value)
+                        .into_iter()
+                        .filter(|&(s, end)| {
+                            value[s..end].starts_with("{{")
+                                && crate::rich::is_placeholder_tag(&value[s..end])
+                        })
+                        .collect();
+                    if spans.is_empty() {
+                        continue;
+                    }
+                    let mut rest = String::new();
+                    let mut last = 0;
+                    for &(s, end) in &spans {
+                        rest.push_str(&value[last..s]);
+                        last = end;
+                        if !strip_only {
+                            let id = self.alt_tag(&value[s..end], e.attr("name"), path);
+                            e.before.push(Piece::Tag(id));
+                        }
+                    }
+                    rest.push_str(&value[last..]);
+                    match rest.trim() {
+                        "" => e.remove_attr(attr),
+                        kept => e.set_attr(attr, kept),
+                    }
+                }
+                false
+            }
+            "svg:title" | "svg:desc" if in_frame => {
+                let mut handled = false;
+                for (i, child) in e.children.iter_mut().enumerate() {
+                    let Node::Text(t) = child else { continue };
+                    let text = xml::unescape(&t.raw).into_owned();
+                    let spans = find_tags(&text);
+                    if !spans
+                        .iter()
+                        .any(|&(s, end)| crate::rich::is_placeholder_tag(&text[s..end]))
+                    {
+                        continue;
+                    }
+                    handled = true;
+                    let mut text_path = path.clone();
+                    text_path.push(i);
+                    let mut pieces = Vec::new();
+                    let mut last = 0;
+                    for (s, end) in spans {
+                        if s > last {
+                            pieces.push(Piece::Lit(xml::escape_text(&text[last..s])));
+                        }
+                        let id = self.alt_tag(&text[s..end], self.frame.clone(), &text_path);
+                        pieces.push(Piece::Tag(id));
+                        last = end;
+                    }
+                    if last < text.len() {
+                        pieces.push(Piece::Lit(xml::escape_text(&text[last..])));
+                    }
+                    t.pieces = Some(pieces);
+                }
+                handled
+            }
+            _ => false,
+        }
+    }
+
+    /// Registers a tag found in alt text.
+    fn alt_tag(&mut self, raw: &str, name: Option<String>, path: &Path) -> TagId {
+        let place = match name {
+            Some(name) => format!("{}picture {name:?}", self.prefix),
+            None => format!("{}picture", self.prefix),
+        };
+        let loc = Location {
+            part: self.part_name.to_string(),
+            place,
+            snippet: snippet(raw),
+        };
+        let id = self.tags.len();
+        self.tags.push(Tag::parse(raw, loc));
+        self.ctxs.push(TagCtx {
+            part: self.part,
+            text: path.clone(),
+            para: self
+                .nearest(self.d.paragraphs)
+                .unwrap_or_else(|| path.clone()),
+            row: self.nearest(self.d.rows),
+            table: self.nearest(self.d.tables),
+        });
+        id
     }
 
     fn nearest(&self, names: &[&str]) -> Option<Path> {
@@ -602,6 +713,7 @@ pub fn extract_part(
         table_rows: Vec::new(),
         cell: None,
         preserve: Vec::new(),
+        frame: None,
     };
     w.walk(&mut tree.nodes, &Vec::new());
     let preserve = std::mem::take(&mut w.preserve);

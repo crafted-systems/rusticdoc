@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use crate::package::{self, Entry};
 use crate::rich::html;
-use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK, REL_IMAGE};
+use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK};
+use crate::rich::{docx::framed_crop, placeholder};
 use crate::rich::{
     emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, serialize, Rich,
-    Seg,
+    Scope, Seg,
 };
 use crate::xml::{self, Elem, Node};
 use crate::TemplateError;
@@ -45,6 +46,68 @@ struct Pptx<'a, 'b> {
     items: &'a [Arc<Rich>],
     part: &'a str,
     next_id: u64,
+    /// Colours waiting for the paragraph, cell, row or shape around them.
+    effects: Vec<(Scope, Option<String>, Option<String>)>,
+}
+
+const TCPR_ORDER: &str =
+    "a:lnL a:lnR a:lnT a:lnB a:lnTlToBr a:lnBlToTr a:cell3D a:noFill a:solidFill a:gradFill \
+     a:blipFill a:pattFill a:grpFill a:headers a:extLst";
+
+const SPPR_ORDER: &str =
+    "a:xfrm a:custGeom a:prstGeom a:noFill a:solidFill a:gradFill a:blipFill a:pattFill \
+     a:grpFill a:ln a:effectLst a:effectDag a:scene3d a:sp3d a:extLst";
+
+/// Replaces the fill of a shape's or cell's properties.
+fn set_fill(props: &mut Elem, rgb: &str, order: &str) {
+    props
+        .children
+        .retain(|n| !matches!(n, Node::Elem(e) if FILLS.contains(&e.name.as_str())));
+    insert_ordered(props, fill("a:solidFill", rgb), order);
+}
+
+/// Sets the text colour of every run the template wrote under `e`.
+fn color_runs(e: &mut Elem, rgb: &str) {
+    // Text cut around a tag is written as markup; links stay as they are.
+    for node in e.children.iter_mut() {
+        if let Node::Raw(raw) = node {
+            if raw.starts_with("<a:r>") && !raw.contains("a:hlinkClick") {
+                if let Ok(mut parsed) = xml::parse(raw) {
+                    if let [Node::Elem(run)] = parsed.as_mut_slice() {
+                        *node = Node::Elem(std::mem::replace(run, Elem::new("a:r", &[], true)));
+                    }
+                }
+            }
+        }
+    }
+    for node in e.children.iter_mut() {
+        let Node::Elem(child) = node else { continue };
+
+        if child.name == "a:r" || child.name == "a:fld" {
+            child.make_open();
+            if child.child("a:rPr").is_none() {
+                child
+                    .children
+                    .insert(0, Node::Elem(Elem::new("a:rPr", &[], true)));
+            }
+            if let Some(rpr) = child.child_mut("a:rPr") {
+                *rpr = rpr_with(Some(rpr), vec![fill("a:solidFill", rgb)]);
+            }
+        } else if child.name == "a:endParaRPr" {
+            *child = rpr_with(Some(child), vec![fill("a:solidFill", rgb)]);
+            child.name = "a:endParaRPr".into();
+        } else {
+            color_runs(child, rgb);
+        }
+    }
+}
+
+fn props_child<'e>(e: &'e mut Elem, name: &str) -> &'e mut Elem {
+    if e.child(name).is_none() {
+        e.make_open();
+        e.children.push(Node::Elem(Elem::new(name, &[], false)));
+    }
+    e.child_mut(name).expect("the child was just added")
 }
 
 pub fn rewrite(
@@ -59,6 +122,7 @@ pub fn rewrite(
         items,
         part,
         next_id: max_id(src, "p:cNvPr", "id") + 1,
+        effects: Vec::new(),
     };
     let Some(root) = xml::root_mut(nodes) else {
         return Ok(());
@@ -195,7 +259,28 @@ impl Pptx<'_, '_> {
                     let (x, mut y) = offset_of(e)
                         .or_else(|| self.inherited_offset(e))
                         .unwrap_or((0, 0));
+                    let before = self.effects.len();
                     self.paragraphs(&mut e.children, x, &mut y, &mut added)?;
+                    for (_, color, background) in self.take_effects(before, Scope::Shape) {
+                        if e.name != "p:sp" {
+                            return Err(
+                                self.fail("scope=\"shape\" needs the tag in a shape or text box")
+                            );
+                        }
+                        if let Some(rgb) = &background {
+                            set_fill(props_child(e, "p:spPr"), rgb, SPPR_ORDER);
+                        }
+                        if let Some(rgb) = &color {
+                            color_runs(e, rgb);
+                        }
+                    }
+                    if let Some((scope, ..)) = self.effects.get(before) {
+                        return Err(self.fail(&format!(
+                            "scope=\"{}\" needs the tag inside a table {}",
+                            scope.name(),
+                            scope.name()
+                        )));
+                    }
                 }
                 _ => {}
             }
@@ -224,9 +309,37 @@ impl Pptx<'_, '_> {
                 continue;
             }
             if e.name != "a:p" {
+                let before = self.effects.len();
                 self.paragraphs(&mut e.children, x, y, added)?;
+                let scope = match e.name.as_str() {
+                    "a:tc" => Scope::Cell,
+                    "a:tr" => Scope::Row,
+                    _ => continue,
+                };
+                for (_, color, background) in self.take_effects(before, scope) {
+                    let cells: Vec<&mut Elem> = if scope == Scope::Cell {
+                        vec![&mut *e]
+                    } else {
+                        e.children
+                            .iter_mut()
+                            .filter_map(|n| match n {
+                                Node::Elem(c) if c.name == "a:tc" => Some(c),
+                                _ => None,
+                            })
+                            .collect()
+                    };
+                    for tc in cells {
+                        if let Some(rgb) = &background {
+                            set_fill(props_child(tc, "a:tcPr"), rgb, TCPR_ORDER);
+                        }
+                        if let Some(rgb) = &color {
+                            color_runs(tc, rgb);
+                        }
+                    }
+                }
                 continue;
             }
+            let before = self.effects.len();
             let mut out = Vec::with_capacity(e.children.len());
             for child in std::mem::take(&mut e.children) {
                 match child {
@@ -237,8 +350,30 @@ impl Pptx<'_, '_> {
                 }
             }
             e.children = out;
+            for (_, color, _) in self.take_effects(before, Scope::Paragraph) {
+                if let Some(rgb) = &color {
+                    color_runs(e, rgb);
+                }
+            }
         }
         Ok(())
+    }
+
+    fn take_effects(
+        &mut self,
+        mark: usize,
+        scope: Scope,
+    ) -> Vec<(Scope, Option<String>, Option<String>)> {
+        let mut taken = Vec::new();
+        let mut i = mark;
+        while i < self.effects.len() {
+            if self.effects[i].0 == scope {
+                taken.push(self.effects.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        taken
     }
 
     fn split_run(
@@ -264,10 +399,10 @@ impl Pptx<'_, '_> {
             let item = self.items[id].clone();
             match &*item {
                 Rich::Picture(picture) => {
-                    let part = self.pkg.media_part(&picture.media, "ppt/media")?;
-                    let rid = self.pkg.rel_to(self.part, REL_IMAGE, &part)?;
+                    let blip = placeholder::blip(self.pkg, self.part, "ppt/media", &picture.media)?;
+                    let blip = format!("{blip}{}", framed_crop(picture));
                     let (cx, cy) = (emu(picture.width_pt), emu(picture.height_pt));
-                    added.push(Node::Raw(self.pic_xml(&rid, x, *y, cx, cy)));
+                    added.push(Node::Raw(self.pic_xml(&blip, x, *y, cx, cy)));
                     *y += cy;
                 }
                 Rich::Chart(chart) => {
@@ -291,13 +426,19 @@ impl Pptx<'_, '_> {
                     text,
                     color,
                     background,
+                    scope,
                 } => {
                     let mut props = Vec::new();
                     if let Some(color) = color {
                         props.push(fill("a:solidFill", color));
                     }
-                    if let Some(background) = background {
-                        props.push(fill("a:highlight", background));
+                    if *scope == Scope::Text {
+                        if let Some(background) = background {
+                            props.push(fill("a:highlight", background));
+                        }
+                    } else {
+                        self.effects
+                            .push((*scope, color.clone(), background.clone()));
                     }
                     out.push(run(&rpr_with(base, props), &esc(text)));
                 }
@@ -325,12 +466,12 @@ impl Pptx<'_, '_> {
         id
     }
 
-    fn pic_xml(&mut self, rid: &str, x: i64, y: i64, cx: i64, cy: i64) -> String {
+    fn pic_xml(&mut self, blip: &str, x: i64, y: i64, cx: i64, cy: i64) -> String {
         let id = self.shape_id();
         format!(
             "<p:pic><p:nvPicPr><p:cNvPr id=\"{id}\" name=\"Picture {id}\"/><p:cNvPicPr>\
              <a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill>\
-             <a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>\
+             {blip}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>\
              <a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>\
              <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>"
         )
