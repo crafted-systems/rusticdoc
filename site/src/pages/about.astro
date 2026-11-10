@@ -1,0 +1,113 @@
+---
+import Base from '../layouts/Base.astro';
+import Icon from '../components/Icon.astro';
+import { REPO, VERSION } from '../site';
+
+const madeBy = 'rusticdoc is made by the team at Crafted Systems, a software development company in Nairobi, Kenya.';
+const company = [
+  { label: 'Website', icon: 'globe', href: 'https://crafted.co.ke/' },
+  { label: 'GitHub', icon: 'github', href: 'https://github.com/crafted-systems/' },
+  { label: 'LinkedIn', icon: 'linkedin', href: 'https://www.linkedin.com/company/crafted-systems' },
+] as const;
+---
+<Base title="About: rusticdoc" description={madeBy} path="/about/">
+  <header class="page-head">
+    <h1>About rusticdoc</h1>
+    <p>{madeBy}</p>
+  </header>
+
+  <section class="band" aria-labelledby="project">
+    <div class="two wide-right">
+      <header class="section-head left">
+        <h2 id="project">The project</h2>
+        <p>rusticdoc is a document service. Send it a Word, Excel or PDF template and some JSON, and it sends back the filled document, as a PDF if you want one. It runs in a single container on your own servers.</p>
+        <p class="more"><a href="/#how-it-works">How it works</a></p>
+      </header>
+      <dl class="facts">
+        <div>
+          <dt>Licence</dt>
+          <dd><a href={`${REPO}/blob/main/LICENSE`}>Apache-2.0</a></dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd><a href={REPO}>{REPO.replace('https://', '')}</a></dd>
+        </div>
+        <div>
+          <dt>Version</dt>
+          <dd>{VERSION}. Version numbers stay below 1.0, and a minor release can break compatibility. The <a href="/docs/project/changelog/">changelog</a> has what changed.</dd>
+        </div>
+        <div>
+          <dt>Built with</dt>
+          <dd>Rust, with LibreOffice for conversion and qpdf and pdfcpu for some of the PDF work.</dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd>Version 0.1 is the first release. The <a href="/docs/project/known-limits/">known limits</a> list what it doesn’t do.</dd>
+        </div>
+        <div>
+          <dt>Help</dt>
+          <dd><a href={`${REPO}/issues`}>Open an issue on GitHub</a> to report a bug or ask a question.</dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="team">
+    <div class="two wide-right">
+      <header class="section-head left">
+        <h2 id="team">Crafted Systems</h2>
+        <p>Crafted Systems has built web and mobile software for businesses since 2013. The team is based in Nairobi and maintains rusticdoc.</p>
+      </header>
+      <ul class="links">
+        {company.map((c) => (
+          <li>
+            <a href={c.href}>
+              <Icon name={c.icon} />
+              <span>{c.label}<span class="sr-only">, Crafted Systems (opens another site)</span></span>
+              <Icon name="external" />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </section>
+</Base>
+
+<style>
+  /* Rows of a label and what it stands for, ruled like the questions on the
+     home page. */
+  .facts { margin: 0; border-top: 1px solid var(--line-strong); }
+  .facts > div {
+    display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: 0.2rem 1.5rem;
+    padding: 1rem 0; border-bottom: 1px solid var(--line-strong);
+  }
+  .facts dt { font-weight: 600; }
+  .facts dd { margin: 0; color: var(--ink-soft); line-height: 1.55; overflow-wrap: anywhere; }
+  @media (max-width: 640px) {
+    .facts > div { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* The same ruled rows, each one a link out of the site: what it is on the
+     left, and an arrow on the right to say it leaves. */
+  .links { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line-strong); }
+  .links li { border-bottom: 1px solid var(--line-strong); }
+  .links a {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 1rem 0; color: var(--ink); font-weight: 600; text-decoration: none;
+  }
+  .links a > :global(.icon:first-child) { color: var(--blue-deep); }
+  .links a > :global(.icon:last-child) {
+    margin-left: auto; width: 18px; height: 18px; color: var(--ink-soft);
+    transition: transform 150ms;
+  }
+  .links a:hover { color: var(--blue-deep); }
+  .links a:hover > :global(.icon:last-child) { color: var(--blue-deep); transform: translate(2px, -2px); }
+  .links a:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: var(--r-small); }
+  @media (prefers-reduced-motion: reduce) {
+    .links a > :global(.icon:last-child) { transition: none; }
+  }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+</style>

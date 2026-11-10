@@ -55,7 +55,7 @@
   --r-card: 3px;
   --r-small: 2px;
   --font-body: 'Space Grotesk Variable', 'Space Grotesk Fallback', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-mono: 'Source Code Pro Variable', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }

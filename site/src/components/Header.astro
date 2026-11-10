@@ -1,11 +1,12 @@
 ---
-// Starlight's top bar with the site's two menus beside the search, so the docs
+// Starlight's top bar with the site's menus beside the search, so the docs
 // and the marketing pages share their navigation.
 import Search from '@astrojs/starlight/components/Search.astro';
 import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
 import SocialIcons from '@astrojs/starlight/components/SocialIcons.astro';
 import ThemeSwitch from './ThemeSwitch.astro';
 import SiteMenus from './SiteMenus.astro';
+import ApiExamples from './ApiExamples.astro';
 ---
 
 <div class="header">
@@ -17,6 +18,7 @@ import SiteMenus from './SiteMenus.astro';
     <ThemeSwitch />
   </div>
 </div>
+{Astro.url.pathname.startsWith('/docs/reference/api/operations/') && <ApiExamples />}
 
 <style>
   .header {
@@ -39,6 +41,15 @@ import SiteMenus from './SiteMenus.astro';
   }
   /* The menus' panels hang below the bar, so the bar must not clip them. */
   .right-group { overflow: visible; }
+  /* Just above the width where the bar switches to its desktop layout there is
+     no room for the About link beside the menus and the search, so it waits
+     for a wider window. It stays on the marketing pages at every width. */
+  @media (min-width: 50rem) and (max-width: 56.99rem) {
+    .right-group { gap: 0.5rem; }
+  }
+  @media (min-width: 50rem) and (max-width: 54.49rem) {
+    .right-group :global(.site-menu-link) { display: none; }
+  }
   @media (min-width: 50rem) {
     :global(:root[data-has-sidebar]) {
       --__sidebar-pad: calc(2 * var(--sl-nav-pad-x));

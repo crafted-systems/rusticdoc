@@ -8,7 +8,7 @@
   --sl-text-h3: 1.25rem;
   --sl-text-h4: 1.08rem;
   --sl-line-height: 1.65;
-  --sl-sidebar-width: 17.5rem;
+  --sl-sidebar-width: 18rem;
 
   --sl-color-white: var(--ink);
   --sl-color-gray-1: light-dark(#1b2a47, #dfe7f6);
@@ -64,7 +64,10 @@ header.header {
   background: var(--glass);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(16px) saturate(1.3);
-  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+}
+/* For Safari before 18, in its own block. See .masthead in site.css. */
+@supports not (backdrop-filter: blur(1px)) {
+  header.header { -webkit-backdrop-filter: blur(16px) saturate(1.3); }
 }
 .site-title { font-weight: 600; font-size: 1.25rem; letter-spacing: -0.03em; color: var(--ink); gap: 0.5rem; }
 .site-title img { height: 1.75rem; width: auto; }
@@ -87,7 +90,23 @@ header.header {
 }
 .sidebar-content .large { color: var(--ink-soft); font-size: var(--sl-text-sm); font-weight: 500; }
 .sidebar-content summary { border-radius: var(--r-small); }
+.sidebar-content summary:hover { background: var(--mist); }
 .sidebar-content ul ul { border-inline-start-color: var(--line); }
+/* Three levels down and deeper, the guide line does the indenting, which
+   leaves the names of the operations room to stay on one line. */
+.sidebar-content ul ul ul li { margin-inline-start: 0.125rem; }
+
+/* An operation in the sidebar: its name, which may wrap, and its method in a
+   column of its own at the right, so the methods line up down the list. */
+.sidebar-content a:has(> .sl-badge[class*='sl-openapi-method-']) {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;
+}
+.sidebar-content a > .sl-badge[class*='sl-openapi-method-'] {
+  flex: none; min-width: 2.8rem; margin: 0; padding: 0.14rem 0; text-align: center;
+  background: var(--method-wash); border: 0; border-radius: var(--r-small); color: var(--method-ink);
+  font-family: var(--font-mono); font-size: 0.62rem; font-weight: 600; line-height: 1.3; letter-spacing: 0.02em;
+}
+.sidebar-content a[aria-current='page'] > .sl-badge[class*='sl-openapi-method-'] { background: var(--card); }
 
 .social-icons::after { display: none; }
 
@@ -101,6 +120,15 @@ h1#_top { font-weight: 650; letter-spacing: -0.02em; }
 .sl-markdown-content a { color: var(--blue-deep); }
 .sl-markdown-content a:hover { color: var(--ink); }
 .sl-markdown-content li::marker { color: var(--blue); }
+
+/* The API reference has a page for every operation, each a short title over
+   dense detail, so its headings are a size down from the guides'. */
+:root:has(.sidebar-content a[aria-current='page'][href^='/docs/reference/api/']) {
+  --sl-text-h1: 1.7rem;
+  --sl-text-h2: 1.25rem;
+  --sl-text-h3: 1.08rem;
+  --sl-text-h4: 1rem;
+}
 
 /* On this page */
 .right-sidebar { border-inline-start-color: var(--line); }
@@ -150,3 +178,186 @@ button[data-open-modal] kbd { background: var(--blue-wash); border-radius: var(-
 dialog[aria-label] { border-radius: var(--r-panel); }
 .sl-menu-button { border-radius: var(--r-small); }
 .sl-badge, .sl-markdown-content .card, starlight-tabs [role='tab'], .sl-link-card { border-radius: var(--r-small); }
+
+/* The HTTP API reference, which starlight-openapi builds. Its own styles carry a
+   scoping class, so these name the content column to outrank them. */
+main .sl-markdown-content .sl-openapi-operation-description {
+  background: var(--card); border-color: var(--line); border-radius: var(--r-card);
+  box-shadow: var(--shadow-card); overflow: hidden;
+}
+main .sl-markdown-content .sl-openapi-operation-description-header {
+  background: var(--code-bar); border-bottom-color: var(--line); color: var(--ink);
+  font-family: var(--font-mono);
+}
+main .sl-markdown-content .sl-openapi-snippets { border-bottom-color: var(--line); }
+main .sl-markdown-content .sl-openapi-operation-description-button,
+main .sl-markdown-content .sl-openapi-snippet-picker select,
+main .sl-markdown-content .sl-openapi-snippet-picker-value {
+  background: var(--card); border-color: var(--line-strong); border-radius: var(--r-small);
+  color: var(--ink-soft); font-family: var(--font-body);
+}
+main .sl-markdown-content .sl-openapi-operation-description-button:hover,
+main .sl-markdown-content .sl-openapi-snippet-picker select:hover { border-color: var(--blue); color: var(--blue-deep); }
+main .sl-markdown-content .sl-openapi-operation-description-button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+main .sl-markdown-content .sl-openapi-operation-method-path { color: var(--ink); font-size: var(--sl-text-sm); font-weight: 500; }
+
+/* A method, wherever the reference shows one: the sidebar, an operation's
+   header and the lists of operations. A wash and its ink from the palette. */
+.sl-openapi-method-get, .sl-openapi-operation-method-badge.get { --method-wash: var(--blue-wash); --method-ink: var(--blue-deep); }
+.sl-openapi-method-post, .sl-openapi-operation-method-badge.post { --method-wash: var(--green-wash); --method-ink: var(--green); }
+.sl-openapi-method-put, .sl-openapi-operation-method-badge.put { --method-wash: var(--amber-wash); --method-ink: var(--amber); }
+.sl-openapi-method-delete, .sl-openapi-operation-method-badge.delete { --method-wash: var(--red-wash); --method-ink: var(--red); }
+main .sl-markdown-content .sl-openapi-operation-method-badge {
+  align-self: center; justify-content: center; min-width: 3.9rem; padding: 0.32rem 0.5rem;
+  background: var(--method-wash); border: 0; border-radius: var(--r-small); color: var(--method-ink);
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600; line-height: 1; letter-spacing: 0.02em;
+}
+
+/* The examples. ApiExamples.astro puts a row of languages over the code and
+   hides the reference's one long menu, which it drives. Where scripts run, the
+   long menu is hidden and the row's room kept from the start, so nothing moves
+   when the row arrives. */
+main .sl-markdown-content .api-examples-on label.sl-openapi-snippet-picker { display: none; }
+@media (scripting: enabled) {
+  main .sl-markdown-content sl-openapi-snippet-picker:not(.api-examples-off) label.sl-openapi-snippet-picker { display: none; }
+  main .sl-markdown-content .sl-openapi-snippets:has(> .sl-openapi-snippet ~ .sl-openapi-snippet):not(:has(> .api-examples)) { padding-top: 2.6rem; }
+}
+main .sl-markdown-content .api-examples {
+  display: flex; align-items: stretch; justify-content: space-between; gap: 0.75rem;
+  box-sizing: border-box; height: 2.6rem; padding-inline: 0.4rem 0.6rem;
+  background: var(--code-bg); border-bottom: 1px solid var(--line);
+}
+main .sl-markdown-content .api-examples-languages { display: flex; }
+main .sl-markdown-content .api-examples-languages button {
+  appearance: none; margin: 0 0 -1px; padding: 0 0.75rem; cursor: pointer;
+  background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  color: var(--ink-soft); font-family: var(--font-body); font-size: var(--sl-text-sm); font-weight: 500;
+}
+main .sl-markdown-content .api-examples-languages button:hover { color: var(--ink); }
+main .sl-markdown-content .api-examples-languages button[aria-pressed='true'] { border-bottom-color: var(--blue); color: var(--blue-deep); }
+main .sl-markdown-content .api-examples-languages button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+main .sl-markdown-content .api-examples-example { position: relative; display: flex; align-self: center; min-width: 0; }
+main .sl-markdown-content .api-examples-example select {
+  appearance: none; max-width: 100%; padding: 0.2rem 1.8rem 0.2rem 0.6rem; cursor: pointer; text-overflow: ellipsis;
+  background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--r-small);
+  color: var(--ink-soft); font-family: var(--font-body); font-size: var(--sl-text-sm);
+}
+main .sl-markdown-content .api-examples-example select:hover { border-color: var(--blue); color: var(--blue-deep); }
+main .sl-markdown-content .api-examples-example select:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+main .sl-markdown-content .api-examples-example svg {
+  position: absolute; inset-inline-end: 0.55rem; top: 50%; width: 0.8rem; height: 0.8rem; translate: 0 -50%;
+  fill: none; stroke: var(--ink-soft); stroke-width: 1.75; pointer-events: none;
+}
+
+/* On a phone the example menu gets a row of its own above the languages,
+   instead of being squeezed to a few letters beside them. */
+@media (max-width: 30rem) {
+  main .sl-markdown-content .api-examples:has(.api-examples-example) { flex-wrap: wrap; row-gap: 0; height: auto; }
+  main .sl-markdown-content .api-examples-example { order: -1; flex: 1 0 100%; padding-block: 0.5rem 0.15rem; }
+  main .sl-markdown-content .api-examples-example select { width: 100%; }
+  main .sl-markdown-content .api-examples-languages { height: 2.6rem; }
+}
+
+/* The panel behind the header's button, which holds the request's full
+   address. It hangs under the button as the site's menus hang under theirs. */
+main .sl-markdown-content #sl-openapi-operation-description-popover {
+  inset-inline-start: anchor(left); top: calc(anchor(bottom) + 0.5rem);
+}
+main .sl-markdown-content #sl-openapi-operation-description-popover::before { display: none; }
+main .sl-markdown-content .sl-openapi-operation-description-urls {
+  gap: 0.5rem; margin: 0; padding: 0.7rem; list-style: none;
+  background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--r-card);
+  box-shadow: var(--shadow-panel);
+}
+main .sl-markdown-content .sl-openapi-operation-description-urls::before {
+  content: 'Request URL'; color: var(--ink-soft); font-size: var(--sl-text-xs); font-weight: 600;
+}
+main .sl-markdown-content .sl-openapi-operation-url { margin: 0; }
+main .sl-markdown-content .sl-openapi-operation-url label { color: var(--ink-soft); font-size: var(--sl-text-xs); }
+main .sl-markdown-content .sl-openapi-operation-url input {
+  field-sizing: content; width: auto; min-width: min(18rem, 100%); max-width: min(36rem, 80vw);
+  padding: 0.4rem 0.6rem; background: var(--mist); border: 1px solid var(--line); border-radius: var(--r-small);
+  color: var(--ink); font-family: var(--font-mono); font-size: var(--sl-text-sm);
+}
+main .sl-markdown-content .sl-openapi-operation-url input:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+main .sl-markdown-content .sl-openapi-section-panel {
+  background: var(--card); border-color: var(--line); border-radius: var(--r-card);
+}
+main .sl-markdown-content .sl-openapi-content-picker-select select,
+main .sl-markdown-content .sl-openapi-content-picker-select-value {
+  background: var(--mist); border-color: var(--line); border-radius: var(--r-small);
+  color: var(--ink-soft); font-family: var(--font-mono); font-size: var(--sl-text-sm);
+}
+main .sl-markdown-content .sl-openapi-content-picker-select select:hover { border-color: var(--blue); color: var(--blue-deep); }
+
+/* One field a row: its name in the code face, its type under the description. */
+main .sl-markdown-content .sl-openapi-key + .sl-openapi-key {
+  border-top: 1px solid var(--line); margin-top: 0.8rem; padding-top: 0.8rem;
+}
+main .sl-markdown-content .sl-openapi-key-name strong {
+  color: var(--ink); font-family: var(--font-mono); font-size: var(--sl-text-sm); font-weight: 600;
+}
+main .sl-markdown-content .sl-openapi-type {
+  color: var(--blue-deep); font-family: var(--font-mono); font-size: var(--sl-text-sm); font-weight: 500;
+}
+main .sl-markdown-content .sl-openapi-key-required,
+main .sl-markdown-content .sl-openapi-request-body-required { color: var(--red); }
+main .sl-markdown-content .sl-openapi-tag {
+  border-color: var(--line-strong); border-radius: var(--r-small); color: var(--ink-soft);
+}
+main .sl-markdown-content .sl-openapi-text a { color: var(--blue-deep); }
+main .sl-markdown-content .sl-openapi-text a:hover { color: var(--ink); }
+main .sl-markdown-content .sl-openapi-example div.expressive-code .frame pre {
+  background: var(--code-bg); border-color: var(--line); border-radius: var(--r-small);
+}
+main .sl-markdown-content .sl-openapi-section details { border-inline-start-color: var(--line-strong); }
+main .sl-markdown-content .sl-openapi-security-scheme a { color: var(--blue-deep); font-family: var(--font-mono); font-size: var(--sl-text-sm); }
+main .sl-markdown-content .sl-openapi-security-scheme a:hover { color: var(--ink); }
+
+/* An object the spec says nothing more about has nothing to open, and the
+   type above it already says it is an object, so the empty disclosure goes. */
+main .sl-markdown-content details:has(> .sl-openapi-keys:empty) { display: none; }
+
+/* The version beside the API's name on its overview: a quiet tag, not a
+   filled button. */
+main .sl-markdown-content h2 > .sl-badge {
+  padding: 0.2rem 0.45rem; vertical-align: 0.2em;
+  background: var(--blue-wash); border: 0; border-radius: var(--r-small); color: var(--blue-deep);
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600; line-height: 1.2;
+}
+
+/* Motion. Each of these answers a click: a group of the sidebar or a nested
+   field opening and closing, the address panel appearing, another language's
+   example taking the place of the last. None of it runs for people who ask
+   for less motion, or in browsers that can't size a box to its content
+   mid-transition, where things open at once as before. */
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar-content a,
+  .sidebar-content summary { transition: background-color 120ms ease, color 120ms ease; }
+  main .sl-markdown-content .sl-openapi-operation-description-button,
+  main .sl-markdown-content .api-examples-example select { transition: border-color 120ms ease, color 120ms ease; }
+  main .sl-markdown-content .api-examples-languages button { transition: border-color 140ms ease, color 140ms ease; }
+
+  .sidebar-content,
+  main .sl-markdown-content .sl-openapi-section { interpolate-size: allow-keywords; }
+  .sidebar-content details::details-content,
+  main .sl-markdown-content .sl-openapi-section details::details-content {
+    block-size: 0; overflow-y: clip;
+    transition: block-size 220ms cubic-bezier(0.2, 0.7, 0.2, 1), content-visibility 220ms allow-discrete;
+  }
+  .sidebar-content details[open]::details-content,
+  main .sl-markdown-content .sl-openapi-section details[open]::details-content { block-size: auto; }
+
+  main .sl-markdown-content #sl-openapi-operation-description-popover {
+    opacity: 0; translate: 0 -0.3rem;
+    transition: opacity 140ms ease, translate 140ms ease, display 140ms allow-discrete, overlay 140ms allow-discrete;
+  }
+  main .sl-markdown-content #sl-openapi-operation-description-popover:popover-open { opacity: 1; translate: 0 0; }
+  @starting-style {
+    main .sl-markdown-content #sl-openapi-operation-description-popover:popover-open { opacity: 0; translate: 0 -0.3rem; }
+  }
+
+  main .sl-markdown-content .api-examples-swapped .sl-openapi-snippet:not([hidden]) { animation: api-example-in 160ms ease; }
+}
+@keyframes api-example-in { from { opacity: 0; } }

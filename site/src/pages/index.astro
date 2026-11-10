@@ -156,7 +156,7 @@ const faq = [
   },
   {
     q: 'Is it ready for production?',
-    a: 'Version 0.1 is the first release. The service, CLI and template engine are built and tested, but nobody has opened the output in Office for Windows or in Acrobat yet. The status page lists what has and hasn’t been checked.',
+    a: 'Version 0.1 is the first release. Try it with your own templates, and read the known limits before you depend on it.',
   },
   {
     q: 'Which scripts and languages can templates use?',
@@ -373,18 +373,18 @@ Total due {{ total | currency(currency) }}
     <div class="two wide-right">
       <header class="section-head left">
         <h2>What happens when someone attacks it</h2>
-        <p>A document service has to open files from people you can’t trust. These attacks were run at full size against a container limited to 3 GiB, before and after the fixes.</p>
+        <p>A document service has to open files from people you can’t trust. Each of these is refused in a container limited to 3 GiB, and the service keeps running.</p>
         <p class="more"><a href="/docs/project/security-overview/">What it protects, and what’s left to you</a></p>
       </header>
       <div class="table-scroll flush" role="region" aria-label="Attack results" tabindex="0">
         <table class="results">
-          <thead><tr><th scope="col">Attack</th><th scope="col">Before</th><th scope="col">Now</th></tr></thead>
+          <thead><tr><th scope="col">Attack</th><th scope="col">What happens</th></tr></thead>
           <tbody>
-            <tr><td>40 doublings of a template variable</td><td>Killed, out of memory</td><td><code>413</code> in under a second</td></tr>
-            <tr><td>40 concurrent 60 MB uploads</td><td>Killed, out of memory</td><td>Refused at a 1.31 GiB peak</td></tr>
-            <tr><td>840,000 same-named form parts</td><td>No answer in 150 s</td><td><code>400</code> in 6 ms</td></tr>
-            <tr><td>Stylesheet link in a converted HTML file</td><td>Fetched by LibreOffice</td><td>No request leaves</td></tr>
-            <tr><td>Service secrets in <code>/proc/1/environ</code></td><td>Readable by LibreOffice</td><td>Permission denied</td></tr>
+            <tr><td>40 doublings of a template variable</td><td><code>413</code> in under a second</td></tr>
+            <tr><td>40 concurrent 60 MB uploads</td><td>Refused, memory peaks at 1.31 GiB</td></tr>
+            <tr><td>840,000 same-named form parts</td><td><code>400</code> in 6 ms</td></tr>
+            <tr><td>Stylesheet link in a converted HTML file</td><td>No request leaves the container</td></tr>
+            <tr><td>Service secrets in <code>/proc/1/environ</code></td><td>Permission denied to LibreOffice</td></tr>
           </tbody>
         </table>
       </div>
@@ -414,7 +414,7 @@ Total due {{ total | currency(currency) }}
       <p>The quickstart takes you from nothing to a filled invoice in a few commands. It comes with a sample template and data to download.</p>
       <p class="actions">
         <a class="button" href="/docs/start/quickstart/">Read the quickstart</a>
-        <a class="button secondary" href="/docs/project/status/">See what’s unproven</a>
+        <a class="button secondary" href="/docs/project/known-limits/">See the known limits</a>
       </p>
     </div>
     <div class="terminal" role="region" aria-label="Quickstart commands" tabindex="0">

@@ -1,0 +1,115 @@
+---
+// The API reference lists every example of an operation in one menu: 'curl:
+// Upload a template', 'Python: Upload a template' and so on, four entries for
+// each request. This script splits that menu into the two choices it holds: a
+// row of languages above the code and, where an operation has more than one
+// example, a short menu of them.
+//
+// The reference's own menu stays in the page and still does the work. This
+// only drives it, so the page reads the same without JavaScript, with the long
+// menu in place of the two controls. Styles are in docs.css.
+---
+
+<script>
+  const STORE = 'starlight-openapi-snippet-id';
+
+  const picker = document.querySelector('sl-openapi-snippet-picker');
+  const menu = picker?.querySelector('select');
+  const code = document.querySelector<HTMLElement>('.sl-openapi-snippets');
+
+  // 'Python: Stored template' is a language and an example's name. An
+  // operation with one example names only the language.
+  const entries = [...(menu?.options ?? [])].map((option) => {
+    const label = option.textContent?.trim() ?? '';
+    const at = label.indexOf(': ');
+    return {
+      id: option.value,
+      language: at < 0 ? label : label.slice(0, at),
+      example: at < 0 ? '' : label.slice(at + 2),
+    };
+  });
+  const languages = [...new Set(entries.map((entry) => entry.language))];
+  const examples = [...new Set(entries.map((entry) => entry.example))];
+
+  if (picker && menu && code && languages.length > 1) {
+    const shown = entries.find((entry) => entry.id === menu.value) ?? entries[0];
+    let language = shown.language;
+    let example = shown.example;
+
+    const bar = document.createElement('div');
+    bar.className = 'api-examples';
+
+    const group = document.createElement('div');
+    group.className = 'api-examples-languages';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Language');
+    const buttons = languages.map((name) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = name;
+      button.addEventListener('click', () => show(name, example));
+      group.append(button);
+      return button;
+    });
+    bar.append(group);
+
+    let chooser: HTMLSelectElement | undefined;
+    if (examples.length > 1) {
+      const label = document.createElement('label');
+      label.className = 'api-examples-example';
+      const text = document.createElement('span');
+      text.className = 'sr-only';
+      text.textContent = 'Example';
+      chooser = document.createElement('select');
+      chooser.autocomplete = 'off';
+      for (const name of examples) chooser.append(new Option(name, name));
+      chooser.addEventListener('change', () => show(language, chooser!.value));
+      const caret = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      caret.setAttribute('viewBox', '0 0 16 16');
+      caret.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M4 6l4 4 4-4');
+      caret.append(path);
+      label.append(text, chooser, caret);
+      bar.append(label);
+    }
+
+    const mark = () => {
+      for (const button of buttons) button.setAttribute('aria-pressed', String(button.textContent === language));
+      if (chooser) chooser.value = example;
+    };
+
+    function show(nextLanguage: string, nextExample: string) {
+      const entry = entries.find((item) => item.language === nextLanguage && item.example === nextExample);
+      if (!entry || !menu || !code) return;
+      language = nextLanguage;
+      example = nextExample;
+      mark();
+      if (menu.value === entry.id) return;
+
+      // The reference's menu swaps the code and tells screen readers.
+      menu.value = entry.id;
+      menu.dispatchEvent(new Event('change', { bubbles: true }));
+
+      // It remembers the exact example, which only this page has. Remembering
+      // the language's first example instead carries the language to every
+      // other operation.
+      try {
+        const first = entries.find((item) => item.language === language);
+        if (first) localStorage.setItem(STORE, first.id);
+      } catch {
+        // Storage is off; the choice lasts for this page.
+      }
+
+      code.classList.remove('api-examples-swapped');
+      void code.offsetWidth;
+      code.classList.add('api-examples-swapped');
+    }
+
+    mark();
+    code.prepend(bar);
+    picker.classList.add('api-examples-on');
+  } else {
+    picker?.classList.add('api-examples-off');
+  }
+</script>

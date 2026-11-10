@@ -1,8 +1,9 @@
 ---
-// The two menus every page's top bar carries, on the marketing pages and in the
-// docs alike: what rusticdoc is, and how to use it. Each is a disclosure that
-// works without JavaScript. With a mouse it also opens on hover; a small script
-// does that, closes the others, and closes on Escape or a click elsewhere.
+// What every page's top bar carries, on the marketing pages and in the docs
+// alike: two menus, for what rusticdoc is and how to use it, and a plain link
+// to the About page. Each menu is a disclosure that works without JavaScript.
+// With a mouse it also opens on hover; a small script does that, closes the
+// others, and closes on Escape or a click elsewhere.
 interface Props {
   /** The page's path, to mark the menu it belongs to. */
   path: string;
@@ -49,9 +50,8 @@ const menus = [
         title: 'Project',
         items: [
           { href: '/docs/project/security-overview/', title: 'Security', text: 'How it handles documents from strangers' },
-          { href: '/docs/project/status/', title: 'Status', text: 'What’s been checked, and what hasn’t' },
           { href: '/docs/project/changelog/', title: 'Changelog', text: 'What each release contains' },
-          { href: '/docs/project/roadmap/', title: 'Roadmap', text: 'What comes next' },
+          { href: '/docs/project/known-limits/', title: 'Known limits', text: 'What it doesn’t do' },
         ],
       },
     ],
@@ -84,11 +84,12 @@ const menus = [
       </div>
     </details>
   ))}
+  <a class="site-menu-link" href="/about/" aria-current={path === '/about/' ? 'page' : undefined}>About</a>
 </div>
 
 <style>
-  /* Panels hang from the pair of menus, not from each button, so a wide
-     two-column panel lines up with the right edge of the pair and stays on
+  /* Panels hang from the group of menus, not from each button, so a wide
+     two-column panel lines up with the right edge of the group and stays on
      screen beside the theme switch or the edge of the window. */
   .site-menus { position: relative; display: flex; align-items: center; gap: 0.25rem; }
   .site-menu { position: static; }
@@ -104,6 +105,35 @@ const menus = [
   summary svg { transition: transform 150ms; }
   .site-menu[open] summary svg { transform: rotate(180deg); }
   @media (prefers-reduced-motion: reduce) { summary svg { transition: none; } }
+
+  /* A menu fades in and settles into place as it opens, and fades out as it
+     closes. The fade is on the wrapper the browser gives a details' content;
+     the panel itself only moves, so it keeps hanging from the group of menus. */
+  @media (prefers-reduced-motion: no-preference) {
+    .site-menu::details-content {
+      opacity: 0;
+      transition: opacity 150ms ease, content-visibility 150ms allow-discrete;
+    }
+    .site-menu[open]::details-content { opacity: 1; }
+    .site-menu-panel { translate: 0 -0.3rem; transition: translate 150ms ease; }
+    .site-menu[open] .site-menu-panel { translate: 0 0; }
+    @starting-style {
+      .site-menu[open] .site-menu-panel { translate: 0 -0.3rem; }
+    }
+  }
+
+  /* The About link looks like a menu's button without the arrow. The marketing
+     top bar styles its own links, so the page's own link is matched to the
+     menus here: colour and weight, no fill. */
+  .site-menu-link {
+    display: inline-flex; align-items: center; text-decoration: none;
+    color: var(--ink); font-size: 0.98rem; font-weight: 500; line-height: 1.5;
+    padding: 0.42rem 0.8rem; border-radius: var(--r-small);
+  }
+  .site-menu-link:hover { background: var(--blue-wash); color: var(--blue-deep); }
+  .site-menus .site-menu-link[aria-current='page'] { color: var(--blue-deep); font-weight: 600; }
+  .site-menus .site-menu-link[aria-current='page']:not(:hover) { background: transparent; }
+  .site-menu-link:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
   .site-menu-panel {
     position: absolute; top: calc(100% + 0.5rem); right: 0; z-index: 30;
@@ -133,7 +163,7 @@ const menus = [
   .site-menu-panel a:hover .site-menu-title, .site-menu-panel a[aria-current='page'] .site-menu-title { color: var(--blue-deep); }
 
   @media (max-width: 640px) {
-    summary { padding: 0.35rem 0.6rem; font-size: 0.95rem; }
+    summary, .site-menu-link { padding: 0.35rem 0.6rem; font-size: 0.95rem; }
     /* On a phone the panel is one column, hanging from the start of the menus. */
     .site-menu-panel { left: 0; right: auto; grid-template-columns: minmax(0, 1fr); }
     .site-menu-column + .site-menu-column { border-inline-start: 0; padding-inline-start: 0; border-top: 1px solid var(--line); padding-top: 0.5rem; }
