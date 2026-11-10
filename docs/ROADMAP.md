@@ -1,6 +1,6 @@
 # Roadmap
 
-The design lives in [rusticdoc: a document engine in Rust](https://claude.ai/artifact/4ZBnc3L7jTH1ov5TKH8qs3). This is its delivery plan and where each part stands.
+This is rusticdoc's delivery plan and where each part stands.
 
 All six phases are built. Each phase has a gate. Phases 0 and 4 have met theirs, and phases 1, 2 and 3 have met theirs in part.
 
