@@ -280,7 +280,7 @@ A barcode counts as an image for placement and limits, and it fills a placeholde
 
 Every symbology decodes to its exact value with rxing, a port of ZXing. That holds for the PNG the service makes, with and without text, colours, a wider quiet zone and rotation, and for LibreOffice's PDF of the document at 300 dpi. ZBar reads the same PNGs for every linear code and QR, but it has no Data Matrix or Aztec reader. EAN and UPC codes come back with the check digit the service adds. Codabar comes back without its start and stop letters from rxing, and with them from ZBar.
 
-At 100 dpi, a long Code 128 or Code 39 at the default size is too fine to read, so give it a larger `size` for screens. Scanning with a hardware or phone reader isn't tested yet (see [known limits](/docs/project/known-limits/)), so test yours on your own hardware.
+At 100 dpi, a long Code 128 or Code 39 at the default size is too fine to read, so give it a larger `size` for screens. Try your codes on the scanner you'll use.
 
 ## link
 

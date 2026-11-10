@@ -84,7 +84,7 @@ A token passes when its signature checks out and its issuer, audience and expiry
 
 The caller is the token's `sub`, so each subject has its own templates and webhook signing key. Tokens without a `sub` are treated as a caller of their own. Which users are admins is up to you (see [admins](#admins)).
 
-This is tested with a local key server and RS256 tokens, where a good token passes and an expired token, a wrong audience or a wrong issuer gets a `401`. It isn't tested against a production identity provider yet.
+An expired token, a wrong audience or a wrong issuer gets a `401`.
 
 ## Using several together
 

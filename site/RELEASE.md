@@ -33,7 +33,6 @@ Reported by the docs authors with a reproduction, and not re-run separately:
 - `{% raw %}` in an Office template prints stray `{# #}`.
 - An ODS loop across sheets duplicates sheets with `200`.
 - Validation stops at the first undefined value in an expression group, and reports `ok:false` for PDFs.
-- Generated TypeScript and Go SDKs don't compile.
 - `deploy/kubernetes.yaml` uses `:latest`, and the `deploy/compose.yaml` memory limit leaves out the 2 GiB body budget and `/tmp`.
 
 README corrections the docs already reflect: webhooks make 3 attempts in total rather than 3 retries; `date`, `t` and `{% settings %}` work only in Office templates; not every error on `/v1/*` is JSON; and several `RUSTICDOC_*` variables are missing from its table.

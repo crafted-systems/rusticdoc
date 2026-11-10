@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-No SDK is published yet, so for now use plain HTTP.
+No SDK is published yet. You can generate one from a checkout of the repository, or use plain HTTP.
 
 ## The state of the SDKs
 
@@ -13,9 +13,15 @@ The client libraries are generated from the service's own OpenAPI description.
 
 | Language | Generated with | State |
 |---|---|---|
-| TypeScript, `fetch`-based | `make sdk-typescript` | Doesn't compile. `tsc` reports `Cannot find name 'anyToJSON'` wherever a form field has an `any` type, like `data` |
-| Go | `make sdk-go` | Doesn't compile. The form field `ctx` collides with Go's request context |
-| Python | `make sdk-python` | Generates and byte-compiles, but hasn't been run against the service |
+| TypeScript, `fetch`-based | `make sdk-typescript` | Compiles and passes the test below |
+| Go | `make sdk-go` | Compiles and passes it. The form field `ctx` is `TemplateCtx` here, because Go keeps `ctx` for the request context |
+| Python | `make sdk-python` | Passes it |
+
+The test is five calls against a local service with a [store](/docs/guides/stored-templates/): read the version, upload a template, render it, write a PDF's metadata and read it back. That's a small part of the API, so treat a generated client as a starting point.
+
+The generated `render` sends a JSON body, so it renders a stored template by its `templateId`. To send the template file in the same request, use plain HTTP as shown below.
+
+The 0.1.0 description gave TypeScript and Go clients that didn't compile. The fixes came after 0.1.0, so generate from the current repository.
 
 `make sdk` generates all three, and `make openapi` refreshes `openapi.json` first. Generation runs `openapi-generator` from its Docker image, so you don't need to install anything. The generated folders aren't committed.
 

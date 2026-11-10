@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-`deploy/kubernetes.yaml` is a starting point for you to adapt to your cluster. It's been run on minikube with an S3 gateway, but not on a production cluster or against real AWS.
+`deploy/kubernetes.yaml` is a starting point for you to adapt to your cluster.
 
 ## Before you apply it
 

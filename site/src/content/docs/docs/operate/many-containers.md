@@ -50,7 +50,7 @@ docker run --rm -v rusticdoc-store:/data --entrypoint sh --user root \
   ghcr.io/vmosoti/rusticdoc:0.1.0 -c 'chown 1001:1001 /data'
 ```
 
-`make replicas` runs several real containers against VersityGW, an S3 gateway, and then against a shared Docker volume. It hasn't been run against AWS itself.
+`make replicas` runs several real containers against VersityGW, an S3 gateway, and then against a shared Docker volume.
 
 Back up the bucket and turn on its encryption yourself. It's the only copy, and templates can hold whatever your documents hold.
 
@@ -74,8 +74,6 @@ With a store, a new replica returns `503` and `{"status":"syncing"}` from `/read
 Once a replica has synced, it stays ready. If a later sync fails, it keeps the fonts it has.
 
 ## When the store fails
-
-The first three rows were tested on a container whose S3 endpoint had nothing listening on it. The last one, a replica already in service, comes from reading the code.
 
 | What you do | What happens |
 |---|---|

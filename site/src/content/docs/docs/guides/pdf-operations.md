@@ -111,10 +111,11 @@ Text marks are drawn in Helvetica (see [known limits](/docs/project/known-limits
 
 ### `POST /v1/pdf/sign`
 
-The `signature` field chooses between two ways of signing:
+The `signature` field chooses what the route does:
 
 - `signature=image`, the default, places images of signatures at exact coordinates. This is **not** a cryptographic signature.
 - `signature=certificate` signs cryptographically with the deployment's key. A PDF reader that validates signatures shows the document as signed, and any later change to the signed bytes breaks the signature.
+- `signature=renew` adds a fresh timestamp to a file that's already signed at B-LTA. It signs nothing and uses no key. See [renewing a B-LTA file](#renewing-a-b-lta-file).
 
 #### With an image
 
@@ -180,23 +181,47 @@ The service writes:
 | `b-b` | The signature alone. The only evidence of when it was made is the signer's own claim | A key |
 | `b-t` | An RFC 3161 timestamp over the signature value, from the timestamp authority, stored in the `id-aa-signatureTimeStampToken` unsigned attribute. A third party now attests the signing time | `RUSTICDOC_SIGNING_TSA_URL`, plus `RUSTICDOC_SIGNING_TSA_CERT` to trust its tokens |
 | `b-lt` | A second incremental update with a `/DSS`. It holds every certificate in the signer's and the authority's chains, an OCSP response for each one that names a responder, a CRL for each one that names only a distribution point, and a `/VRI` entry for the signature keyed by the SHA-1 of its `/Contents`. The signature can then be validated from the file alone, even after the certificates expire or the responders go away | Responders and distribution points the service can reach |
-| `b-lta` | A third update with a document timestamp (`/Type /DocTimeStamp`, `/SubFilter /ETSI.RFC3161`) over the whole file, DSS included. It can be renewed later to keep the evidence alive | The same as `b-lt` |
+| `b-lta` | A third update with a document timestamp (`/Type /DocTimeStamp`, `/SubFilter /ETSI.RFC3161`) over the whole file, DSS included. It can be [renewed later](#renewing-a-b-lta-file) to keep the evidence alive | The same as `b-lt` |
 
 The service reaches the timestamp authority, OCSP responders, CRL distribution points and certificate issuers under the [outbound rules](/docs/reference/configuration/#timestamps-and-validation-data) for signing, which means allow and deny lists, private addresses refused unless allowed, no redirects, and time and size limits. Nothing they send is trusted unchecked. A timestamp token must chain to `RUSTICDOC_SIGNING_TSA_CERT` with the timestamping usage, and OCSP responses and CRLs must be current and signed by the certificate's issuer or a responder it authorised (see [configuration](/docs/reference/configuration/#timestamps-and-validation-data)).
 
 If any of these fails, the request fails with a `502` that names it, and you never get a file at a lower level than you asked for. A certificate that an OCSP responder or CRL reports as revoked fails the request with a `503`.
 
-Every level validates in poppler's `pdfsig` and in pyHanko 0.38, which reports `VALID`. `pdfsig` reports the signature as valid over the total document for B-B and B-T, and over its revision for B-LT and B-LTA, because it doesn't check their later updates. With the timestamp authority and revocation servers stopped, pyHanko still validates the B-LT and B-LTA files with revocation checking on, from what they hold, the B-LTA document timestamp included. `make sign-check` repeats these checks against a local timestamp authority, OCSP responder and CRL. Adobe Acrobat isn't tested yet.
+Every level validates in poppler's `pdfsig` and in pyHanko 0.38, which reports `VALID`. `pdfsig` reports the signature as valid over the total document for B-B and B-T, and over its revision for B-LT and B-LTA, because it doesn't check their later updates. With the timestamp authority and revocation servers stopped, pyHanko still validates the B-LT and B-LTA files with revocation checking on, from what they hold, the B-LTA document timestamp included. `make sign-check` repeats these checks against a local timestamp authority, OCSP responder and CRL.
 
 :::note[Limits]
 - Keys are RSA (PKCS#1 v1.5, SHA-256) or ECDSA P-256, from PEM files or a PKCS#11 token. Anyone who can call this route signs with the default key unless `RUSTICDOC_SIGNING_ALLOW` restricts it, so put the route behind [authentication](/docs/guides/authentication/).
 - Each request adds one signature. To sign again, send the signed file back.
 - With a self-signed certificate the signature validates as intact, but the signer is reported as untrusted and there's nothing to put in a DSS.
 - Text appearances use Helvetica, so characters outside Windows-1252 show as `?`.
-- The service doesn't renew the B-LTA document timestamp. Renew it with a tool like pyHanko's `ltaupdate` before the authority's certificate expires.
+- Nothing renews a B-LTA document timestamp on a schedule. [Renew the file](#renewing-a-b-lta-file) before the authority's certificate expires.
 :::
 
 `sign` is also a [pipeline step](/docs/guides/pipeline/) with the same options. From the command line, `rusticdoc pdf sign --key key.pem --cert cert.pem` signs with local files or a `pkcs11:` key, and takes `--level`, `--certify` and `--tsa-url`.
+
+#### Renewing a B-LTA file
+
+A B-LTA file can be validated for as long as the certificate behind its last document timestamp is valid. Renew the file before then, and the evidence carries on under a newer timestamp:
+
+```bash
+curl -F files=@signed.pdf -F signature=renew \
+  http://localhost:9027/v1/pdf/sign -o renewed.pdf
+```
+
+Renewal adds one incremental update. It puts validation data for the last document timestamp into the `/DSS`, then adds a new document timestamp over the whole file. The signed file's bytes stay untouched at the start, so the signatures in it stay valid.
+
+It uses no signing key, only `RUSTICDOC_SIGNING_TSA_URL` and `RUSTICDOC_SIGNING_TSA_CERT`. Send the PDF with `signature=renew` and nothing else, apart from `outputFilename` if you want one.
+
+| Status | When |
+|---|---|
+| `400` | The file isn't signed at B-LTA, or it doesn't end in a document timestamp that the service trusts and that covers the file unchanged |
+| `403` | Signing keys are configured and the caller is on no key's allow list. With no key configured, any caller of the API can renew |
+| `502` | The timestamp authority or a revocation source failed. You never get a file that's only partly renewed |
+| `503` | No timestamp authority is configured |
+
+From the command line, `rusticdoc pdf sign signed.pdf --renew -o renewed.pdf` does the same, and takes `--tsa-url` and `--tsa-cert`.
+
+Renewal isn't a pipeline step, and nothing runs it for you, so schedule it yourself. It was added after 0.1.0, so the 0.1.0 image doesn't have it.
 
 ## Finish and secure
 

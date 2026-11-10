@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-These are the settings that decide capacity, and the arithmetic behind the memory limit. There are no throughput figures because no load test has been run, so measure with your own documents.
+These are the settings that decide capacity, the arithmetic behind the memory limit, and the figures from one load check. The check used one small document on one machine, so measure with your own documents.
 
 ## Workers
 
@@ -26,6 +26,51 @@ curl http://localhost:9027/health
 ```
 
 Under `details.libreoffice.pool`, `busy` and `idle` show the workers right now, and `restarts` counts worker restarts. For the number of jobs in progress, look at `rusticdoc_inflight{stage="pipeline"}` in [`/metrics`](/docs/operate/observability/).
+
+## Measured under load
+
+One load check has been run, on 10 November 2026. It posted a one-page invoice to `/v1/render` with ApacheBench, at 1, 4, 8 and 16 connections, each for 15 to 30 seconds. The container had the Compose flags and limits, two LibreOffice workers that restart after 10 jobs, four render workers and a 60 second timeout.
+
+| Template and steps | Connections | Requests/s | p50, ms | p95, ms | p99, ms | Peak memory |
+|---|---|---|---|---|---|---|
+| Text, no steps | 1 | 509 | 2 | 3 | 5 | 86 MiB |
+| Text, no steps | 4 | 1,281 | 3 | 5 | 8 | 91 MiB |
+| Text, no steps | 8 | 1,694 | 5 | 6 | 8 | 97 MiB |
+| Text, no steps | 16 | 1,592 | 10 | 12 | 19 | 97 MiB |
+| DOCX, no steps | 1 | 149 | 6 | 8 | 14 | 95 MiB |
+| DOCX, no steps | 4 | 541 | 7 | 10 | 13 | 106 MiB |
+| DOCX, no steps | 8 | 630 | 12 | 17 | 33 | 110 MiB |
+| DOCX, no steps | 16 | 649 | 24 | 30 | 41 | 112 MiB |
+| DOCX, `convert` | 1 | 16.1 | 50 | 155 | 170 | 167 MiB |
+| DOCX, `convert` | 4 | 27.9 | 131 | 276 | 341 | 226 MiB |
+| DOCX, `convert` | 8 | 27.5 | 202 | 501 | 627 | 237 MiB |
+| DOCX, `convert` | 16 | 27.2 | 604 | 722 | 940 | 241 MiB |
+| DOCX, `convert,pdfa` | 1 | 7.8 | 107 | 215 | 253 | 236 MiB |
+| DOCX, `convert,pdfa` | 4 | 13.3 | 251 | 496 | 588 | 243 MiB |
+| DOCX, `convert,pdfa` | 8 | 12.7 | 605 | 850 | 1,590 | 246 MiB |
+| DOCX, `convert,pdfa` | 16 | 14.2 | 1,154 | 1,284 | 1,492 | 249 MiB |
+| DOCX, `pdfa` | 1 | 15.4 | 52 | 159 | 179 | 216 MiB |
+| DOCX, `pdfa` | 4 | 27.4 | 130 | 293 | 389 | 244 MiB |
+| DOCX, `pdfa` | 8 | 28.0 | 194 | 494 | 661 | 245 MiB |
+| DOCX, `pdfa` | 16 | 24.1 | 586 | 1,388 | 2,604 | 242 MiB |
+
+All 136,330 requests got a `200`. No `503` was seen, but 16 connections doesn't reach the limits, so the check doesn't show where they start.
+
+What the figures say:
+
+- **Conversion stops gaining at 4 connections.** Two LibreOffice workers convert about 28 of these invoices a second. More connections only wait longer. One more run with `RUSTICDOC_WORKERS=4` gave about 49 a second from 4 connections up, and peaked at 313 MiB.
+- **Worker restarts are part of that cost.** A worker restarts after 10 jobs, which is why the 95th percentile at one connection is three times the median. Two more runs with `RUSTICDOC_LIBREOFFICE_MAX_JOBS=1000`, so no worker restarted, gave 38 to 46 a second with the same two workers.
+- **`convert,pdfa` is half the speed of `pdfa`.** It runs LibreOffice twice. `steps=pdfa` alone gives PDF/A at the rate of a plain `convert`.
+- **Filling without LibreOffice levels off between 4 and 8 connections**, with four render workers. The check didn't try other values.
+
+Read the figures with these limits in mind:
+
+- It was one Mac, an Apple M4 Pro, with the container inside Docker Desktop's VM of 8 CPUs and 5.78 GiB.
+- ApacheBench ran on the same machine and took CPU from the service. The Mac was in use for other work too.
+- It was one small document: a 37 KB DOCX, 556 bytes of data and a 55 KB PDF.
+- Three full runs that day differed by up to 30% on the same row.
+
+So use the numbers to compare one kind of request with another. They aren't a promise of capacity. The check is in `test/load/`, and `make load` runs it against your own image in about eight minutes.
 
 ## Render memory
 
@@ -49,7 +94,7 @@ The two resident memory figures in this table were measured. The rest are worked
 
 `deploy/compose.yaml` and the Kubernetes manifest both set a limit of 6 GiB, which covers the render workers at their limit and leaves 2 GiB for everything else.
 
-The ceilings add up to more than 6 GiB, so the limit doesn't cover the worst case, and how close real traffic comes to it hasn't been measured. An address space limit counts memory a process has reserved as well as memory it uses, so a worker's resident memory can be lower than its limit. If memory does run out, the kernel kills render workers first because they run with the highest `oom_score_adj`. Their requests fail and the service carries on.
+The ceilings add up to more than 6 GiB, so the limit doesn't cover the worst case. The load check above peaked at 249 MiB, but with one small document. Large documents and large data come closer to the limit. An address space limit counts memory a process has reserved as well as memory it uses, so a worker's resident memory can be lower than its limit. If memory does run out, the kernel kills render workers first because they run with the highest `oom_score_adj`. Their requests fail and the service carries on.
 
 For comparison, one container at rest after its first conversion showed 150 to 270 MiB in `docker stats`, on an arm64 build. That tells you little about load.
 
@@ -61,7 +106,7 @@ docker stats --no-stream rusticdoc
 
 Three pods sharing about 6 GB were killed for memory, and their conversions timed out. So don't read the 2 GiB per pod that the Kubernetes manifest requests as enough to run on. That's what the scheduler reserves. Each pod can grow to its 6 GiB limit, and a node that can't supply that will kill pods under load.
 
-No setup smaller than this has been measured as safe. If you have to run smaller, lower the ceilings together so that the limit still holds what you allow:
+If you have to run smaller, lower the ceilings together so that the limit still holds what you allow:
 
 | Setting | Effect |
 |---|---|

@@ -164,7 +164,7 @@ These five are the ones `make replicas` and the deploy files use:
 | `AWS_ENDPOINT` | AWS | Endpoint for any store other than AWS |
 | `AWS_ALLOW_HTTP` | `false` | Allows a plain HTTP endpoint |
 
-The client library also reads the rest of its `AWS_*` settings. They're passed through unchanged and aren't tested here:
+The client library also reads the rest of its `AWS_*` settings. They're passed through unchanged:
 
 | Variables | Purpose |
 |---|---|
@@ -250,6 +250,8 @@ When it starts, the service logs in, finds the key and has it sign a test messag
 ### Timestamps and validation data
 
 From `b-t` up, the service asks a timestamp authority (RFC 3161) for a timestamp over the signature. `b-lt` also fetches OCSP responses or CRLs for every certificate in the signer's and the authority's chains, from the URLs those certificates name, and `b-lta` asks for a document timestamp at the end. If any of these fails, the request fails with `502`, because the service never returns a file at a lower level than you asked for.
+
+[Renewing a B-LTA file](/docs/guides/pdf-operations/#renewing-a-b-lta-file) uses the same authority and no signing key.
 
 | Variable | Default | Purpose |
 |---|---|---|

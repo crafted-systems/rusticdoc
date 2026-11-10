@@ -77,7 +77,9 @@ Without a key and certificate, `signature=certificate` returns `503` and image s
 
 `sign` is also a step on `/v1/render`, with the same options. It has to be the last step and can't be combined with `encrypt`. From the command line, `rusticdoc pdf sign --key key.pem --cert cert.pem` does the same.
 
-The output validates in poppler's `pdfsig` (signature valid) and in pyHanko (`VALID`). B-LT and B-LTA files also validate offline with revocation checking on, using only what they hold. `make sign-check` repeats both checks against a local timestamp authority, OCSP responder and CRL, and keys on SoftHSM2 have signed at every level. Signed files haven't been opened in Adobe Acrobat.
+`signature=renew`, or `rusticdoc pdf sign --renew`, adds a fresh document timestamp to a file signed at B-LTA, so it can still be validated after the old timestamp's certificate expires. It uses the timestamp authority and no key, and nothing runs it on a schedule.
+
+The output validates in poppler's `pdfsig` (signature valid) and in pyHanko (`VALID`). B-LT and B-LTA files also validate offline with revocation checking on, using only what they hold. `make sign-check` repeats both checks against a local timestamp authority, OCSP responder and CRL, and keys on SoftHSM2 have signed at every level.
 
 ## Fonts
 
@@ -102,7 +104,7 @@ RUSTICDOC_STORE=s3://my-bucket/rusticdoc   # AWS S3 or a store compatible with i
 RUSTICDOC_STORE=file:///data/rusticdoc     # a volume every replica mounts: NFS, EFS, Azure Files
 ```
 
-`make replicas` runs this against VersityGW, which is an S3 gateway, and against a shared Docker volume. It hasn't been run against AWS itself.
+`make replicas` runs this against VersityGW, which is an S3 gateway, and against a shared Docker volume.
 
 On Kubernetes, use a bucket. A volume has to be `ReadWriteMany`, which many clusters don't offer, and every replica has to mount the same one, which the service can't check. S3 credentials and the endpoint come from the `AWS_*` variables (`AWS_ENDPOINT` and `AWS_ALLOW_HTTP` for a store other than AWS) or from the pod's role, never from the URL.
 
@@ -231,7 +233,7 @@ Every setting is an environment variable, and all of them are optional:
 
 ## SDKs
 
-The SDKs are generated from `openapi.json` with `make sdk-typescript`, `make sdk-python` or `make sdk-go`. See [sdk/README.md](sdk/README.md).
+The SDKs are generated from `openapi.json` with `make sdk-typescript`, `make sdk-python` or `make sdk-go`. All three compile and pass a short test against a running service, and none is published yet. See [sdk/README.md](sdk/README.md).
 
 ## Develop
 
@@ -254,7 +256,7 @@ make disk        # one conversion cannot fill the disk
 make replicas    # several containers on one store: a bucket, then a shared volume
 ```
 
-`make sign-check` needs openssl, python3, curl and poppler's `pdfsig`, but not Docker. It signs PDFs at every level with the CLI, using throwaway keys and a test CA with a local timestamp authority, OCSP responder and CRL, then has `pdfsig` validate them, and pyHanko too when it's installed. `test/sign/softhsm.sh` signs with keys on SoftHSM2 in a Debian container.
+`make sign-check` needs openssl, python3, curl and poppler's `pdfsig`, but not Docker. It signs PDFs at every level with the CLI, using throwaway keys and a test CA with a local timestamp authority, OCSP responder and CRL, then has `pdfsig` validate them, and pyHanko too when it's installed. It also renews the B-LTA file and checks both timestamps with `pdfsig` and OpenSSL. `test/sign/softhsm.sh` signs with keys on SoftHSM2 in a Debian container.
 
 ## Security
 
@@ -281,15 +283,14 @@ A compromised LibreOffice still runs as the service's user, in the service's con
 
 ## Known limits
 
-- Office has only been tested on a Mac. Templates typed in Word, Excel and PowerPoint 16.114 for Mac were filled, and the results open there without a repair prompt (`test/office`). Office for Windows isn't tested yet. Placeholder pictures and colour scopes were checked in LibreOffice, not in Office.
 - Word's default font, Aptos, isn't in the image, so a document set in it converts in a substitute font until you upload Aptos. Validation reports fonts like this in `missing_fonts`.
 - Noto Serif CJK is left out of the image to save 53 MB, so Chinese, Japanese and Korean text in a serif face converts in Noto Sans CJK until you upload Noto Serif CJK or mount it at `/fonts`.
-- Barcodes have been read by software decoders (rxing and ZBar), but not by a hardware or phone scanner.
-- Filled PDF forms show their values in Chrome and Preview, and haven't been opened in Acrobat. Text in other scripts was checked in Preview and with Poppler, not in Chrome. Marks drawn by `watermark` and `stamp` are still Latin only, in Helvetica.
-- Signed files validate in `pdfsig` and pyHanko at PAdES B-B to B-LTA, including with keys on a SoftHSM token, and haven't been opened in Adobe Acrobat. Archive timestamps aren't renewed, and keys in a cloud KMS aren't supported.
+- Marks drawn by `watermark` and `stamp` are Latin only, in Helvetica.
+- An archive timestamp is renewed only when you ask for it. Keys in a cloud KMS aren't supported.
 - PDFs from LibreOffice aren't byte-identical across architectures or runs, because its layout moves text by hundredths of a point between processors. `make golden` compares 14 outputs from the amd64 and arm64 images. Office and text outputs, and the PDF form the service fills itself, are byte-identical. LibreOffice's PDFs match as page images, or in layout within 0.25 pt.
 - `data` counts against the render memory limit once it's parsed. At the default limit, a list of 8 million small numbers rendered and a list of 16 million got `413`, so raise `RUSTICDOC_RENDER_MEMORY` for data that size.
-- No load test has been run.
+- The load figures come from one small document on one container (`make load`, and `test/load/README.md` has them).
+- No SDK is published.
 
 See the [known limits page](site/src/content/docs/docs/project/known-limits.md) for the full list.
 

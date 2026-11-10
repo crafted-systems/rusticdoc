@@ -9,6 +9,15 @@ sidebar:
 
 rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
+## Unreleased
+
+These are in the repository but not in an image yet.
+
+- `{% col for … %}` repeats cells across a row in XLSX, and formulas in the row follow the copies.
+- `excel_date` turns a date into the number a spreadsheet stores, so a cell can hold a real date.
+- `signature=renew` on `/v1/pdf/sign`, and `rusticdoc pdf sign --renew`, renew the timestamp of a file signed at B-LTA.
+- The generated TypeScript and Go SDKs compile. They didn't in 0.1.0.
+
 ## 0.1.0
 
 Released on 9 November 2026. This is the first release, and the image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, for amd64 and arm64.
@@ -77,4 +86,4 @@ Released on 9 November 2026. This is the first release, and the image is `ghcr.i
 
 ### Not in this release
 
-See [known limits](/docs/project/known-limits/) and the [roadmap](/docs/project/roadmap/). No SDK is published.
+See [known limits](/docs/project/known-limits/). No SDK is published.

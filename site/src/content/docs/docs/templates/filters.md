@@ -11,12 +11,12 @@ Filters format numbers, money and dates, translate labels, sum or sort lists, sh
 
 | Filter | Office templates | Text templates | PDF tags and `batchName` |
 |---|---|---|---|
-| `currency`, `number`, `date`, `t` | Yes | Yes | Yes |
+| `currency`, `number`, `date`, `excel_date`, `t` | Yes | Yes | Yes |
 | `image`, `barcode`, `link`, `color`, `html`, `chart`, `pagebreak` | Yes | No | No |
 | [Text](#text-helpers), [number](#number-helpers) and [date](#date-helpers) helpers: `truncate`, `unaccent`, `pad_left`, `pad_right`, `avg`, `ceil`, `floor`, `words`, `date_add`, `date_sub`, `start_of`, `end_of`, `date_diff`, `duration` | Yes | Yes | Yes |
 | [Built-in filters](#built-in-filters) | Yes | Yes | Yes |
 
-`currency`, `number`, `date` and `t` read the same settings everywhere: the request's `lang`, `timezone`, `currency` and `translations` fields, then the template's `{% settings %}` and document properties. See [Translations and settings](/docs/templates/translations/).
+`currency`, `number`, `date`, `excel_date` and `t` read the same settings everywhere: the request's `lang`, `timezone`, `currency` and `translations` fields, then the template's `{% settings %}` and document properties. See [Translations and settings](/docs/templates/translations/).
 
 The Office-only filters are the [rich content filters](/docs/templates/rich-content/), which have their own page. Use a filter where it doesn't exist and you get a `422`:
 
@@ -448,6 +448,24 @@ quatre-vingt-un
 EOF
 test "$(cat out.txt)" = "$(cat expected.txt)"
 ```
+
+## excel_date
+
+```text
+{{ issued | excel_date }}
+```
+
+A spreadsheet stores a date as a number: the days since 30 December 1899, with the time of day as a fraction. `excel_date` turns a date into that number. Put the tag in a cell by itself and give the cell a date format, and Excel and LibreOffice treat it as a real date that sorts, filters and works in formulas.
+
+| Value | Result |
+|---|---|
+| `2013-01-01` | `41275` |
+| `2026-11-06T12:00` | `46332.5` |
+| `2026-11-06T22:30:00Z`, with `timezone` set to `Africa/Nairobi` | `46333.0625` |
+
+It reads values the way [`date`](#what-it-accepts) does and uses the same time zone. It takes no arguments. Dates before 1 March 1900 are an error, because Excel counts a 29 February 1900 that never happened and the numbers before it differ between applications. The number is for the 1900 date system, which is the default in Excel and what LibreOffice uses for XLSX.
+
+`excel_date` was added after 0.1.0, so the 0.1.0 image doesn't have it.
 
 ## Date helpers
 

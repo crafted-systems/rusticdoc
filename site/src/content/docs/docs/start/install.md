@@ -131,8 +131,8 @@ It renders templates in its own process, with no separate worker and no memory l
 | Disk | About 300 MB to download and about 810 MB unpacked, measured on the arm64 build. Docker Desktop keeps both copies, so it shows about 1.1 GB |
 | Memory at rest | 150 to 270 MiB in `docker stats`, measured after a first conversion with two LibreOffice workers. It grows with the work you give it |
 | Memory under load | Compose limits the container to 6 GiB. That leaves room for four render workers at 1 GiB each, the service and two LibreOffice workers. [Sizing](/docs/operate/sizing/) has the arithmetic, and a failure seen with less |
-| CPU | The Kubernetes manifest requests one CPU per pod. No minimum has been measured |
+| CPU | The Kubernetes manifest requests one CPU per pod |
 | Operating system for the service | Linux, because the memory limit on render workers needs it. The image is Linux |
 | Rust, from source | 1.99.1, pinned in `rust-toolchain.toml` |
 
-There are no load test figures yet, so size for your own documents and measure.
+[Sizing](/docs/operate/sizing/#measured-under-load) has load test figures for one small document on one machine, so still measure with your own documents before you size.

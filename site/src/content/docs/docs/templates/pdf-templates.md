@@ -167,7 +167,6 @@ To do both in one request, render and convert the template on `/v1/render` with 
 - `/v1/render/batch` doesn't take a PDF template, and returns `501`.
 - Encrypted PDF forms fail with `501`.
 - Rich text, comb fields, date formats and JavaScript actions in a form aren't interpreted.
-- Filled forms, both editable and flattened, show their values in Chrome and in Preview. They aren't tested in Acrobat yet (see [known limits](/docs/project/known-limits/)).
 
 ## On the command line
 

@@ -49,7 +49,6 @@ This release is 0.1.0, so read the [known limits](/docs/project/known-limits/) b
 ## Project
 
 - [Known limits](/docs/project/known-limits/)
-- [Roadmap](/docs/project/roadmap/)
 - [Changelog](/docs/project/changelog/)
 - [SDKs](/docs/project/sdks/)
 - [Licence](/docs/project/license/)

@@ -7,10 +7,6 @@ sidebar:
 
 A template is an ordinary Word, LibreOffice, Excel or PowerPoint file with tags typed into its text. You don't need an add-in, a field or a special style. What matters is where you put them, so that a loop repeats the row, paragraph or slide you meant.
 
-:::note
-Filling has been tested with templates typed in Word, Excel and PowerPoint 16.114 for Mac, and the results open in those apps without a repair prompt. Office for Windows isn't tested yet. See [known limits](/docs/project/known-limits/).
-:::
-
 ## Typing tags in a word processor
 
 Word and other editors change text as you type, and the service undoes the changes that matter.
@@ -343,6 +339,42 @@ Each group gets its header, its items and its subtotal. A formula's reference in
 
 Start a range on the group's header row, as in `D3:D4`, rather than writing `D4:D4`, because LibreOffice may save a one-cell range like that as `D4`, which then names one row.
 
+### Repeating columns
+
+`{% col for d in days %}` repeats cells to the right, one copy for each item, and `{% endcol %}` ends the loop. Both tags go in cells of the same row. They can share a cell, which repeats that one cell, or sit in different cells, which repeats every cell from the first to the second. Cells to the right move along to make room.
+
+| Row | Cells |
+|---|---|
+| 1 | `Name`, `{% col for d in days %}{{ d }}{% endcol %}`, `Total` |
+| 2 | `{% for p in staff %}{{ p.name }}`, `{% col for h in p.hours %}{{ h }}{% endcol %}`, `=SUM(B2:B2)`, `{% endfor %}` |
+
+With three days, row 1 becomes `Name`, `Mon`, `Tue`, `Wed`, `Total`. Each person's row gets a cell per entry in `hours`, and the sum moves to column E as `=SUM(B2:D2)`. A cell that holds only `{{ h }}` and the loop's tags is still a number cell. A list with no items takes the loop's cells out, and the cells to the right move left.
+
+Formulas follow the copies:
+
+| Where the formula is | What its references do |
+|---|---|
+| Inside the loop | They point at their own copy, so `=B1*C1` reads `=E1*F1` in the second copy |
+| In the same row, outside the loop | A range grows over every copy, so `SUM(B2:B2)` becomes `SUM(B2:D2)`. A single cell points at the first copy |
+| Inside the loop, pointing at another row | The column moves with the copy, so `=B2*B$1` reads `=C2*C$1` in the second copy. A fixed column like `$H$1` stays |
+
+A formula cell can't hold a tag. To end the loop on a formula, put `{% endcol %}` in a cell of its own to the right of it. The loop then ends at the cell before the tag, and the tag's cell is left empty after the last copy:
+
+| Cells in row 1 | After two days |
+|---|---|
+| `{% col for d in days %}{{ d.hours }}`, `{{ d.rate }}`, `=B1*C1`, `{% endcol %}` | `2`, `10`, `=B1*C1`, `3`, `20`, `=E1*F1` |
+
+A row can hold several column loops side by side, and a column loop can sit in a row that a row loop repeats, as above. These are refused, and the error names the cell:
+
+- A column loop inside another one: `column loops cannot nest`.
+- Tags in different rows: `must sit in cells of the same row`.
+- `{% col %}` in any other format, ODS included: `repeats columns, so it works in XLSX only`.
+- More copies than a sheet has columns: `column loops fill more than 16,384 columns`.
+
+Only the row that holds the loop moves. The rows above and below keep their columns, so keep any cell that another row points at to the left of the loop. Merged cells, column widths, conditional formats, tables and print areas don't move or widen with a column loop.
+
+Column loops were added after 0.1.0, so the 0.1.0 image doesn't have them.
+
 ### Repeating a sheet
 
 Put `{% sheet for s in sites %}` in any cell of a sheet, and give the sheet a name with an expression, like `{{ s.name }}`. The sheet is copied once per item with `s` set, and each copy takes its name from the data. There's no closing tag, because the loop ends with the sheet.
@@ -401,6 +433,8 @@ Copies count against the size limits of a render, so a loop over a very long lis
 ### Not supported
 
 Sheet hyperlinks, data validations, conditional formatting and charts that point at looped rows don't move with them, and a formula on one sheet that points at looped rows on another isn't re-based. Page breaks aren't supported either, because a sheet has none.
+
+A [column loop](#repeating-columns) moves only its own row, and it isn't available in ODS. A date string fills a cell as text, so for a real date use [`excel_date`](/docs/templates/filters/#excel_date) and format the cell as a date.
 
 ## ODS
 
