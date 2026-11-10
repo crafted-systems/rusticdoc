@@ -465,7 +465,7 @@ A spreadsheet stores a date as a number: the days since 30 December 1899, with t
 
 It reads values the way [`date`](#what-it-accepts) does and uses the same time zone. It takes no arguments. Dates before 1 March 1900 are an error, because Excel counts a 29 February 1900 that never happened and the numbers before it differ between applications. The number is for the 1900 date system, which is the default in Excel and what LibreOffice uses for XLSX.
 
-`excel_date` was added after 0.1.0, so the 0.1.0 image doesn't have it.
+`excel_date` was added in 0.1.1.
 
 ## Date helpers
 

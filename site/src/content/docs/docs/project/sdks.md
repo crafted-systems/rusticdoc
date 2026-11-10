@@ -21,7 +21,7 @@ The test is five calls against a local service with a [store](/docs/guides/store
 
 The generated `render` sends a JSON body, so it renders a stored template by its `templateId`. To send the template file in the same request, use plain HTTP as shown below.
 
-The 0.1.0 description gave TypeScript and Go clients that didn't compile. The fixes came after 0.1.0, so generate from the current repository.
+The 0.1.0 description gave TypeScript and Go clients that didn't compile, so generate from 0.1.1 or later.
 
 `make sdk` generates all three, and `make openapi` refreshes `openapi.json` first. Generation runs `openapi-generator` from its Docker image, so you don't need to install anything. The generated folders aren't committed.
 

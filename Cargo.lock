@@ -3814,7 +3814,7 @@ dependencies = [
 
 [[package]]
 name = "rusticdoc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3832,7 +3832,7 @@ dependencies = [
 
 [[package]]
 name = "rusticdoc-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -3875,7 +3875,7 @@ dependencies = [
 
 [[package]]
 name = "rusticdoc-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3919,7 +3919,7 @@ dependencies = [
 
 [[package]]
 name = "rusticdoc-template"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",

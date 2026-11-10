@@ -7,20 +7,22 @@ sidebar:
 
 ## Version numbers
 
-rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
+rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults and may add features, without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
-## Unreleased
+## 0.1.1
 
-These are in the repository but not in an image yet.
+Released on 10 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.1.1`, for amd64 and arm64.
 
+- The repository is now [crafted-systems/rusticdoc](https://github.com/crafted-systems/rusticdoc) and it's public. The image is published as `ghcr.io/crafted-systems/rusticdoc`.
 - `{% col for … %}` repeats cells across a row in XLSX, and formulas in the row follow the copies.
 - `excel_date` turns a date into the number a spreadsheet stores, so a cell can hold a real date.
 - `signature=renew` on `/v1/pdf/sign`, and `rusticdoc pdf sign --renew`, renew the timestamp of a file signed at B-LTA.
 - The generated TypeScript and Go SDKs compile. They didn't in 0.1.0.
+- A row with many column loops fills in time that follows the cells it makes. Before, a template built for the purpose could make it take far longer.
 
 ## 0.1.0
 
-Released on 9 November 2026. This is the first release, and the image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, for amd64 and arm64.
+Released on 9 November 2026. This is the first release. Its image was never public, so start from 0.1.1.
 
 ### Templates
 

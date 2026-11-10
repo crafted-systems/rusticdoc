@@ -33,7 +33,7 @@ spec:
       terminationGracePeriodSeconds: 90
       containers:
         - name: rusticdoc
-          image: ghcr.io/vmosoti/rusticdoc:latest
+          image: ghcr.io/crafted-systems/rusticdoc:latest
           ports:
             - { name: http, containerPort: 9027 }
           env:

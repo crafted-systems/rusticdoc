@@ -5,11 +5,11 @@ The site builds and is ready to host, but the things below can't be done from th
 ## Must happen first, or the site's instructions fail
 
 - [x] **Register `rusticdoc.com`.**
-- [ ] **Make `github.com/vmosoti/rusticdoc` public.** The repository is private, so every GitHub link on the site returns 404 to visitors, and the image cannot be pulled without signing in.
-- [x] **Publish the image as `ghcr.io/vmosoti/rusticdoc:0.1.0`.** `.github/workflows/release.yml` builds amd64 and arm64 on a `v0.*` tag and pushes both under the version. The package stays private while the repository is.
+- [x] **Make the repository public.** It is `github.com/crafted-systems/rusticdoc`.
+- [ ] **Publish the image as `ghcr.io/crafted-systems/rusticdoc:0.1.1` and make the package public.** `.github/workflows/release.yml` builds amd64 and arm64 on a `v0.*` tag and pushes both under the version. A new package starts private, so set it to public once in the organisation's package settings.
 - [x] **Commit the storage and API work.**
 - [x] **Tag `v0.1.0` and date the changelog** in `src/content/docs/docs/project/changelog.md`. Versions follow ZeroVer.
-- [x] **Remove the "not published yet" notes.** The docs now say the image is private while the repository is; change that when it is made public.
+- [x] **Remove the "not published yet" notes.** The docs name the public image.
 
 ## Fix or accept these product bugs
 

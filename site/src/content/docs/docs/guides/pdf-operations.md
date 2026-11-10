@@ -221,7 +221,7 @@ It uses no signing key, only `RUSTICDOC_SIGNING_TSA_URL` and `RUSTICDOC_SIGNING_
 
 From the command line, `rusticdoc pdf sign signed.pdf --renew -o renewed.pdf` does the same, and takes `--tsa-url` and `--tsa-cert`.
 
-Renewal isn't a pipeline step, and nothing runs it for you, so schedule it yourself. It was added after 0.1.0, so the 0.1.0 image doesn't have it.
+Renewal isn't a pipeline step, and nothing runs it for you, so schedule it yourself. It was added in 0.1.1.
 
 ## Finish and secure
 

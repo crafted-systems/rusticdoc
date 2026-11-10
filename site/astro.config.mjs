@@ -28,8 +28,8 @@ export default defineConfig({
       logo: { light: './src/assets/logo-light.svg', dark: './src/assets/logo-dark.svg', alt: '' },
       favicon: '/favicon.svg',
       disable404Route: true,
-      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/vmosoti/rusticdoc' }],
-      editLink: { baseUrl: 'https://github.com/vmosoti/rusticdoc/edit/main/site/' },
+      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/crafted-systems/rusticdoc' }],
+      editLink: { baseUrl: 'https://github.com/crafted-systems/rusticdoc/edit/main/site/' },
       lastUpdated: false,
       components: {
         Header: './src/components/Header.astro',

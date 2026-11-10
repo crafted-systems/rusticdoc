@@ -13,12 +13,8 @@ You'll start the service, send it a Word template with some JSON, and get a fill
 docker run -d --name rusticdoc \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 \
-  -p 127.0.0.1:9027:9027 ghcr.io/vmosoti/rusticdoc:0.1.0
+  -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.1.1
 ```
-
-:::note[Pulling the image needs access for now]
-`ghcr.io/vmosoti/rusticdoc:0.1.0` is private for as long as the repository is. Either sign in with `docker login ghcr.io` and a GitHub token that can read packages, or build the image yourself from a checkout with `docker build -t rusticdoc .` and use `rusticdoc` as the image name above.
-:::
 
 There's no authentication set up yet, so anyone who can reach the port can use the service. That's why the command publishes it with `-p 127.0.0.1:`, which keeps it on your machine. [Install](/docs/start/install/) explains the other flags.
 

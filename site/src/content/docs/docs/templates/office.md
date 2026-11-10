@@ -373,7 +373,7 @@ A row can hold several column loops side by side, and a column loop can sit in a
 
 Only the row that holds the loop moves. The rows above and below keep their columns, so keep any cell that another row points at to the left of the loop. Merged cells, column widths, conditional formats, tables and print areas don't move or widen with a column loop.
 
-Column loops were added after 0.1.0, so the 0.1.0 image doesn't have them.
+Column loops were added in 0.1.1.
 
 ### Repeating a sheet
 

@@ -92,7 +92,6 @@ None of these could be done from the machine the rest was checked on. Each needs
 4. Make the image public and publish the SDK packages.
 5. Support keys in a cloud KMS and encrypted key files.
 6. Run the store against AWS itself and the manifest on a production cluster, and load test with larger documents on more than one machine.
-7. Release the work done since 0.1.0: column loops, `excel_date`, timestamp renewal and the SDK fixes are in the repository, not in an image.
 
 ## API gaps, closed
 

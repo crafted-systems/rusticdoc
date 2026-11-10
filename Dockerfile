@@ -56,7 +56,7 @@ ENV TZ=UTC LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 LABEL org.opencontainers.image.title="rusticdoc" \
       org.opencontainers.image.description="Document engine: Office and PDF templates with {{ }} tags, LibreOffice conversion, PDF operations." \
-      org.opencontainers.image.source="https://github.com/vmosoti/rusticdoc" \
+      org.opencontainers.image.source="https://github.com/crafted-systems/rusticdoc" \
       org.opencontainers.image.base.name="debian:13-slim"
 
 COPY deploy/dpkg-excludes /etc/dpkg/dpkg.cfg.d/rusticdoc

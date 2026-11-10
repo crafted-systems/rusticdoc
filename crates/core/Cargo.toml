@@ -1,6 +1,6 @@
 [package]
 name = "rusticdoc-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license.workspace = true
 
@@ -30,7 +30,7 @@ parley = "0.6.0"
 krilla = "0.7.0"
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
 quick-xml = "0.41.0"
-rusticdoc-template = { version = "0.1.0", path = "../template" }
+rusticdoc-template = { version = "0.1.1", path = "../template" }
 url = "2"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }

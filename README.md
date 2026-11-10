@@ -6,7 +6,7 @@ It handles documents and doesn't render live web pages. HTML written for print i
 
 The full documentation is at [rusticdoc.com/docs](https://rusticdoc.com/docs/), and its source is in [site/](site/).
 
-The current version is 0.1.0, the first release. The image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, built for amd64 and arm64. While this repository is private, you need to `docker login ghcr.io` before you can pull it. Versions follow [ZeroVer](https://0ver.org/), so they stay below 1.0 and a new minor number may change behaviour, as the [changelog](site/src/content/docs/docs/project/changelog.md) explains. [Known limits](#known-limits) lists what hasn't been checked yet.
+The current version is 0.1.1. The image is `ghcr.io/crafted-systems/rusticdoc:0.1.1`, built for amd64 and arm64. Versions follow [ZeroVer](https://0ver.org/), so they stay below 1.0 and a new minor number may change behaviour, as the [changelog](site/src/content/docs/docs/project/changelog.md) explains. [Known limits](#known-limits) lists what hasn't been checked yet.
 
 ## Run it
 

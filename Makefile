@@ -102,7 +102,7 @@ sdk-python: openapi
 sdk-go: openapi
 	docker run --rm -v "$(PWD):/local" $(GENERATOR) generate -i /local/openapi.json -g go \
 		-o /local/sdk/go --additional-properties=packageName=rusticdoc \
-		--git-user-id vmosoti --git-repo-id rusticdoc/sdk/go \
+		--git-user-id crafted-systems --git-repo-id rusticdoc/sdk/go \
 		--parameter-name-mappings ctx=templateCtx
 
 clean:

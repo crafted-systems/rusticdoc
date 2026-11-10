@@ -6,7 +6,7 @@ template: doc
 
 rusticdoc fills Office and PDF templates from JSON, converts them with LibreOffice and runs PDF operations on the result. It's written in Rust and ships as one hardened container image. You can call it over HTTP or run it as a command-line tool.
 
-This release is 0.1.0, so read the [known limits](/docs/project/known-limits/) before you depend on it.
+The current release is 0.1.1 and the project is young, so read the [known limits](/docs/project/known-limits/) before you depend on it.
 
 ## Start here
 

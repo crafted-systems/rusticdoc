@@ -7,7 +7,7 @@ sidebar:
 
 ## rusticdoc
 
-rusticdoc is licensed under the [Apache License 2.0](https://github.com/vmosoti/rusticdoc/blob/main/LICENSE), and the image carries a copy at `/usr/share/doc/rusticdoc/LICENSE`.
+rusticdoc is licensed under the [Apache License 2.0](https://github.com/crafted-systems/rusticdoc/blob/main/LICENSE), and the image carries a copy at `/usr/share/doc/rusticdoc/LICENSE`.
 
 ## Third-party software
 

@@ -16,10 +16,8 @@ docker run -d --name rusticdoc --restart unless-stopped \
   --tmpfs /tmp:size=2g --tmpfs /home/rusticdoc:uid=1001,gid=1001,size=512m \
   --env-file rusticdoc.env \
   -v "$PWD/fonts:/fonts:ro" \
-  -p 127.0.0.1:9027:9027 ghcr.io/vmosoti/rusticdoc:0.1.0
+  -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.1.1
 ```
-
-While the repository is private, run `docker login ghcr.io` before you pull the image, or build it with `docker build -t rusticdoc .` and use `rusticdoc` as the image name.
 
 [Install](/docs/start/install/) explains the hardening flags. The others are for:
 

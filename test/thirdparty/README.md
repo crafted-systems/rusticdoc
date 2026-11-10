@@ -53,6 +53,6 @@ The data for `paragraph-loop.pptx` is not in docxtemplater's tests, so `data/ppt
 
 The seven filled files were also converted to PDF by LibreOffice in the image, and the text came through. They open in Excel and PowerPoint 16.114.4 for Mac with no repair prompt. The plan table was converted and opened again after its port moved to the column loop.
 
-The plan table needs the column loop and `excel_date`, which came after 0.1.0, so the 0.1.0 CLI can't fill it.
+The plan table needs the column loop and `excel_date`, which came in 0.1.1, so the 0.1.0 CLI can't fill it.
 
 This is seven small templates from two projects. It shows the common cases carry over, not that every template written for those tools will.

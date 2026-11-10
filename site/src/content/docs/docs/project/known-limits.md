@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-Read this list before you depend on rusticdoc. 0.1.0 is its first release, and these are the things that don't work or could surprise you.
+Read this list before you depend on rusticdoc. It's a young project, and these are the things that don't work or could surprise you.
 
 ## Requests
 
@@ -34,7 +34,7 @@ Read this list before you depend on rusticdoc. 0.1.0 is its first release, and t
 
 ## PDF signatures
 
-- The service only renews an archive timestamp when you ask it to. A B-LTA signature stays verifiable for as long as its document timestamp's certificate is valid, so [renew the file](/docs/guides/pdf-operations/#renewing-a-b-lta-file) before then. Nothing renews it on a schedule, renewal isn't a step on `/v1/render`, and the 0.1.0 image doesn't have it.
+- The service only renews an archive timestamp when you ask it to. A B-LTA signature stays verifiable for as long as its document timestamp's certificate is valid, so [renew the file](/docs/guides/pdf-operations/#renewing-a-b-lta-file) before then. Nothing renews it on a schedule, and renewal isn't a step on `/v1/render`.
 - B-LT and B-LTA need certificates that name an OCSP responder or a CRL. Without one, the request fails with `502`. A timestamp authority needs a trust anchor in `RUSTICDOC_SIGNING_TSA_CERT` and an `https` URL.
 - Only RSA and ECDSA P-256 keys are supported, always with SHA-256.
 - You get one signature per request.
@@ -72,7 +72,6 @@ Read this list before you depend on rusticdoc. 0.1.0 is its first release, and t
 
 ## Deployment
 
-- The image is private for as long as the repository is. To pull `ghcr.io/vmosoti/rusticdoc:0.1.0` you need `docker login ghcr.io` with a token that can read packages, or you can build it with `docker build -t rusticdoc .`.
 - The figures in [sizing](/docs/operate/sizing/#measured-under-load) come from one small document on one container. Large documents and several replicas will differ.
 - Replicas need memory of their own. Three pods sharing about 6 GB were killed for memory, and their conversions timed out.
 

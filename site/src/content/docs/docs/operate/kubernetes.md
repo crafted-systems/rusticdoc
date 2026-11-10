@@ -24,7 +24,7 @@ Then change these in the file:
 
 | Field | Change it to |
 |---|---|
-| `image` | A version, `ghcr.io/vmosoti/rusticdoc:0.1.0`, once it's published. The manifest says `ghcr.io/vmosoti/rusticdoc:latest`. Until then, load an image you built into your cluster |
+| `image` | A version, `ghcr.io/crafted-systems/rusticdoc:0.1.1`. The manifest says `ghcr.io/crafted-systems/rusticdoc:latest`, and no `latest` tag is published |
 | `RUSTICDOC_STORE` | Your bucket and prefix, in place of `s3://my-bucket/rusticdoc` |
 | `AWS_REGION` | Your bucket's region |
 | `AWS_ENDPOINT` | Add it for any store other than AWS, along with `AWS_ALLOW_HTTP` if the endpoint is plain HTTP |

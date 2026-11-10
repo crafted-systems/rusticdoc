@@ -9,7 +9,7 @@ You can run rusticdoc from the published image, with Compose, or from a source b
 
 ## The image
 
-The image is `ghcr.io/vmosoti/rusticdoc:0.1.0`, built for amd64 and arm64. The image stays private for as long as the repository does, so sign in with `docker login ghcr.io` and a GitHub token that can read packages before you pull it. You can also build it from a checkout of the repository:
+The image is `ghcr.io/crafted-systems/rusticdoc:0.1.1`, built for amd64 and arm64. You can also build it from a checkout of the repository:
 
 ```bash
 docker build -t rusticdoc .
@@ -23,7 +23,7 @@ The build pins its base images by digest. What you get is one Rust binary on Deb
 docker run -d --name rusticdoc \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 \
-  -p 127.0.0.1:9027:9027 ghcr.io/vmosoti/rusticdoc:0.1.0
+  -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.1.1
 ```
 
 | Flag | Why |
@@ -50,7 +50,7 @@ docker compose -f deploy/compose.yaml up -d --build
 To use the published image instead of building one:
 
 ```bash
-RUSTICDOC_IMAGE=ghcr.io/vmosoti/rusticdoc:0.1.0 \
+RUSTICDOC_IMAGE=ghcr.io/crafted-systems/rusticdoc:0.1.1 \
   docker compose -f deploy/compose.yaml up -d --no-build
 ```
 
@@ -73,23 +73,23 @@ The binary looks for its engines at fixed paths, not on your `PATH`. If yours ar
 
 ### Download it
 
-Every [GitHub release](https://github.com/vmosoti/rusticdoc/releases) has the CLI for Linux and macOS attached, along with a `SHA256SUMS` file:
+Every [GitHub release](https://github.com/crafted-systems/rusticdoc/releases) has the CLI for Linux and macOS attached, along with a `SHA256SUMS` file:
 
 | System | Archive |
 |---|---|
-| Linux, x86-64 | `rusticdoc-0.1.0-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux, ARM64 | `rusticdoc-0.1.0-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS, Apple silicon | `rusticdoc-0.1.0-aarch64-apple-darwin.tar.gz` |
-| macOS, Intel | `rusticdoc-0.1.0-x86_64-apple-darwin.tar.gz` |
+| Linux, x86-64 | `rusticdoc-0.1.1-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, ARM64 | `rusticdoc-0.1.1-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS, Apple silicon | `rusticdoc-0.1.1-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `rusticdoc-0.1.1-x86_64-apple-darwin.tar.gz` |
 
-While the repository is private, download with the GitHub CLI, which uses your sign-in. These commands fetch the Apple silicon build, check it and put it on your `PATH`:
+These commands fetch the Apple silicon build, check it and put it on your `PATH`:
 
 ```bash
-gh release download v0.1.0 --repo vmosoti/rusticdoc \
-  --pattern 'rusticdoc-0.1.0-aarch64-apple-darwin.tar.gz' --pattern SHA256SUMS
+curl -fsSLO https://github.com/crafted-systems/rusticdoc/releases/download/v0.1.1/rusticdoc-0.1.1-aarch64-apple-darwin.tar.gz
+curl -fsSLO https://github.com/crafted-systems/rusticdoc/releases/download/v0.1.1/SHA256SUMS
 shasum -a 256 --check --ignore-missing SHA256SUMS
-tar -xzf rusticdoc-0.1.0-aarch64-apple-darwin.tar.gz
-sudo mv rusticdoc-0.1.0-aarch64-apple-darwin/rusticdoc /usr/local/bin/
+tar -xzf rusticdoc-0.1.1-aarch64-apple-darwin.tar.gz
+sudo mv rusticdoc-0.1.1-aarch64-apple-darwin/rusticdoc /usr/local/bin/
 rusticdoc --version
 ```
 
@@ -106,14 +106,14 @@ By itself, the downloaded CLI can render, validate and run the PDF operations th
 The service and the CLI are the same binary, so the image already has the CLI in it:
 
 ```bash
-docker run --rm --entrypoint rusticdoc ghcr.io/vmosoti/rusticdoc:0.1.0 engines
+docker run --rm --entrypoint rusticdoc ghcr.io/crafted-systems/rusticdoc:0.1.1 engines
 ```
 
 To work on files in your current directory, mount it. The container's user has to be able to write there, so on Linux pass your own user ID. Keep group 0, because that group owns the home directory:
 
 ```bash
 docker run --rm -v "$PWD:/work" -w /work --user "$(id -u):0" \
-  --entrypoint rusticdoc ghcr.io/vmosoti/rusticdoc:0.1.0 \
+  --entrypoint rusticdoc ghcr.io/crafted-systems/rusticdoc:0.1.1 \
   render invoice.docx --data invoice.json --steps convert -o invoice.pdf
 ```
 

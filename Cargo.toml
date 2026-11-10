@@ -3,10 +3,10 @@ members = ["crates/core", "crates/server", "crates/cli", "crates/template"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/vmosoti/rusticdoc"
+repository = "https://github.com/crafted-systems/rusticdoc"
 rust-version = "1.88"
 
 [profile.release]

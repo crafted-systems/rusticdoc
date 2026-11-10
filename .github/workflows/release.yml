@@ -1,6 +1,6 @@
 name: release
 
-# A tag such as v0.1.0 publishes ghcr.io/vmosoti/rusticdoc:0.1.0 for amd64 and
+# A tag such as v0.1.1 publishes ghcr.io/crafted-systems/rusticdoc:0.1.1 for amd64 and
 # arm64. Each architecture builds on a runner of its own, because building the
 # Servo style engine under emulation takes hours; the two images are then
 # joined under one tag. Versions follow ZeroVer (https://0ver.org): they stay
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE: ghcr.io/vmosoti/rusticdoc
+  IMAGE: ghcr.io/crafted-systems/rusticdoc
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
