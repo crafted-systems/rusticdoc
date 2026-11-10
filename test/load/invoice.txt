@@ -1,0 +1,15 @@
+{{ seller.name }}
+{{ seller.address }}
+
+Invoice {{ number }}
+Issued {{ issued }}
+
+Billed to
+{{ customer.name }}
+{{ customer.address }}
+
+{% for item in items -%}
+{{ item.name }}: {{ item.qty }} x {{ item.price | currency(currency) }} = {{ (item.qty * item.price) | currency(currency) }}
+{% endfor %}
+Total due {{ total | currency(currency) }}
+Pay by {{ due }} with reference {{ number }}.

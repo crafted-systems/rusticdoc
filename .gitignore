@@ -10,3 +10,6 @@ Cargo.lock.orig
 /test/office/out/
 /test/golden/out/
 /test/barcodes/out/
+/test/thirdparty/upstream/
+/test/thirdparty/out/
+/test/load/out/

@@ -1,0 +1,10 @@
+{
+  "extractDate": "2013-01-02",
+  "revision": 10,
+  "dates": ["2013-01-01", "2013-01-02", "2013-01-03"],
+  "planData": [
+    {"name": "John Smith", "role": "Developer", "days": [8, 8, 4]},
+    {"name": "James Smith", "role": "Analyst", "days": [4, 4, 4]},
+    {"name": "Jim Smith", "role": "Manager", "days": [4, 4, 4]}
+  ]
+}
