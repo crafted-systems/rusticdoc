@@ -127,24 +127,24 @@ main { padding: 0; }
 .run-steps { list-style: none; margin: 0; padding: 0.5rem; display: grid; gap: 0.35rem; counter-reset: run; }
 .run-steps li {
   counter-increment: run; position: relative; display: grid; padding: 0.55rem 0.7rem 0.55rem 2.6rem;
-  border: 1px solid var(--line); border-radius: var(--r-small); background: var(--card);
-  animation: run-step 500ms ease forwards;
+  border: 1px solid var(--blue-edge); border-radius: var(--r-small); background: var(--blue-wash);
+  animation: run-step 500ms ease backwards;
 }
 .run-steps li::before {
   content: counter(run); position: absolute; left: 0.6rem; top: 0.65rem; width: 1.4rem; height: 1.4rem;
   display: grid; place-items: center; font: 600 0.78rem var(--font-mono);
-  border-radius: var(--r-small); background: var(--tint); color: var(--ink-soft);
-  animation: run-mark 500ms ease forwards;
+  border-radius: var(--r-small); background: var(--blue); color: #fff;
 }
-.run-steps li:nth-child(1), .run-steps li:nth-child(1)::before { animation-delay: 250ms; }
-.run-steps li:nth-child(2), .run-steps li:nth-child(2)::before { animation-delay: 650ms; }
-.run-steps li:nth-child(3), .run-steps li:nth-child(3)::before { animation-delay: 1050ms; }
+.run-steps li:nth-child(1) { animation-delay: 250ms; }
+.run-steps li:nth-child(2) { animation-delay: 650ms; }
+.run-steps li:nth-child(3) { animation-delay: 1050ms; }
 .run-steps strong { font-size: 0.98rem; line-height: 1.3; }
 .run-steps span { font-size: 0.84rem; color: var(--ink-soft); line-height: 1.35; }
-@keyframes run-step { to { border-color: var(--blue-edge); background: var(--blue-wash); } }
-@keyframes run-mark { to { background: var(--blue); color: #fff; } }
+/* Each step starts dimmed and lights up in turn. The keyframes hold no colours:
+   a light-dark() colour inside a keyframe keeps the light value in dark mode. */
+@keyframes run-step { from { opacity: 0.5; filter: saturate(0); } }
 @media (prefers-reduced-motion: reduce) {
-  .run-steps li, .run-steps li::before { animation-duration: 1ms; animation-delay: 0ms !important; }
+  .run-steps li { animation-duration: 1ms; animation-delay: 0ms !important; }
 }
 .stage-out { min-width: 0; }
 .stage-out > .file-name { background: transparent; border: 0; padding: 0 0 0.5rem; }

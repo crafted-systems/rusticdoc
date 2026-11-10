@@ -89,7 +89,7 @@ None of these could be done from the machine the rest was checked on. Each needs
 1. Open the output in Office for Windows.
 2. Open filled forms, signed files and a renewed file in Adobe Acrobat, and validate a renewed file with pyHanko.
 3. Scan the barcodes with a hardware or phone reader.
-4. Make the image public and publish the SDK packages.
+4. Publish the SDK packages.
 5. Support keys in a cloud KMS and encrypted key files.
 6. Run the store against AWS itself and the manifest on a production cluster, and load test with larger documents on more than one machine.
 
