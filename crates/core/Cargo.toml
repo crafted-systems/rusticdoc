@@ -13,8 +13,8 @@ bytes = "1.12.1"
 # CMS and X.509 structures for PDF signatures: encoding and parsing only, no
 # secret-dependent arithmetic.
 cms = { version = "0.2.3", default-features = false, features = ["std"] }
-der = { version = "0.7.10", features = ["alloc", "derive", "oid", "pem", "std"] }
-x509-cert = { version = "0.2.5", default-features = false, features = ["pem", "std"] }
+der = { version = "0.8.3", features = ["alloc", "derive", "oid", "pem", "std"] }
+x509-cert = { version = "0.3.0", default-features = false, features = ["pem", "std"] }
 flate2 = "1.1.10"
 # HTML to PDF without a browser: Servo's style engine, Taffy layout, Krilla PDF.
 fulgur = "0.41.0"
@@ -26,10 +26,10 @@ libc = "0.2"
 lopdf = { version = "0.47.0", features = ["embed_image"] }
 # Form text outside Latin: Fulgur's own text engine and PDF writer, used
 # directly to shape it and embed subset fonts.
-parley = "0.6.0"
-krilla = "0.7.0"
+parley = "0.12.0"
+krilla = "0.8.2"
 minijinja = { version = "3.0.5", features = ["serde", "json", "fuel"] }
-quick-xml = "0.41.0"
+quick-xml = "0.42.0"
 rusticdoc-template = { version = "0.1.1", path = "../template" }
 url = "2"
 regex = "1.13.1"
