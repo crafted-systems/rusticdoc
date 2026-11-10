@@ -483,13 +483,18 @@ impl Spread {
     fn new(row: u32, cols: &[ColBlock], cells: &[u32]) -> Option<Spread> {
         let mut mine: Vec<&ColBlock> = cols.iter().filter(|b| b.row == row).collect();
         mine.sort_by_key(|b| b.start);
+        // How often each template column appears in the rendered row.
+        let mut count: HashMap<u32, i64> = HashMap::new();
+        for &c in cells {
+            *count.entry(c).or_default() += 1;
+        }
         let mut blocks = Vec::new();
         let mut before = 0;
         for b in mine {
             let spun = Spun {
                 start: b.start,
                 end: b.end,
-                copies: cells.iter().filter(|&&c| c == b.start).count() as i64,
+                copies: count.get(&b.start).copied().unwrap_or(0),
                 before,
             };
             // No copies at all pulls the cells to the right back in.
@@ -499,17 +504,23 @@ impl Spread {
         (!blocks.is_empty()).then_some(Spread { blocks })
     }
 
+    /// The loops of a row are in column order and share no cells, so a
+    /// search finds the one that holds a column.
     fn block_of(&self, col: u32) -> Option<usize> {
-        self.blocks.iter().position(|b| b.holds(col))
+        let i = self.blocks.partition_point(|b| b.end < col);
+        self.blocks
+            .get(i)
+            .is_some_and(|b| b.holds(col))
+            .then_some(i)
     }
 
     /// How far the loops that end left of `col` push it.
     fn outside(&self, col: u32) -> i64 {
-        self.blocks
-            .iter()
-            .filter(|b| b.end < col)
-            .map(|b| (b.copies - 1) * b.len())
-            .sum()
+        let n = self.blocks.partition_point(|b| b.end < col);
+        n.checked_sub(1).map_or(0, |i| {
+            let b = &self.blocks[i];
+            b.before + (b.copies - 1) * b.len()
+        })
     }
 
     /// The column of a cell, given the loop and copy it sits in.
@@ -581,6 +592,14 @@ pub fn rebase(
     }
     let layout = Layout::new(blocks, &template_rows);
 
+    // The column loops of each template row, found once rather than for
+    // every rendered row.
+    let mut loops: HashMap<u32, Vec<ColBlock>> = HashMap::new();
+    for b in cols {
+        loops.entry(b.row).or_default().push(*b);
+    }
+    let too_wide = |row: u32| format!("row {row}: column loops fill more than 16,384 columns");
+
     // Pass 2: rewrite rows, cells and formulas.
     let mut max_row = 0u32;
     let mut widest = 0i64;
@@ -593,15 +612,21 @@ pub fn rebase(
         let new_r = layout.row(here);
         max_row = max_row.max(new_r);
         row.set_attr("r", &new_r.to_string());
-        let spread = if cols.iter().any(|b| b.row == r) {
-            let cells: Vec<u32> = row
-                .children_named("c")
-                .filter_map(|c| c.attr("r").and_then(|r| split_ref(&r)))
-                .map(|(col, _)| col_to_num(&col))
-                .collect();
-            Spread::new(r, cols, &cells)
-        } else {
-            None
+        let spread = match loops.get(&r) {
+            Some(mine) => {
+                let cells: Vec<u32> = row
+                    .children_named("c")
+                    .filter_map(|c| c.attr("r").and_then(|r| split_ref(&r)))
+                    .map(|(col, _)| col_to_num(&col))
+                    .collect();
+                // Every cell lands in a column of its own, so a row with
+                // more cells than a sheet has columns cannot fit.
+                if cells.len() as i64 > MAX_COL {
+                    return Err(too_wide(new_r));
+                }
+                Spread::new(r, mine, &cells)
+            }
+            None => None,
         };
         if spread.is_some() {
             // The row's cells no longer span the columns it claimed.
@@ -629,9 +654,7 @@ pub fn rebase(
                     }
                     let at = s.cell(colnum, copy);
                     if at > MAX_COL {
-                        return Err(format!(
-                            "row {new_r}: column loops fill more than 16,384 columns"
-                        ));
+                        return Err(too_wide(new_r));
                     }
                     widest = widest.max(at);
                     c.set_attr("r", &format!("{}{new_r}", num_to_col(at as u32)));
@@ -1425,6 +1448,27 @@ mod tests {
             let expected = expected.replace("             ", "");
             assert!(out.contains(&expected), "missing {expected}\n{out}");
         }
+    }
+
+    #[test]
+    fn many_column_loops_in_a_row_each_find_their_place() {
+        // 200 loops of one cell, two copies of each, then a sum over the
+        // last one.
+        let mut cells = String::new();
+        for c in 1..=200u32 {
+            let at = num_to_col(c);
+            cells.push_str(&format!("<c r=\"{at}1\"/><c r=\"{at}1\"/>"));
+        }
+        let (last, total) = (num_to_col(200), num_to_col(201));
+        let row =
+            format!("<row r=\"1\">{cells}<c r=\"{total}1\"><f>SUM({last}1:{last}1)</f></c></row>");
+        let blocks: Vec<ColBlock> = (1..=200).map(|c| cols(1, c, c)).collect();
+        let (out, _) = rebase(&sheet(&row), &[], &blocks).unwrap();
+        let (a, b, sum) = (num_to_col(399), num_to_col(400), num_to_col(401));
+        let expected = format!(
+            "<c r=\"{a}1\"/><c r=\"{b}1\"/><c r=\"{sum}1\"><f>SUM({a}1:{b}1)</f></c></row>"
+        );
+        assert!(out.contains(&expected), "missing {expected}\n{out}");
     }
 
     #[test]
