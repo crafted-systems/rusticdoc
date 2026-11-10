@@ -23,6 +23,6 @@
     "starlight-openapi": "^0.27.0"
   },
   "devDependencies": {
-    "wrangler": "4.152.0"
+    "wrangler": "4.158.0"
   }
 }
