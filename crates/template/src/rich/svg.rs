@@ -288,6 +288,8 @@ pub fn sanitize(text: &str) -> Result<String, String> {
     let opts = roxmltree::ParsingOptions {
         allow_dtd: false,
         nodes_limit: MAX_NODES,
+        // No external entities: a DTD is refused anyway, and nothing is fetched.
+        entity_resolver: None,
     };
     let doc = roxmltree::Document::parse_with_options(text, opts)
         .map_err(|e| format!("the SVG image cannot be read: {e}"))?;

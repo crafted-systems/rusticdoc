@@ -342,8 +342,8 @@ fn open(start: &BytesStart, scopes: &mut Scopes) -> Result<Node> {
     let mut plain = Vec::new();
     for attr in start.attributes() {
         let attr = attr.map_err(|e| bad(&e))?;
-        let name = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-        let value = xmp::unescape(&String::from_utf8_lossy(&attr.value));
+        let name = attr.key.as_ref().to_string();
+        let value = xmp::unescape(&attr.value);
         if name == "xmlns" {
             scope.push((String::new(), value));
         } else if let Some(prefix) = name.strip_prefix("xmlns:") {
@@ -353,7 +353,7 @@ fn open(start: &BytesStart, scopes: &mut Scopes) -> Result<Node> {
         }
     }
     scopes.push(scope);
-    let tag = String::from_utf8_lossy(start.name().as_ref()).to_string();
+    let tag = start.name().as_ref().to_string();
     let (prefix, local) = split_name(&tag);
     let mut node = Node {
         ns: resolve(scopes, prefix),
@@ -414,18 +414,17 @@ fn parse_tree(packet: &str) -> Result<Node> {
             }
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let raw = String::from_utf8_lossy(t.as_ref()).to_string();
-                    top.text.push_str(&xmp::unescape(&raw));
+                    top.text.push_str(&xmp::unescape(t.as_ref()));
                 }
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(t.as_ref()));
+                    top.text.push_str(t.as_ref());
                 }
             }
             Event::GeneralRef(r) => {
                 if let Some(top) = stack.last_mut() {
-                    let name = String::from_utf8_lossy(r.as_ref()).to_string();
+                    let name: &str = r.as_ref();
                     top.text.push_str(&xmp::unescape(&format!("&{name};")));
                 }
             }
