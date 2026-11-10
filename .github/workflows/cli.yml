@@ -2,7 +2,10 @@ name: cli
 
 # Builds the rusticdoc command-line tool for Linux and macOS and attaches the
 # archives, with a SHA256SUMS file, to the GitHub release of the tag. A v0.*
-# tag runs it; it can also be run by hand for a tag that already exists.
+# tag runs it; it can also be run by hand for a tag that already exists, as
+# long as its release is still a draft: a published release can't be changed.
+# The archives carry a signed provenance attestation, which
+# `gh attestation verify <archive> --repo <owner>/<repo>` checks.
 # Linux binaries are built on Ubuntu 22.04, so they run on glibc 2.35 and
 # newer. Windows is not built: the tool's process handling is Unix-only, so
 # Windows users run it under WSL or use the image.
@@ -80,6 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -89,6 +94,10 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - name: Attest the archives
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
       - name: Attach
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

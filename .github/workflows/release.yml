@@ -4,7 +4,9 @@ name: release
 # arm64. Each architecture builds on a runner of its own, because building the
 # Servo style engine under emulation takes hours; the two images are then
 # joined under one tag. Versions follow ZeroVer (https://0ver.org): they stay
-# below 1.0, and a new minor number may break compatibility.
+# below 1.0, and a new minor number may break compatibility. The image carries
+# a signed provenance attestation, stored beside it in the registry, which
+# `gh attestation verify oci://<image>:<version> --repo <owner>/<repo>` checks.
 on:
   push:
     tags: ['v0.*']
@@ -91,6 +93,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -104,9 +108,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: join the architectures under the version
+        id: join
         working-directory: digests
         run: |
           version="${TAG#v}"
           docker buildx imagetools create -t "${IMAGE}:${version}" \
             $(printf "${IMAGE}@sha256:%s " $(ls | sed 's/^sha256://'))
           docker buildx imagetools inspect "${IMAGE}:${version}"
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${version}" --format '{{json .Manifest}}' | jq -r .digest)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest for ${IMAGE}:${version}"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: attest the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.join.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false

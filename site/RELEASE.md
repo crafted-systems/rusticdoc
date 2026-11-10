@@ -51,7 +51,7 @@ Then point the domain's DNS at the host and turn on HTTPS.
 
 - [ ] **Check the claims on `/status/` are still true**, and update it as Office and PDF viewer checks finish.
 - [ ] **Check the name "rusticdoc" for conflicts.**
-- [ ] **Add a security contact.** `/.well-known/security.txt` and a contact on `/security/` need a real address, so none was invented.
+- [ ] **Add a security contact to the site.** The repository takes private reports through GitHub, as `SECURITY.md` says. `/.well-known/security.txt` and the security pages don't point there yet.
 - [ ] **Decide on analytics.** The site has none, and `_headers` would need changing to add a third-party one.
 
 ## After each release
