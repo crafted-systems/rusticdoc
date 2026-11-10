@@ -89,6 +89,8 @@ fn bad_name(name: &str) -> ApiError {
     ))
 }
 
+/// Set an alias
+///
 /// Points an alias at a template. A new alias starts at version 1; pointing an
 /// existing one elsewhere adds a version, and the earlier ones stay. Every
 /// replica sees the change at once.
@@ -174,6 +176,8 @@ pub async fn set(
         .into_response())
 }
 
+/// Get an alias
+///
 /// An alias, the template it names now, and its history: every version since
 /// it was last deleted, oldest first.
 #[utoipa::path(
@@ -200,6 +204,8 @@ pub async fn show(
     Ok(Json(history))
 }
 
+/// List aliases
+///
 /// Lists this caller's aliases by name, each with the template it names now.
 #[utoipa::path(
     get, path = "/v1/aliases", tag = "templates", operation_id = "listAliases",
@@ -224,6 +230,8 @@ pub async fn list(
     Ok(Json(page))
 }
 
+/// Delete an alias
+///
 /// Deletes an alias and its history. The templates it named stay. Setting it
 /// again starts at version 1.
 #[utoipa::path(

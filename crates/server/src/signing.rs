@@ -132,6 +132,31 @@ pub fn authorize(
     Ok(())
 }
 
+/// Refuses, with 403, a caller that may not renew a document timestamp. A
+/// renewal uses no key, but it spends the timestamp authority's service on
+/// the caller's file, so where keys are configured it is open to the callers
+/// who may sign with at least one of them. With no key configured there is
+/// no list to go by, and every caller of the API may renew.
+pub fn authorize_renewal(signing: &Signing, principal: &Principal) -> Result<(), ApiError> {
+    let mut keys = signing.keys().map(|(name, _)| name).peekable();
+    if keys.peek().is_none() {
+        return Ok(());
+    }
+    let allowed = keys.any(|name| match signing.allow_list(name) {
+        Ok(Some(allow)) => may_use_signing_key(&principal.0, allow),
+        Ok(None) => true,
+        Err(_) => false,
+    });
+    if allowed {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        axum::http::StatusCode::FORBIDDEN,
+        "signing_key_forbidden",
+        "this caller may not use this service's signing, so it may not renew a timestamp",
+    ))
+}
+
 /// [`authorize`] for every `sign` step of a step list.
 pub fn authorize_steps(
     signing: &Signing,

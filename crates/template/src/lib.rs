@@ -383,6 +383,13 @@ impl Compiled {
                 .map(|p| p.row_blocks.as_slice())
                 .unwrap_or(&[])
         };
+        let col_blocks_of = |name: &str| {
+            self.parts
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.col_blocks.as_slice())
+                .unwrap_or(&[])
+        };
         let mut names: Vec<String> = outputs.iter().map(|(n, _)| n.clone()).collect();
         match self.format {
             Format::Pptx => {
@@ -403,8 +410,9 @@ impl Compiled {
                 for (name, content) in &outputs {
                     let (title, content) = workbook::split_title(content);
                     formulas |= content.contains("<f>") || content.contains("<f ");
-                    let (fixed, layout) = sheet::rebase(content, blocks_of(name))
-                        .map_err(|e| TemplateError::new(format!("{name}: {e}")))?;
+                    let (fixed, layout) =
+                        sheet::rebase(content, blocks_of(name), col_blocks_of(name))
+                            .map_err(|e| TemplateError::new(format!("{name}: {e}")))?;
                     sheets.push(workbook::SheetOut {
                         part: name.clone(),
                         title,
@@ -531,6 +539,7 @@ fn build(format: Format, bytes: &[u8]) -> Result<Build> {
             before: Vec::new(),
             after: Vec::new(),
             row_blocks: Vec::new(),
+            col_blocks: Vec::new(),
         };
         if format == Format::Xlsx {
             sheet::inline_shared_strings(&mut tree.nodes, &shared);
@@ -757,6 +766,15 @@ fn validate_within(
                 return Ok(v);
             }
             filters::date(&v, format.as_deref(), timezone.as_deref()).map(Value::from)
+        },
+    );
+    env.add_filter(
+        "excel_date",
+        |v: Value| -> std::result::Result<Value, minijinja::Error> {
+            if v.is_undefined() {
+                return Ok(v);
+            }
+            filters::excel_date(&v, None)
         },
     );
     env.add_filter(

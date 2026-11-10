@@ -51,6 +51,12 @@ pub enum TagKind {
     /// The end of a sheet loop. Authors never type it: the engine adds one
     /// after the sheet a [`TagKind::SheetLoop`] repeats.
     SheetEnd,
+    /// `{% col for d in days %}`: repeats cells of a sheet row to the right,
+    /// once per item. Holds what follows `col`, which should start with
+    /// `for`.
+    ColLoop(String),
+    /// `{% endcol %}`, the end of a column loop.
+    ColEnd,
 }
 
 const OPENERS: &[&str] = &[
@@ -90,6 +96,10 @@ impl Tag {
                 TagKind::Settings
             } else if name == "sheet" {
                 TagKind::SheetLoop(rest.to_string())
+            } else if name == "col" {
+                TagKind::ColLoop(rest.to_string())
+            } else if name == "endcol" {
+                TagKind::ColEnd
             } else {
                 TagKind::Stmt {
                     name: name.to_string(),
@@ -109,6 +119,9 @@ impl Tag {
 
     /// The block this tag opens, if any.
     pub fn opener(&self) -> Option<&str> {
+        if matches!(self.kind, TagKind::ColLoop(_)) {
+            return Some("col");
+        }
         let (name, rest) = self.stmt()?;
         if OPENERS.contains(&name) || (name == "set" && !rest.contains('=')) {
             Some(name)
@@ -119,6 +132,9 @@ impl Tag {
 
     /// The block this tag closes, if any.
     pub fn closer(&self) -> Option<&str> {
+        if matches!(self.kind, TagKind::ColEnd) {
+            return Some("col");
+        }
         self.stmt()?.0.strip_prefix("end")
     }
 
@@ -134,11 +150,16 @@ impl Tag {
     /// `{% sheet for s in sites %}`, when it is written that way.
     pub fn sheet_loop(&self) -> Option<&str> {
         match &self.kind {
-            TagKind::SheetLoop(rest) => rest
-                .strip_prefix("for")
-                .filter(|r| r.starts_with(char::is_whitespace))
-                .map(str::trim)
-                .filter(|r| FOR_RE.is_match(r)),
+            TagKind::SheetLoop(rest) => loop_head(rest),
+            _ => None,
+        }
+    }
+
+    /// The loop head of a column loop, `d in days` for
+    /// `{% col for d in days %}`, when it is written that way.
+    pub fn col_loop(&self) -> Option<&str> {
+        match &self.kind {
+            TagKind::ColLoop(rest) => loop_head(rest),
             _ => None,
         }
     }
@@ -147,6 +168,14 @@ impl Tag {
     pub fn is_synthetic(&self) -> bool {
         matches!(self.kind, TagKind::SheetEnd)
     }
+}
+
+/// What follows `for` in `for item in list`, when the text reads that way.
+fn loop_head(rest: &str) -> Option<&str> {
+    rest.strip_prefix("for")
+        .filter(|r| r.starts_with(char::is_whitespace))
+        .map(str::trim)
+        .filter(|r| FOR_RE.is_match(r))
 }
 
 /// Where a tag sits, as paths into its part's tree.
@@ -170,6 +199,15 @@ pub struct RowBlock {
     pub sheet: usize,
 }
 
+/// The cells of one XLSX row that a column loop repeats to the right. The
+/// row is the template's row number, the columns are numbers from 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColBlock {
+    pub row: u32,
+    pub start: u32,
+    pub end: u32,
+}
+
 /// One ZIP part with its tree and the tags hoisted to its boundaries.
 #[derive(Debug, Clone)]
 pub struct PartTree {
@@ -178,6 +216,7 @@ pub struct PartTree {
     pub before: Vec<TagId>,
     pub after: Vec<TagId>,
     pub row_blocks: Vec<RowBlock>,
+    pub col_blocks: Vec<ColBlock>,
 }
 
 /// Byte spans of the tags in a text.
@@ -922,6 +961,99 @@ fn plan_shift(
     ])
 }
 
+/// A column loop repeats the cells from the one that holds its opening tag
+/// to the one that holds its closing tag, so both tags are hoisted around
+/// those cells. A closing tag in a cell of its own ends the loop at the cell
+/// before it: a formula cell has no room for a tag, and this is how one
+/// gets repeated.
+fn plan_columns(
+    format: Format,
+    parts: &mut [PartTree],
+    tags: &[Tag],
+    ctxs: &[TagCtx],
+    b: &Block,
+) -> Result<Vec<(TagId, Target)>, String> {
+    let (o, c) = (&ctxs[b.open], &ctxs[b.close]);
+    let (open, close) = (&tags[b.open].text, &tags[b.close].text);
+    if format != Format::Xlsx {
+        return Err(format!(
+            "'{open}' repeats columns, so it works in XLSX only"
+        ));
+    }
+    if tags[b.open].col_loop().is_none() {
+        return Err(format!(
+            "'{open}' should read '{{% col for item in list %}}'"
+        ));
+    }
+    let same_row = o.part == c.part && o.row.is_some() && o.row == c.row;
+    let cell = |p: &Path| {
+        elem_at(&parts[o.part].nodes, p)
+            .filter(|e| e.name == "c")
+            .and_then(|e| e.attr("r"))
+            .and_then(|r| crate::sheet::split_ref(&r))
+    };
+    let (Some((first, row)), Some((last, _)), true) = (cell(&o.para), cell(&c.para), same_row)
+    else {
+        return Err(format!(
+            "'{open}' and '{close}' must sit in cells of the same row"
+        ));
+    };
+    let (start, mut end) = (
+        crate::sheet::col_to_num(&first),
+        crate::sheet::col_to_num(&last),
+    );
+    if end < start {
+        return Err(format!(
+            "'{close}' must sit in the cell that holds '{open}' or in one to its right"
+        ));
+    }
+    let part = o.part;
+    // Nothing in the closing tag's cell prints, so the cell stays out.
+    let alone = end > start
+        && elem_at(&parts[part].nodes, &c.para)
+            .and_then(|e| e.child("is"))
+            .and_then(|is| is.child("t"))
+            .and_then(|t| t.pieces())
+            .is_some_and(|pieces| {
+                pieces.iter().all(|p| match p {
+                    Piece::Lit(s) => s.trim().is_empty(),
+                    Piece::Tag(id) => !matches!(tags[*id].kind, TagKind::Expr(_)),
+                    Piece::TypedCell { .. } => false,
+                })
+            });
+    if alone {
+        end -= 1;
+    }
+    if parts[part]
+        .col_blocks
+        .iter()
+        .any(|k| k.row == row && k.start <= end && start <= k.end)
+    {
+        return Err(format!(
+            "'{open}' shares cells with another column loop in row {row}; column loops cannot nest"
+        ));
+    }
+    parts[part].col_blocks.push(ColBlock { row, start, end });
+    Ok(vec![
+        (
+            b.open,
+            Target::Node {
+                part,
+                path: o.para.clone(),
+                before: true,
+            },
+        ),
+        (
+            b.close,
+            Target::Node {
+                part,
+                path: c.para.clone(),
+                before: alone,
+            },
+        ),
+    ])
+}
+
 fn siblings(a: &[usize], b: &[usize]) -> bool {
     a.len() == b.len() && a[..a.len() - 1] == b[..b.len() - 1]
 }
@@ -950,6 +1082,10 @@ fn plan_block(
         format!("'{}' ({} {})", t.text, t.loc.part, t.loc.place)
     };
     let err = |msg: String| diag(Severity::Error, msg, Some(tags[b.open].loc.clone()));
+
+    if matches!(tags[b.open].kind, TagKind::ColLoop(_)) {
+        return plan_columns(format, parts, tags, ctxs, b).map_err(err);
+    }
 
     if format == Format::Pptx && tags[b.open].is_for() {
         let step = tags[b.open]
@@ -1238,12 +1374,19 @@ pub fn place_blocks(
         let blocks = &mut part.row_blocks;
         blocks.sort_by_key(|b| (b.sheet, b.start, std::cmp::Reverse(b.end), !b.is_loop));
         blocks.dedup_by(|a, b| a.sheet == b.sheet && a.start == b.start && a.end == b.end);
+        part.col_blocks.sort_by_key(|k| (k.row, k.start));
     }
 }
 
 /// Turns sheet cells whose whole content is one expression into typed
-/// cells, and cells that only held block tags into empty cells.
+/// cells, and cells that only held block tags into empty cells. A cell a
+/// column loop opens or closes in keeps the loop's tags around it.
 pub fn type_cells(tree: &mut PartTree, tags: &[Tag]) {
+    enum Fill {
+        Empty,
+        Typed(TagId),
+        Keep,
+    }
     let Some(root) = xml::root_mut(&mut tree.nodes) else {
         return;
     };
@@ -1254,29 +1397,44 @@ pub fn type_cells(tree: &mut PartTree, tags: &[Tag]) {
         let Node::Elem(row) = row else { continue };
         for cell in row.children.iter_mut() {
             let Node::Elem(c) = cell else { continue };
-            if c.name != "c" || !c.before.is_empty() || !c.after.is_empty() {
+            if c.name != "c" {
                 continue;
             }
+            // A space typed beside a column loop's tag stays behind when the
+            // tag is hoisted; it must not turn a number into text.
+            let hoisted = !c.before.is_empty() || !c.after.is_empty();
             let Some(is) = c.child("is") else { continue };
             let Some(t) = is.child("t") else { continue };
             let Some(pieces) = t.pieces() else { continue };
-            match pieces.as_slice() {
-                [] => {
+            let kept: Vec<&Piece> = pieces
+                .iter()
+                .filter(|p| !(hoisted && matches!(p, Piece::Lit(s) if s.trim().is_empty())))
+                .collect();
+            let fill = match kept.as_slice() {
+                [] => Fill::Empty,
+                [Piece::Tag(id)] if matches!(tags[*id].kind, TagKind::Expr(_)) => Fill::Typed(*id),
+                _ => Fill::Keep,
+            };
+            match fill {
+                Fill::Empty => {
                     c.remove_attr("t");
                     c.children.clear();
                     c.self_closing = true;
                     c.open = format!("{}/>", c.open.trim_end_matches('>'));
                 }
-                [Piece::Tag(id)] if matches!(tags[*id].kind, TagKind::Expr(_)) => {
+                Fill::Typed(id) => {
                     let mut e = c.clone();
                     e.remove_attr("t");
                     let open = e.open.trim_end_matches('>').to_string();
+                    let mut pieces = std::mem::take(&mut c.before);
+                    pieces.push(Piece::TypedCell { expr: id, open });
+                    pieces.append(&mut c.after);
                     *cell = Node::Text(Text {
                         raw: String::new(),
-                        pieces: Some(vec![Piece::TypedCell { expr: *id, open }]),
+                        pieces: Some(pieces),
                     });
                 }
-                _ => {}
+                Fill::Keep => {}
             }
         }
     }
@@ -1368,7 +1526,14 @@ impl Writer<'_> {
                     Mode::Probe => probe_stmt("for", head, id),
                 }
             }
-            (TagKind::SheetEnd, _) => "{% endfor %}".to_string(),
+            (TagKind::SheetEnd | TagKind::ColEnd, _) => "{% endfor %}".to_string(),
+            (TagKind::ColLoop(_), mode) => {
+                let head = tag.col_loop().unwrap_or("__ in []");
+                match mode {
+                    Mode::Render => format!("{{% for {head} %}}"),
+                    Mode::Probe => probe_stmt("for", head, id),
+                }
+            }
         };
         self.mark(id);
         self.out.push_str(&src);
@@ -1506,6 +1671,7 @@ pub fn standalone_source(tag: &Tag) -> Option<String> {
             _ => format!("{{% {name} {rest} %}}"),
         }),
         TagKind::SheetLoop(_) => Some(format!("{{% for {} %}}{{% endfor %}}", tag.sheet_loop()?)),
+        TagKind::ColLoop(_) => Some(format!("{{% for {} %}}{{% endfor %}}", tag.col_loop()?)),
         _ => None,
     }
 }

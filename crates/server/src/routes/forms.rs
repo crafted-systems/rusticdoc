@@ -36,7 +36,10 @@ pub struct FillForm {
     pub files: String,
     /// JSON object, sent as text or as a file; a field named `customer.name` takes
     /// that path.
+    #[schema(value_type = Option<String>, example = r#"{"customer": {"name": "Ada"}}"#)]
     pub data: Option<serde_json::Value>,
+    /// JSON object visible as `ctx`, sent as text.
+    #[schema(value_type = Option<String>)]
     pub ctx: Option<serde_json::Value>,
     /// Fix the values into the page content.
     pub flatten: Option<bool>,
@@ -49,6 +52,14 @@ pub struct FillForm {
 
 #[derive(ToSchema)]
 #[allow(dead_code)]
+pub struct FieldsForm {
+    /// The PDF whose form fields to list.
+    #[schema(value_type = String, format = Binary)]
+    pub files: String,
+}
+
+#[derive(ToSchema)]
+#[allow(dead_code)]
 pub struct OverlayForm {
     /// Two PDFs: the base, then the overlay laid over it page by page.
     #[schema(value_type = Vec<String>, format = Binary)]
@@ -57,10 +68,12 @@ pub struct OverlayForm {
     pub output_filename: Option<String>,
 }
 
+/// List form fields
+///
 /// Lists a PDF's form fields with their kinds, pages and values.
 #[utoipa::path(
     post, path = "/v1/pdf/forms/fields", tag = "pdf-forms",
-    request_body(content_type = "multipart/form-data", content = OverlayForm),
+    request_body(content_type = "multipart/form-data", content = FieldsForm),
     responses((status = 200, description = "The form fields", body = Vec<FieldSchema>), (status = 400, description = "The request is wrong", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
@@ -78,6 +91,8 @@ pub async fn fields(
     Ok(Json(fields))
 }
 
+/// Fill a form
+///
 /// Fills a PDF form from data, applying tags in annotations, optionally
 /// flattening the result.
 #[utoipa::path(
@@ -144,6 +159,8 @@ pub async fn fill(
     finish(state, hook, request_id(&headers), job).await
 }
 
+/// Overlay a PDF
+///
 /// Lays the second PDF over the first, page by page.
 #[utoipa::path(
     post, path = "/v1/pdf/overlay", tag = "pdf-forms",

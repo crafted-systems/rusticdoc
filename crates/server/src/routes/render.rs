@@ -18,12 +18,14 @@ use crate::routes::{options, templates};
 use crate::state::AppState;
 use crate::webhook::{self, Hook};
 
-/// The multipart form `/v1/render` accepts. Documented here; parsed by hand.
+// Documented here; parsed by hand.
+/// The multipart form `/v1/render`, `/v1/render/batch` and
+/// `/v1/templates/validate` accept.
 #[derive(ToSchema)]
 #[allow(dead_code)]
 pub struct RenderForm {
     /// The template file. Send this or `templateId`.
-    #[schema(value_type = String, format = Binary)]
+    #[schema(value_type = String, format = Binary, required = false)]
     pub template: Option<String>,
     /// The id of a stored template, from `POST /v1/templates`, or an alias as
     /// `name` or `name@version`. Send this or `template`. Files in the form are
@@ -31,9 +33,10 @@ pub struct RenderForm {
     #[schema(rename = "templateId")]
     pub template_id: Option<String>,
     /// JSON object the template sees as its root, sent as text or as a file.
-    #[schema(example = json!({"customer": {"name": "Ada"}}))]
+    #[schema(value_type = Option<String>, example = r#"{"customer": {"name": "Ada"}}"#)]
     pub data: Option<serde_json::Value>,
     /// JSON object visible as `ctx`, sent as text or as a file.
+    #[schema(value_type = Option<String>)]
     pub ctx: Option<serde_json::Value>,
     /// `true` prints a value missing from the data as nothing instead of
     /// failing the render. Default `false`, so a misspelt name is an error.
@@ -63,18 +66,27 @@ pub struct RenderForm {
     /// The currency `currency` uses when given none, such as `EUR`. Wins over
     /// the template's.
     pub currency: Option<String>,
-    /// Comma-separated steps in order: `convert`, `pdfa`, `metadata`,
-    /// `encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the
-    /// service's key; it must be last and cannot be combined with `encrypt`.
+    /// Comma-separated steps, run in the order given: `convert`, `pdfa`,
+    /// `pdfua`, `merge`, `split`, `watermark`, `stamp`, `underlay`, `rotate`,
+    /// `flatten`, `optimize`, `bookmarks`, `metadata`, `embed`, `factur-x`,
+    /// `encrypt`, `sign`. Each reads the fields described as its own. `sign`
+    /// signs cryptographically with the service's key; it must be last and
+    /// cannot be combined with `encrypt`.
     #[schema(example = "convert,pdfa,encrypt")]
     pub steps: Option<String>,
     /// Output format for `convert`. Default `pdf`.
     pub to: Option<String>,
     /// PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`.
     pub pdfa: Option<String>,
-    /// JSON object of metadata fields for `metadata`.
+    /// JSON object of metadata fields for `metadata`, sent as text.
+    #[schema(value_type = Option<String>)]
     pub metadata: Option<serde_json::Value>,
+    /// For `encrypt`: the password that opens the document.
+    #[schema(rename = "userPassword")]
     pub user_password: Option<String>,
+    /// For `encrypt`: the password that lifts its restrictions. Defaults to
+    /// `userPassword`.
+    #[schema(rename = "ownerPassword")]
     pub owner_password: Option<String>,
     /// For `sign`: why the document was signed.
     pub reason: Option<String>,
@@ -108,6 +120,101 @@ pub struct RenderForm {
     /// For a visible `sign`: width in points. Default the image's natural
     /// size, or 200 for text.
     pub width: Option<f32>,
+    /// For `split`: `pages` (default) or `intervals`.
+    #[schema(rename = "splitMode")]
+    pub split_mode: Option<String>,
+    /// For `split`: page ranges such as `1-3,5` with `pages`, or a page count
+    /// with `intervals`. Required by the step.
+    #[schema(rename = "splitSpan")]
+    pub split_span: Option<String>,
+    /// For `split` with `pages`: `true` gives one document holding the pages
+    /// instead of one per range.
+    #[schema(rename = "splitUnify")]
+    pub split_unify: Option<bool>,
+    /// For `watermark`: what to draw under the page content, `text`, `image`
+    /// or `pdf`.
+    #[schema(rename = "watermarkSource")]
+    pub watermark_source: Option<String>,
+    /// For `watermark` with a `text` source: the text to draw.
+    #[schema(rename = "watermarkExpression")]
+    pub watermark_expression: Option<String>,
+    /// For `watermark`: a JSON object of `pos`, `op`, `rot`, `sc`, `fontsize`
+    /// and `fillc`, each value a string, sent as text.
+    #[schema(rename = "watermarkOptions", value_type = Option<Object>)]
+    pub watermark_options: Option<serde_json::Value>,
+    /// For `watermark`: the pages to mark, such as `1-3`. Default all.
+    #[schema(rename = "watermarkPages")]
+    pub watermark_pages: Option<String>,
+    /// For `watermark` with an `image` or `pdf` source: the files to draw. At
+    /// most five marks a request.
+    #[schema(value_type = Vec<String>, format = Binary, required = false)]
+    pub watermark: Option<Vec<String>>,
+    /// For `stamp`: what to draw over the page content, `text`, `image` or
+    /// `pdf`.
+    #[schema(rename = "stampSource")]
+    pub stamp_source: Option<String>,
+    /// For `stamp` with a `text` source: the text to draw.
+    #[schema(rename = "stampExpression")]
+    pub stamp_expression: Option<String>,
+    /// For `stamp`: a JSON object of `pos`, `op`, `rot`, `sc`, `fontsize` and
+    /// `fillc`, each value a string, sent as text.
+    #[schema(rename = "stampOptions", value_type = Option<Object>)]
+    pub stamp_options: Option<serde_json::Value>,
+    /// For `stamp`: the pages to mark, such as `1-3`. Default all.
+    #[schema(rename = "stampPages")]
+    pub stamp_pages: Option<String>,
+    /// For `stamp` with an `image` or `pdf` source: the files to draw. At
+    /// most five marks a request.
+    #[schema(value_type = Vec<String>, format = Binary, required = false)]
+    pub stamp: Option<Vec<String>>,
+    /// For `rotate`: `90` (default), `180`, `270` or `-90`.
+    #[schema(rename = "rotateAngle")]
+    pub rotate_angle: Option<String>,
+    /// For `rotate`: the pages to turn, such as `1-3`. Default all.
+    #[schema(rename = "rotatePages")]
+    pub rotate_pages: Option<String>,
+    /// For `bookmarks`: a JSON array of `{"title", "page", "children"}` that
+    /// replaces the outline, sent as text.
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub bookmarks: Option<serde_json::Value>,
+    /// For `embed`: the files to attach.
+    #[schema(value_type = Vec<String>, format = Binary, required = false)]
+    pub embeds: Option<Vec<String>>,
+    /// For `embed`: a JSON object mapping a file name to
+    /// `{"mimeType": "..."}`, sent as text.
+    #[schema(rename = "embedsMetadata", value_type = Option<Object>)]
+    pub embeds_metadata: Option<serde_json::Value>,
+    /// For `factur-x`: the invoice XML to embed.
+    #[schema(rename = "facturxXml", value_type = String, format = Binary, required = false)]
+    pub facturx_xml: Option<String>,
+    /// For `factur-x`: `MINIMUM`, `BASIC_WL`, `BASIC`, `EN16931` (default) or
+    /// `EXTENDED`.
+    #[schema(rename = "facturxConformanceLevel")]
+    pub facturx_conformance_level: Option<String>,
+    /// With a PDF template and data, `true` fixes the filled values into the
+    /// page.
+    pub flatten: Option<bool>,
+    /// With a PDF template and data, `false` keeps the annotations that held
+    /// tags. They are removed by default.
+    #[schema(rename = "stripAnnotations")]
+    pub strip_annotations: Option<bool>,
+    /// The hex SHA-256 of a template this caller sent recently, in place of
+    /// the file.
+    #[schema(rename = "templateHash")]
+    pub template_hash: Option<String>,
+    /// Files to fetch from URLs instead of uploading them, as a JSON array of
+    /// `{"url": "..."}` sent as text. At most 10 entries.
+    #[schema(rename = "downloadFrom", value_type = Option<Vec<Object>>)]
+    pub download_from: Option<serde_json::Value>,
+    /// Fonts for this request only.
+    #[schema(value_type = Vec<String>, format = Binary, required = false)]
+    pub fonts: Option<Vec<String>>,
+    /// For `/v1/render/batch`: the array to render once per element.
+    #[schema(rename = "splitBy")]
+    pub split_by: Option<String>,
+    /// For `/v1/render/batch`: each file's name, as a template.
+    #[schema(rename = "batchName")]
+    pub batch_name: Option<String>,
     /// File name of the result, without extension.
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
@@ -122,10 +229,10 @@ pub struct RenderForm {
     pub assets: Option<Vec<String>>,
     /// For `underlay`: the PDF the document is laid over, page by page, such
     /// as letterhead or a pre-printed form.
-    #[schema(value_type = String, format = Binary)]
+    #[schema(value_type = String, format = Binary, required = false)]
     pub underlay: Option<String>,
     /// Further files, used by `merge`.
-    #[schema(value_type = Vec<String>, format = Binary)]
+    #[schema(value_type = Vec<String>, format = Binary, required = false)]
     pub files: Option<Vec<String>>,
 }
 
@@ -203,6 +310,8 @@ pub struct RenderJson {
     pub download_from: Option<serde_json::Value>,
 }
 
+/// Render a template
+///
 /// Fills a template and runs the steps.
 ///
 /// Send a multipart form, or JSON with a `templateId` (see `RenderJson`).
@@ -494,6 +603,8 @@ pub async fn run(
     .await
 }
 
+/// Render a batch
+///
 /// Renders the template once per element of an array in the data and
 /// returns the files in a ZIP.
 ///
@@ -740,6 +851,8 @@ pub struct Validation {
     pub missing_fonts: Vec<String>,
 }
 
+/// Validate a template
+///
 /// Checks a template against sample data without converting anything.
 #[utoipa::path(
     post, path = "/v1/templates/validate", tag = "render",

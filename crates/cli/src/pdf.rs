@@ -161,10 +161,19 @@ pub enum PdfOp {
         /// (no changes), 2 (form filling and signing) or 3 (also annotations).
         #[arg(long, requires = "key")]
         certify: Option<String>,
-        /// The RFC 3161 timestamp authority (with --key), instead of
-        /// RUSTICDOC_SIGNING_TSA_URL. https, unless
+        /// Renew the document timestamp of a file signed at level b-lta, so it
+        /// can still be checked after that timestamp's certificate expires:
+        /// adds the validation data for the last timestamp, then a new one.
+        /// Takes no key, and the file must not have changed since it was signed.
+        #[arg(long, conflicts_with_all = [
+            "key", "cert", "image", "x", "y", "width", "level", "certify",
+            "reason", "location", "contact_info", "signer_name",
+        ])]
+        renew: bool,
+        /// The RFC 3161 timestamp authority (with --key or --renew), instead
+        /// of RUSTICDOC_SIGNING_TSA_URL. https, unless
         /// RUSTICDOC_SIGNING_TSA_ALLOW_HTTP=true.
-        #[arg(long, requires_all = ["key", "tsa_cert"])]
+        #[arg(long, requires = "tsa_cert")]
         tsa_url: Option<String>,
         /// PEM certificate the --tsa-url authority signs with, or the CA it
         /// chains to, instead of RUSTICDOC_SIGNING_TSA_CERT. Tokens from any
@@ -438,10 +447,48 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
             signer_name,
             level,
             certify,
+            renew,
             tsa_url,
             tsa_cert,
             output,
         } => {
+            // The authority from the flags, or the configured one, with the
+            // certificates its tokens must chain to.
+            let authority = |tsa_url: Option<String>, tsa_cert: Option<PathBuf>| {
+                let tsa = match tsa_url {
+                    Some(url) => {
+                        sign::check_tsa_url(&url, config.signing.tsa_allow_http)
+                            .map_err(anyhow::Error::msg)?;
+                        let mut tsa = sign::Tsa::new(url, std::time::Duration::from_secs(10));
+                        tsa.cert_file = tsa_cert;
+                        Some(tsa)
+                    }
+                    None => config.signing.tsa.clone(),
+                };
+                tsa.map(|mut tsa| {
+                    tsa.load_anchors().map_err(anyhow::Error::msg)?;
+                    anyhow::Ok(tsa)
+                })
+                .transpose()
+            };
+            let outbound = || {
+                rusticdoc_server::signing::PolicyOutbound::from_config(config)
+                    .map(Arc::new)
+                    .map_err(anyhow::Error::msg)
+            };
+            if renew {
+                let mut signing =
+                    sign::Signing::default().with_limits(config.signing.revocation.clone());
+                if let Some(tsa) = authority(tsa_url, tsa_cert)? {
+                    signing = signing.with_tsa(tsa);
+                }
+                signing.set_outbound(outbound()?);
+                let renewed = signing.renew(&read(&file)?, t).await?;
+                return write(&output, &renewed);
+            }
+            if tsa_url.is_some() && key.is_none() {
+                bail!("--tsa-url goes with --key and --cert, or with --renew");
+            }
             if let (Some(key), Some(cert)) = (key, cert) {
                 let signer = sign::load_key(&key.to_string_lossy(), &cert, &config.signing.pkcs11)
                     .map_err(anyhow::Error::msg)?;
@@ -477,24 +524,10 @@ pub async fn run(config: &Config, args: PdfArgs) -> anyhow::Result<()> {
                 let mut signing = sign::Signing::with_default(signer)
                     .with_level(config.signing.level)
                     .with_limits(config.signing.revocation.clone());
-                let tsa = match tsa_url {
-                    Some(url) => {
-                        sign::check_tsa_url(&url, config.signing.tsa_allow_http)
-                            .map_err(anyhow::Error::msg)?;
-                        let mut tsa = sign::Tsa::new(url, std::time::Duration::from_secs(10));
-                        tsa.cert_file = tsa_cert;
-                        Some(tsa)
-                    }
-                    None => config.signing.tsa.clone(),
-                };
-                if let Some(mut tsa) = tsa {
-                    tsa.load_anchors().map_err(anyhow::Error::msg)?;
+                if let Some(tsa) = authority(tsa_url, tsa_cert)? {
                     signing = signing.with_tsa(tsa);
                 }
-                signing.set_outbound(Arc::new(
-                    rusticdoc_server::signing::PolicyOutbound::from_config(config)
-                        .map_err(anyhow::Error::msg)?,
-                ));
+                signing.set_outbound(outbound()?);
                 let signed = signing.sign(&read(&file)?, &options, t).await?;
                 return write(&output, &signed);
             }

@@ -36,6 +36,8 @@ pub struct Version {
     pub engines: serde_json::Value,
 }
 
+/// Liveness
+///
 /// Liveness. With credentials configured, a caller without them sees the status
 /// and nothing else.
 #[utoipa::path(get, path = "/health", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
@@ -88,6 +90,8 @@ async fn status(state: &AppState) -> Health {
     }
 }
 
+/// Readiness
+///
 /// Readiness: liveness, and with a store, this replica's copy of the stored fonts
 /// being complete. A load balancer should send no documents here before that,
 /// because they would quietly come out in a fallback font.
@@ -103,6 +107,8 @@ pub async fn ready(state: State<AppState>, headers: HeaderMap) -> Response {
     health(state, headers).await
 }
 
+/// Engine versions
+///
 /// Engine versions and paths.
 #[utoipa::path(get, path = "/v1/version", tag = "service", responses((status = 200, description = "Version and engines", body = Version)), security(("api_key" = []), ("bearer" = []), ("basic" = [])))]
 pub async fn version(State(state): State<AppState>) -> Json<Version> {
@@ -112,6 +118,8 @@ pub async fn version(State(state): State<AppState>) -> Json<Version> {
     })
 }
 
+/// Metrics
+///
 /// Prometheus text format. With credentials configured it needs them too, unless
 /// `RUSTICDOC_METRICS_PUBLIC` is set.
 #[utoipa::path(get, path = "/metrics", tag = "service", responses((status = 200, description = "Prometheus text format", content_type = "text/plain")))]

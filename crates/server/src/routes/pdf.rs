@@ -35,6 +35,8 @@ pub struct EncryptForm {
     pub output_filename: Option<String>,
 }
 
+/// Merge PDFs
+///
 /// Merges PDFs in the order sent.
 #[utoipa::path(
     post, path = "/v1/pdf/merge", tag = "pdf",
@@ -72,6 +74,8 @@ pub async fn merge(
     render::run(state, hook, request_id(&headers), req).await
 }
 
+/// Encrypt a PDF
+///
 /// Encrypts a PDF with AES-256.
 #[utoipa::path(
     post, path = "/v1/pdf/encrypt", tag = "pdf",

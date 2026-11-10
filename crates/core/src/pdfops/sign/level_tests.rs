@@ -25,7 +25,8 @@ use x509_tsp::TstInfo;
 use super::net::{Outbound, OutboundRequest, upstream};
 use super::tests::{byte_ranges, contents, ranges_digest, signature_field, verify_revision};
 use super::{
-    Appearance, DocMdp, Level, Limits, Network, SignOptions, Signer, Signing, Tsa, sign_with,
+    Appearance, DocMdp, Level, Limits, Network, SignOptions, Signer, Signing, Tsa, renew_with,
+    sign_with,
 };
 use crate::error::{Error, Result};
 use crate::job::Document;
@@ -95,6 +96,24 @@ impl Pki {
             .arg(self.file("ca.cnf"))
             .arg("-revoke")
             .arg(self.file(&format!("{name}.pem")))
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{status:?}");
+        // The CRL the servers hand out lists it from now on.
+        let pem = self.file("root.crl.pem");
+        let status = Command::new("openssl")
+            .args(["ca", "-gencrl", "-config"])
+            .arg(self.file("ca.cnf"))
+            .arg("-out")
+            .arg(&pem)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{status:?}");
+        let status = Command::new("openssl")
+            .args(["crl", "-outform", "DER", "-in"])
+            .arg(&pem)
+            .arg("-out")
+            .arg(self.file("root.crl"))
             .output()
             .unwrap();
         assert!(status.status.success(), "{status:?}");
@@ -1096,4 +1115,217 @@ fn a_form_past_the_node_budget_is_refused_for_certification() {
         super::tests::now(),
     )
     .unwrap();
+}
+
+async fn renew(outbound: &Openssl, file: &[u8], tsa: Tsa) -> Result<Vec<u8>> {
+    let limits = Limits::default();
+    let network = Network {
+        tsa: Some(&tsa),
+        outbound: Some(outbound),
+        limits: &limits,
+    };
+    renew_with(
+        &Document::new("in.pdf", file.to_vec()),
+        network,
+        SystemTime::now(),
+        Duration::from_secs(60),
+    )
+    .await
+    .map(|d| d.bytes.to_vec())
+}
+
+/// The keys of the VRI dictionary in the DSS of `file`.
+fn vri_keys(file: &[u8]) -> Vec<String> {
+    let pdf = Pdf::load_mem(file).unwrap();
+    let dss = match pdf.catalog().unwrap().get(b"DSS").unwrap() {
+        Object::Reference(id) => pdf.get_dictionary(*id).unwrap().clone(),
+        other => panic!("unexpected DSS {other:?}"),
+    };
+    let vri = match dss.get(b"VRI").unwrap() {
+        Object::Reference(id) => pdf.get_dictionary(*id).unwrap().clone(),
+        Object::Dictionary(d) => d.clone(),
+        other => panic!("unexpected VRI {other:?}"),
+    };
+    vri.iter()
+        .map(|(k, _)| String::from_utf8(k.clone()).unwrap())
+        .collect()
+}
+
+fn sha1_key(contents: &[u8]) -> String {
+    hex::encode_upper(aws_lc_rs::digest::digest(
+        &aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY,
+        contents,
+    ))
+}
+
+#[tokio::test]
+async fn renewing_adds_validation_data_and_a_new_document_timestamp() {
+    let Some(pki) = Pki::make() else { return };
+    let outbound = Openssl::new(&pki);
+    let original = fixtures::pages(1);
+    let signed = sign_at_level(&pki, &outbound, &original, level(Level::BLta))
+        .await
+        .unwrap();
+    let old = byte_ranges(&signed)[1];
+    let old_contents = contents(&signed, old);
+    assert!(!vri_keys(&signed).contains(&sha1_key(&old_contents)));
+
+    let renewed = renew(&outbound, &signed, tsa(&pki)).await.unwrap();
+    assert!(
+        renewed.starts_with(&signed),
+        "what was signed is a prefix of the renewed file"
+    );
+    verify_revision(&original, &renewed, &pki.text("signer.pem"), 0);
+    let ranges = byte_ranges(&renewed);
+    assert_eq!(ranges.len(), 3);
+    assert_eq!(ranges[1], old, "the old timestamp is as it was");
+    let br = ranges[2];
+    assert_eq!(
+        br[2] + br[3],
+        renewed.len(),
+        "the new timestamp covers the file"
+    );
+    assert!(br[1] > signed.len(), "and sits in the update");
+    let tst = tst_info(&contents(&renewed, br));
+    assert_eq!(
+        tst.message_imprint.hashed_message.as_bytes(),
+        &ranges_digest(&renewed, br)[..]
+    );
+    let (_, sig) = signature_field(&renewed, "Signature3");
+    assert_eq!(
+        sig.get(b"Type").unwrap().as_name().unwrap(),
+        b"DocTimeStamp"
+    );
+
+    // The old timestamp now has validation data of its own, written before
+    // the new timestamp so that it is covered by it.
+    let keys = vri_keys(&renewed);
+    assert!(keys.contains(&sha1_key(&old_contents)), "{keys:?}");
+    for key in vri_keys(&signed) {
+        assert!(keys.contains(&key), "the entry {key} is kept");
+    }
+    let vri_at = renewed.windows(4).rposition(|w| w == b"/VRI").unwrap();
+    assert!(vri_at > signed.len() && vri_at < br[1]);
+
+    // A renewed file can be renewed again.
+    let again = renew(&outbound, &renewed, tsa(&pki)).await.unwrap();
+    assert!(again.starts_with(&renewed));
+    let ranges = byte_ranges(&again);
+    assert_eq!(ranges.len(), 4);
+    assert_eq!(ranges[3][2] + ranges[3][3], again.len());
+    verify_revision(&original, &again, &pki.text("signer.pem"), 0);
+    let keys = vri_keys(&again);
+    assert!(
+        keys.contains(&sha1_key(&contents(&renewed, br))),
+        "{keys:?}"
+    );
+
+    // The authority's own certificate, pinned, is enough to renew through.
+    let pinned = Tsa::new("http://127.0.0.1:8/tsa", Duration::from_secs(10))
+        .with_anchors_pem(pki.text("tsa.pem").as_bytes())
+        .unwrap();
+    renew(&outbound, &signed, pinned).await.unwrap();
+}
+
+#[tokio::test]
+async fn only_a_file_that_ends_with_a_trusted_document_timestamp_is_renewed() {
+    let Some(pki) = Pki::make() else { return };
+    let outbound = Openssl::new(&pki);
+    let original = fixtures::pages(1);
+    let refused = |result: Result<Vec<u8>>, what: &str| {
+        let err = result.unwrap_err();
+        assert!(err.is_client_error(), "{err}");
+        assert!(err.to_string().contains(what), "{err}");
+    };
+
+    // No signature at all, a signature with no timestamp after it, and a
+    // signature followed by a DSS.
+    refused(
+        renew(&outbound, &original, tsa(&pki)).await,
+        "no document timestamp covers the whole file",
+    );
+    let b_b = sign_at_level(&pki, &outbound, &original, level(Level::BB))
+        .await
+        .unwrap();
+    refused(
+        renew(&outbound, &b_b, tsa(&pki)).await,
+        "it ends with a signature, not a document timestamp",
+    );
+    let b_lt = sign_at_level(&pki, &outbound, &original, level(Level::BLt))
+        .await
+        .unwrap();
+    refused(
+        renew(&outbound, &b_lt, tsa(&pki)).await,
+        "no document timestamp covers the whole file",
+    );
+
+    let b_lta = sign_at_level(&pki, &outbound, &original, level(Level::BLta))
+        .await
+        .unwrap();
+    // Something written after the timestamp.
+    let mut longer = b_lta.clone();
+    longer.extend_from_slice(b"\n% a note\n");
+    refused(
+        renew(&outbound, &longer, tsa(&pki)).await,
+        "no document timestamp covers the whole file",
+    );
+    // A byte changed under it.
+    assert!(b_lta.starts_with(b"%PDF-1."));
+    let mut changed = b_lta.clone();
+    changed[7] = if changed[7] == b'4' { b'5' } else { b'4' };
+    refused(
+        renew(&outbound, &changed, tsa(&pki)).await,
+        "over other bytes than the file's",
+    );
+
+    // A timestamp from an authority this service does not trust: an
+    // unrelated root, then the impostor with the real root's name.
+    let before = outbound.asked().len();
+    for anchor in [
+        super::tests::self_signed(&rcgen::PKCS_ECDSA_P256_SHA256).cert_pem,
+        pki.text("rogue.pem"),
+    ] {
+        let elsewhere = Tsa::new("http://127.0.0.1:8/tsa", Duration::from_secs(10))
+            .with_anchors_pem(anchor.as_bytes())
+            .unwrap();
+        refused(
+            renew(&outbound, &b_lta, elsewhere).await,
+            "its document timestamp is not trusted",
+        );
+    }
+    assert_eq!(
+        outbound.asked().len(),
+        before,
+        "nothing is fetched for a timestamp that is not trusted"
+    );
+}
+
+#[tokio::test]
+async fn a_revoked_authority_cannot_be_renewed_through() {
+    let Some(pki) = Pki::make() else { return };
+    let outbound = Openssl::new(&pki);
+    let original = fixtures::pages(1);
+    let b_lta = sign_at_level(&pki, &outbound, &original, level(Level::BLta))
+        .await
+        .unwrap();
+    pki.revoke("tsa");
+    let err = renew(&outbound, &b_lta, tsa(&pki)).await.unwrap_err();
+    assert!(!err.is_client_error(), "{err}");
+    assert!(err.to_string().to_lowercase().contains("revoked"), "{err}");
+}
+
+#[test]
+fn renewal_needs_the_timestamp_authority_and_no_key() {
+    let err = Signing::default().check_renewal().unwrap_err();
+    assert!(
+        matches!(&err, Error::Status(503, m) if m.contains("RUSTICDOC_SIGNING_TSA_URL")),
+        "{err}"
+    );
+    let unanchored =
+        Signing::default().with_tsa(Tsa::new("http://127.0.0.1:8/tsa", Duration::from_secs(10)));
+    let err = unanchored.check_renewal().unwrap_err();
+    assert!(
+        err.to_string().contains("RUSTICDOC_SIGNING_TSA_CERT"),
+        "{err}"
+    );
 }

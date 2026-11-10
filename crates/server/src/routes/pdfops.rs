@@ -69,8 +69,9 @@ pub struct RotateForm {
 pub struct MetadataWriteForm {
     #[schema(value_type = String, format = Binary)]
     pub files: String,
-    /// JSON object of keys such as `Title`, `Author`, `Subject`, `Keywords`.
-    #[schema(example = json!({"Title": "Invoice", "Author": "Ada"}))]
+    /// JSON object of keys such as `Title`, `Author`, `Subject`, `Keywords`,
+    /// sent as text.
+    #[schema(value_type = String, example = r#"{"Title": "Invoice", "Author": "Ada"}"#)]
     pub metadata: serde_json::Value,
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
@@ -81,7 +82,8 @@ pub struct MetadataWriteForm {
 pub struct BookmarksWriteForm {
     #[schema(value_type = String, format = Binary)]
     pub files: String,
-    /// JSON array of `{title, page, children}`.
+    /// JSON array of `{title, page, children}`, sent as text.
+    #[schema(value_type = String, example = r#"[{"title": "Summary", "page": 1}]"#)]
     pub bookmarks: serde_json::Value,
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
@@ -99,7 +101,7 @@ pub struct EmbedForm {
 
 #[derive(ToSchema)]
 #[allow(dead_code)]
-pub struct OverlayForm {
+pub struct MarkForm {
     /// The PDF, and optionally an image or PDF to use as the mark.
     #[schema(value_type = Vec<String>, format = Binary)]
     pub files: Vec<String>,
@@ -113,9 +115,10 @@ pub struct OverlayForm {
     pub rotation: Option<f32>,
     /// Relative to the page width, 0 to 1.
     pub scale: Option<f32>,
+    /// Size of a text mark in points. Default 24.
     #[schema(rename = "fontSize")]
     pub font_size: Option<f32>,
-    /// Hex colour such as `#ff0000`.
+    /// Hex colour such as `#ff0000`. Default `#808080`.
     pub colour: Option<String>,
     /// Page selection such as `1-3,5`.
     pub pages: Option<String>,
@@ -128,12 +131,16 @@ pub struct OverlayForm {
 pub struct SignForm {
     /// The PDF first, then one PNG or JPEG per placement. With
     /// `signature=certificate`, at most one image: the visible appearance.
+    /// With `signature=renew`, the PDF alone.
     #[schema(value_type = Vec<String>, format = Binary)]
     pub files: Vec<String>,
     /// `image` (default) draws the images and is not a cryptographic
     /// signature. `certificate` signs with the service's key (PAdES,
     /// `/ETSI.CAdES.detached`), invisibly unless an image or a position is
-    /// sent.
+    /// sent. `renew` takes a file signed at `b-lta` and adds validation data
+    /// for its last document timestamp and a new document timestamp, which
+    /// keeps the signature verifiable after the old timestamp's certificate
+    /// expires; it takes no other field than `outputFilename`.
     #[schema(example = "certificate")]
     pub signature: Option<String>,
     /// 1-based page of each image; repeat the field for several.
@@ -218,6 +225,8 @@ fn pdf_output(name: String, doc: Document, stage: &str) -> Output {
     }
 }
 
+/// Split a PDF
+///
 /// Splits a PDF by page ranges or into fixed intervals; several outputs
 /// come back as a ZIP.
 #[utoipa::path(
@@ -288,6 +297,8 @@ pub async fn split(
     finish(state, hook, request_id(&headers), job).await
 }
 
+/// Flatten a PDF
+///
 /// Flattens forms and annotations into the page content.
 #[utoipa::path(
     post, path = "/v1/pdf/flatten", tag = "pdf",
@@ -315,6 +326,8 @@ pub async fn flatten(
     finish(state, hook, request_id(&headers), job).await
 }
 
+/// Rotate pages
+///
 /// Rotates pages by 90, 180 or 270 degrees.
 #[utoipa::path(
     post, path = "/v1/pdf/rotate", tag = "pdf",
@@ -347,6 +360,8 @@ pub async fn rotate(
     finish(state, hook, request_id(&headers), job).await
 }
 
+/// Optimise a PDF
+///
 /// Recompresses streams and drops unused objects.
 #[utoipa::path(
     post, path = "/v1/pdf/optimize", tag = "pdf",
@@ -374,6 +389,8 @@ pub async fn optimize(
     finish(state, hook, request_id(&headers), job).await
 }
 
+/// Read metadata
+///
 /// Reads the metadata of each PDF sent, keyed by file name.
 #[utoipa::path(
     post, path = "/v1/pdf/metadata/read", tag = "pdf",
@@ -402,6 +419,8 @@ pub async fn metadata_read(
     Ok(Json(all))
 }
 
+/// Write metadata
+///
 /// Writes metadata keys; existing keys not named are kept.
 #[utoipa::path(
     post, path = "/v1/pdf/metadata/write", tag = "pdf",
@@ -440,6 +459,8 @@ pub async fn metadata_write(
     finish(state, hook, request_id(&headers), job).await
 }
 
+/// Read bookmarks
+///
 /// Reads the outline of each PDF sent, keyed by file name.
 #[utoipa::path(
     post, path = "/v1/pdf/bookmarks/read", tag = "pdf",
@@ -468,6 +489,8 @@ pub async fn bookmarks_read(
     Ok(Json(all))
 }
 
+/// Write bookmarks
+///
 /// Replaces the outline.
 #[utoipa::path(
     post, path = "/v1/pdf/bookmarks/write", tag = "pdf",
@@ -504,6 +527,8 @@ pub async fn bookmarks_write(
     finish(state, hook, request_id(&headers), job).await
 }
 
+/// Attach files
+///
 /// Attaches files to a PDF.
 #[utoipa::path(
     post, path = "/v1/pdf/embed", tag = "pdf",
@@ -621,10 +646,12 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
     Ok(overlay)
 }
 
+/// Add a watermark
+///
 /// Puts text, an image or a PDF under the content of each page.
 #[utoipa::path(
     post, path = "/v1/pdf/watermark", tag = "pdf",
-    request_body(content_type = "multipart/form-data", content = OverlayForm),
+    request_body(content_type = "multipart/form-data", content = MarkForm),
     responses((status = 200, description = "The watermarked PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
@@ -652,10 +679,12 @@ pub async fn watermark(
     finish(state, hook, request_id(&headers), job).await
 }
 
+/// Add a stamp
+///
 /// Puts text, an image or a PDF over the content of each page.
 #[utoipa::path(
     post, path = "/v1/pdf/stamp", tag = "pdf",
-    request_body(content_type = "multipart/form-data", content = OverlayForm),
+    request_body(content_type = "multipart/form-data", content = MarkForm),
     responses((status = 200, description = "The stamped PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
@@ -727,6 +756,8 @@ const CERTIFICATE_FIELDS: [&str; 7] = [
     "signingKey",
 ];
 
+/// Sign a PDF
+///
 /// Signs a PDF. With `signature=certificate`, a cryptographic signature with
 /// the key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or the
 /// named key `signingKey` chooses: an incremental update with a PAdES
@@ -736,7 +767,10 @@ const CERTIFICATE_FIELDS: [&str; 7] = [
 /// the signer, the date and the reason. Without a configured key that answers
 /// 503; a timestamp authority or revocation source that fails answers 502. By
 /// default (`signature=image`) the images are drawn at exact coordinates,
-/// which is not a cryptographic signature.
+/// which is not a cryptographic signature. `signature=renew` signs nothing:
+/// it renews the archive timestamp of a file already signed at B-LTA, which
+/// must end with a document timestamp from an authority this service trusts
+/// and be unchanged since; anything else answers 400.
 #[utoipa::path(
     post, path = "/v1/pdf/sign", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = SignForm),
@@ -744,9 +778,9 @@ const CERTIFICATE_FIELDS: [&str; 7] = [
         (status = 200, description = "The signed PDF", content_type = "application/pdf", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody),
-        (status = 403, description = "The caller may not use the signing key", body = ErrorBody),
+        (status = 403, description = "The caller may not use the signing key, or may not renew", body = ErrorBody),
         (status = 502, description = "The timestamp authority or a revocation source failed", body = ErrorBody),
-        (status = 503, description = "signature=certificate and no signing key is configured, the level needs a timestamp authority that is not configured, or the certificate has expired", body = ErrorBody),
+        (status = 503, description = "signature=certificate and no signing key is configured, the level or the renewal needs a timestamp authority that is not configured, or a certificate has expired or been revoked", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
@@ -762,10 +796,56 @@ pub async fn sign(
     match form.field("signature").map(str::trim).unwrap_or("image") {
         "" | "image" => sign_with_images(state, hook, headers, form, doc).await,
         "certificate" => sign_with_certificate(state, principal, hook, headers, form, doc).await,
+        "renew" => renew_timestamp(state, principal, hook, headers, form, doc).await,
         other => Err(ApiError::bad_request(format!(
-            "'signature' must be image or certificate, not '{other}'"
+            "'signature' must be image, certificate or renew, not '{other}'"
         ))),
     }
+}
+
+/// The fields that place a signature on a page.
+const PLACEMENT_FIELDS: [&str; 4] = ["page", "x", "y", "width"];
+
+/// `signature=renew`: validation data for the document timestamp the file
+/// ends with, and a new document timestamp after it. No key is used.
+async fn renew_timestamp(
+    state: AppState,
+    principal: Principal,
+    hook: crate::jobs::Delivery,
+    headers: HeaderMap,
+    form: Form,
+    doc: Document,
+) -> ApiResult<Response> {
+    // A renewal that quietly dropped a reason or an image would pass for a
+    // signature it does not make.
+    if let Some(name) = CERTIFICATE_FIELDS
+        .iter()
+        .chain(&PLACEMENT_FIELDS)
+        .find(|n| form.field(n).is_some())
+    {
+        return Err(ApiError::bad_request(format!(
+            "'{name}' belongs to a signature; signature=renew takes the PDF alone"
+        )));
+    }
+    if !form.files.is_empty() {
+        return Err(ApiError::bad_request(
+            "with signature=renew, send the PDF alone",
+        ));
+    }
+    let signing = &state.engines.signing;
+    crate::signing::authorize_renewal(signing, &principal)?;
+    signing.check_renewal()?;
+    let name = output_name(&form, &doc, "");
+    let st = state.clone();
+    let job = async move {
+        let renewed = st
+            .engines
+            .signing
+            .renew(&doc, st.config.api_timeout)
+            .await?;
+        Ok(pdf_output(name, renewed, "sign"))
+    };
+    finish(state, hook, request_id(&headers), job).await
 }
 
 /// `signature=image`: each image drawn at its place, in one budget.
@@ -924,6 +1004,8 @@ pub fn appearance(form: &Form, image: Option<Document>) -> ApiResult<Option<sign
     }))
 }
 
+/// Embed Factur-X XML
+///
 /// Embeds Factur-X invoice XML and marks the PDF for it.
 #[utoipa::path(
     post, path = "/v1/pdf/factur-x", tag = "pdf",

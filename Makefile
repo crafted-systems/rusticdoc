@@ -3,7 +3,7 @@ PORT ?= 9027
 PYTHON ?= python3
 GENERATOR ?= openapitools/openapi-generator-cli:v7.12.0
 
-.PHONY: build test lint fmt run openapi docker up down outbound isolation disk replicas sign-check golden barcodes office sdk sdk-typescript sdk-python sdk-go clean
+.PHONY: build test lint fmt run openapi docker up down outbound isolation disk replicas sign-check golden barcodes office thirdparty load sdk sdk-typescript sdk-python sdk-go clean
 
 build:
 	cargo build --release -p rusticdoc
@@ -52,8 +52,9 @@ replicas:
 
 # Signs PDFs with the CLI and checks them with pdfsig, and with pyHanko when it
 # is installed or named by PYHANKO: B-B, then B-T, B-LT, B-LTA and certification
-# against a local timestamp authority, OCSP responder and CRL. Needs openssl
-# (3+ for the levels), python3, curl and poppler-utils.
+# against a local timestamp authority, OCSP responder and CRL. Then renews the
+# B-LTA file's timestamp and checks both timestamps with pdfsig and openssl.
+# Needs openssl (3+ for the levels), python3, curl and poppler-utils.
 sign-check:
 	test/sign/verify.sh
 
@@ -74,13 +75,25 @@ barcodes:
 office:
 	test/office/render.sh $(IMAGE)
 
+# Third-party XLSX and PPTX templates, ported to this syntax and checked
+# against what their own projects expect. Downloads them on the first run.
+thirdparty:
+	cargo build -p rusticdoc
+	PYTHON=$(PYTHON) test/thirdparty/run.sh
+
+# The sample invoice posted with ApacheBench at 1 to 16 connections: requests
+# per second, latency and container memory. Takes about eight minutes.
+load:
+	PYTHON=$(PYTHON) test/load/run.sh $(IMAGE)
+
 # SDKs: generated into sdk/<language> from openapi.json. Each is a starting
 # point to publish from its own package manager.
 sdk: sdk-typescript sdk-python sdk-go
 
 sdk-typescript: openapi
 	docker run --rm -v "$(PWD):/local" $(GENERATOR) generate -i /local/openapi.json -g typescript-fetch \
-		-o /local/sdk/typescript --additional-properties=npmName=@rusticdoc/client,supportsES6=true,typescriptThreePlus=true
+		-o /local/sdk/typescript --additional-properties=npmName=@rusticdoc/client,supportsES6=true,typescriptThreePlus=true \
+		--global-property skipFormModel=false
 
 sdk-python: openapi
 	docker run --rm -v "$(PWD):/local" $(GENERATOR) generate -i /local/openapi.json -g python \
@@ -88,7 +101,9 @@ sdk-python: openapi
 
 sdk-go: openapi
 	docker run --rm -v "$(PWD):/local" $(GENERATOR) generate -i /local/openapi.json -g go \
-		-o /local/sdk/go --additional-properties=packageName=rusticdoc,moduleName=github.com/vmosoti/rusticdoc/sdk/go
+		-o /local/sdk/go --additional-properties=packageName=rusticdoc \
+		--git-user-id vmosoti --git-repo-id rusticdoc/sdk/go \
+		--parameter-name-mappings ctx=templateCtx
 
 clean:
 	cargo clean

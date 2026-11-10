@@ -51,6 +51,8 @@ pub struct ConvertForm {
     pub output_filename: Option<String>,
 }
 
+/// Convert documents
+///
 /// Converts uploads and runs any post-processing fields. HTML goes to Fulgur
 /// unless `htmlEngine` says `libreoffice`; everything else to LibreOffice.
 /// Several files come back as a ZIP, or as one PDF with `merge=true`.
@@ -143,6 +145,8 @@ pub async fn convert(
     .await
 }
 
+/// Convert PDFs to PDF/A or PDF/UA
+///
 /// PDFs to PDF/A or PDF/UA through LibreOffice, with the same
 /// post-processing fields as `/v1/convert`.
 #[utoipa::path(

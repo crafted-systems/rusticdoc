@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use crate::program::RowBlock;
+use crate::program::{ColBlock, RowBlock};
 use crate::xml::{self, elem_at, elem_at_mut, Elem, Node, Path, Text};
 
 /// The text of each `si` in `sharedStrings.xml`, rich runs joined.
@@ -448,11 +448,110 @@ impl Layout {
     }
 }
 
+/// The last column a sheet can hold, `XFD`.
+const MAX_COL: i64 = 16_384;
+
+/// One column loop in a rendered row: the template columns it repeats, how
+/// many copies the row holds, and how far the copies of the loops to its
+/// left have already pushed it.
+struct Spun {
+    start: u32,
+    end: u32,
+    copies: i64,
+    before: i64,
+}
+
+impl Spun {
+    fn len(&self) -> i64 {
+        (self.end - self.start) as i64 + 1
+    }
+
+    fn holds(&self, col: u32) -> bool {
+        self.start <= col && col <= self.end
+    }
+}
+
+/// Where the cells of one rendered row land once its column loops have
+/// repeated their cells to the right.
+struct Spread {
+    blocks: Vec<Spun>,
+}
+
+impl Spread {
+    /// `cells` holds the template column of every cell in the rendered row,
+    /// so the cell that opens a loop appears once per copy.
+    fn new(row: u32, cols: &[ColBlock], cells: &[u32]) -> Option<Spread> {
+        let mut mine: Vec<&ColBlock> = cols.iter().filter(|b| b.row == row).collect();
+        mine.sort_by_key(|b| b.start);
+        let mut blocks = Vec::new();
+        let mut before = 0;
+        for b in mine {
+            let spun = Spun {
+                start: b.start,
+                end: b.end,
+                copies: cells.iter().filter(|&&c| c == b.start).count() as i64,
+                before,
+            };
+            // No copies at all pulls the cells to the right back in.
+            before += (spun.copies - 1) * spun.len();
+            blocks.push(spun);
+        }
+        (!blocks.is_empty()).then_some(Spread { blocks })
+    }
+
+    fn block_of(&self, col: u32) -> Option<usize> {
+        self.blocks.iter().position(|b| b.holds(col))
+    }
+
+    /// How far the loops that end left of `col` push it.
+    fn outside(&self, col: u32) -> i64 {
+        self.blocks
+            .iter()
+            .filter(|b| b.end < col)
+            .map(|b| (b.copies - 1) * b.len())
+            .sum()
+    }
+
+    /// The column of a cell, given the loop and copy it sits in.
+    fn cell(&self, col: u32, copy: Option<(usize, i64)>) -> i64 {
+        let at = match copy {
+            Some((i, k)) => col as i64 + self.blocks[i].before + k * self.blocks[i].len(),
+            None => col as i64 + self.outside(col),
+        };
+        at.max(1)
+    }
+
+    /// The column a reference to `col` means, read from a formula in the
+    /// given loop and copy. A formula inside a loop points at its own copy.
+    /// From outside, the start of a range lands on the first copy and its
+    /// end on the last one, so a sum over the loop's cells widens with it.
+    fn refer(&self, col: u32, pos: RefPos, from: Option<(usize, i64)>) -> i64 {
+        let Some(i) = self.block_of(col) else {
+            return self.cell(col, None).min(MAX_COL);
+        };
+        let b = &self.blocks[i];
+        let first = col as i64 + b.before;
+        let at = match from {
+            Some((j, k)) if j == i => first + k * b.len(),
+            // The loop made no copies: point at the column before it.
+            _ if b.copies == 0 => b.start as i64 - 1 + b.before,
+            _ if matches!(pos, RefPos::RangeEnd) => first + (b.copies - 1) * b.len(),
+            _ => first,
+        };
+        at.clamp(1, MAX_COL)
+    }
+}
+
 /// Renumbers the rows of a rendered sheet, re-bases formulas and merged
-/// ranges, and drops cached formula values so they are recomputed. Returns
-/// the layout too, for references from outside the sheet such as its print
+/// ranges, and drops cached formula values so they are recomputed. Cells a
+/// column loop repeated are moved to the right of one another. Returns the
+/// layout too, for references from outside the sheet such as its print
 /// area.
-pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<(String, Layout), String> {
+pub fn rebase(
+    src: &str,
+    blocks: &[RowBlock],
+    cols: &[ColBlock],
+) -> Result<(String, Layout), String> {
     let mut nodes = xml::parse(src)?;
     let root = xml::root_mut(&mut nodes).ok_or("sheet has no root element")?;
     let Some(data) = root.find_mut("sheetData") else {
@@ -484,6 +583,7 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<(String, Layout), String
 
     // Pass 2: rewrite rows, cells and formulas.
     let mut max_row = 0u32;
+    let mut widest = 0i64;
     let mut ri = 0;
     for row in data.children.iter_mut() {
         let Node::Elem(row) = row else { continue };
@@ -493,6 +593,21 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<(String, Layout), String
         let new_r = layout.row(here);
         max_row = max_row.max(new_r);
         row.set_attr("r", &new_r.to_string());
+        let spread = if cols.iter().any(|b| b.row == r) {
+            let cells: Vec<u32> = row
+                .children_named("c")
+                .filter_map(|c| c.attr("r").and_then(|r| split_ref(&r)))
+                .map(|(col, _)| col_to_num(&col))
+                .collect();
+            Spread::new(r, cols, &cells)
+        } else {
+            None
+        };
+        if spread.is_some() {
+            // The row's cells no longer span the columns it claimed.
+            row.remove_attr("spans");
+        }
+        let mut seen = vec![0i64; spread.as_ref().map_or(0, |s| s.blocks.len())];
         for cell in row.children.iter_mut() {
             let Node::Elem(c) = cell else { continue };
             if c.name != "c" {
@@ -501,7 +616,28 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<(String, Layout), String
             let Some((col, _)) = c.attr("r").and_then(|r| split_ref(&r)) else {
                 continue;
             };
-            c.set_attr("r", &format!("{col}{new_r}"));
+            let colnum = col_to_num(&col);
+            // The loop and the copy this cell sits in, if any.
+            let mut copy = None;
+            match &spread {
+                Some(s) => {
+                    if let Some(i) = s.block_of(colnum) {
+                        if s.blocks[i].start == colnum {
+                            seen[i] += 1;
+                        }
+                        copy = Some((i, (seen[i] - 1).max(0)));
+                    }
+                    let at = s.cell(colnum, copy);
+                    if at > MAX_COL {
+                        return Err(format!(
+                            "row {new_r}: column loops fill more than 16,384 columns"
+                        ));
+                    }
+                    widest = widest.max(at);
+                    c.set_attr("r", &format!("{}{new_r}", num_to_col(at as u32)));
+                }
+                None => c.set_attr("r", &format!("{col}{new_r}")),
+            }
             if c.child("f").is_none() {
                 continue;
             }
@@ -509,7 +645,6 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<(String, Layout), String
             c.children
                 .retain(|n| !matches!(n, Node::Elem(e) if e.name == "v"));
             c.remove_attr("t");
-            let colnum = col_to_num(&col);
             let Some(f) = c.child_mut("f") else { continue };
             let mut text = f.text_content();
             if f.attr("t").as_deref() == Some("shared") {
@@ -528,8 +663,15 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<(String, Layout), String
                 f.remove_attr("ref");
                 f.remove_attr("si");
             }
-            let text = rewrite_refs(&text, |c, _, r, _, pos| {
-                (c, layout.shift(Some(here), r, pos))
+            // A reference to this row follows the row's column loops. One to
+            // another row does too, as it would when a cell is filled to the
+            // right, unless its column is fixed as in `$H$1`.
+            let text = rewrite_refs(&text, |c, fixed, to, _, pos| {
+                let c = match &spread {
+                    Some(s) if to == r || !fixed => s.refer(c, pos, copy) as u32,
+                    _ => c,
+                };
+                (c, layout.shift(Some(here), to, pos))
             });
             f.make_open();
             f.children = vec![Node::Text(Text {
@@ -545,6 +687,11 @@ pub fn rebase(src: &str, blocks: &[RowBlock]) -> Result<(String, Layout), String
                 .map(|(a, b)| (a.to_string(), b.to_string()))
         }) {
             if let Some((col, _)) = split_ref(&b) {
+                let col = if widest > col_to_num(&col) as i64 {
+                    num_to_col(widest as u32)
+                } else {
+                    col
+                };
                 dim.set_attr("ref", &format!("{a}:{col}{max_row}"));
             }
         }
@@ -1006,7 +1153,7 @@ mod tests {
             is_loop: true,
             sheet: 0,
         }];
-        let (out, _) = rebase(&sheet(rows), &blocks).unwrap();
+        let (out, _) = rebase(&sheet(rows), &blocks, &[]).unwrap();
         for expected in [
             "<row r=\"5\"><c r=\"A5\"><v>11</v></c><c r=\"B5\"><f>A5*2</f></c></row>",
             "<row r=\"6\"><c r=\"A6\"><v>12</v></c><c r=\"B6\"><f>A6*2</f></c></row>",
@@ -1031,7 +1178,7 @@ mod tests {
             is_loop: true,
             sheet: 0,
         }];
-        let (out, _) = rebase(&sheet(rows), &blocks).unwrap();
+        let (out, _) = rebase(&sheet(rows), &blocks, &[]).unwrap();
         assert!(
             out.contains("<row r=\"4\"><c r=\"B4\"><f>SUM(B3:B3)</f></c></row>"),
             "{out}"
@@ -1045,7 +1192,7 @@ mod tests {
             "<row r=\"2\"><c r=\"C2\"><f t=\"shared\" ref=\"C2:C3\" si=\"0\">A2+$B$1</f><v>1</v></c></row>",
             "<row r=\"3\"><c r=\"C3\"><f t=\"shared\" si=\"0\"/><v>2</v></c></row>"
         );
-        let (out, _) = rebase(&sheet(rows), &[]).unwrap();
+        let (out, _) = rebase(&sheet(rows), &[], &[]).unwrap();
         assert!(out.contains("<c r=\"C2\"><f>A2+$B$1</f></c>"), "{out}");
         assert!(out.contains("<c r=\"C3\"><f>A3+$B$1</f></c>"), "{out}");
     }
@@ -1097,7 +1244,7 @@ mod tests {
         let src = format!(
             "<worksheet><dimension ref=\"A1:B6\"/><sheetData>{rows}</sheetData><mergeCells count=\"2\"><mergeCell ref=\"A2:B2\"/><mergeCell ref=\"C3:D3\"/></mergeCells></worksheet>"
         );
-        let (out, _) = rebase(&src, &[block(2, 4), block(3, 3)]).unwrap();
+        let (out, _) = rebase(&src, &[block(2, 4), block(3, 3)], &[]).unwrap();
         let numbers: Vec<&str> = Regex::new("<row r=\"([0-9]+)\"")
             .unwrap()
             .captures_iter(&out)
@@ -1208,5 +1355,86 @@ mod tests {
             out.contains("<table:table><table:table-row/></table:table>"),
             "the nested row is not marked: {out}"
         );
+    }
+
+    fn cols(row: u32, start: u32, end: u32) -> ColBlock {
+        ColBlock { row, start, end }
+    }
+
+    #[test]
+    fn a_column_loop_moves_its_copies_to_the_right() {
+        // Row 6 repeats B and C three times, and D sums over them.
+        let copy = |v: u32| {
+            format!("<c r=\"B6\"><v>{v}</v></c><c r=\"C6\"><f>B6*B$2+$A6+$H$1</f><v>0</v></c>")
+        };
+        let rows = format!(
+            "<row r=\"2\"><c r=\"B2\"><v>7</v></c></row>\
+             <row r=\"6\" spans=\"1:4\"><c r=\"A6\"><v>1</v></c>{}{}{}\
+             <c r=\"D6\"><f>SUM(B6:C6)+B6</f></c></row>\
+             <row r=\"7\"><c r=\"D7\"><f>D6+B6</f></c></row>",
+            copy(10),
+            copy(11),
+            copy(12)
+        );
+        let (out, _) = rebase(&sheet(&rows), &[], &[cols(6, 2, 3)]).unwrap();
+        for expected in [
+            "<dimension ref=\"A1:H7\"/>",
+            "<row r=\"6\"><c r=\"A6\"><v>1</v></c>",
+            // A copy points at its own cells, in its own row and in others.
+            "<c r=\"B6\"><v>10</v></c><c r=\"C6\"><f>B6*B$2+$A6+$H$1</f></c>",
+            "<c r=\"D6\"><v>11</v></c><c r=\"E6\"><f>D6*D$2+$A6+$H$1</f></c>",
+            "<c r=\"F6\"><v>12</v></c><c r=\"G6\"><f>F6*F$2+$A6+$H$1</f></c>",
+            // From outside, a range widens and a single cell is the first copy.
+            "<c r=\"H6\"><f>SUM(B6:G6)+B6</f></c>",
+            // A row without a column loop is left alone.
+            "<row r=\"7\"><c r=\"D7\"><f>D6+B6</f></c></row>",
+        ] {
+            assert!(out.contains(expected), "missing {expected}\n{out}");
+        }
+    }
+
+    #[test]
+    fn a_column_loop_with_no_items_pulls_the_row_in() {
+        let rows = "<row r=\"6\"><c r=\"A6\"><v>1</v></c>\
+                    <c r=\"D6\"><f>SUM(B6:C6)</f></c><c r=\"E6\"><f>D6</f></c></row>";
+        let (out, _) = rebase(&sheet(rows), &[], &[cols(6, 2, 3)]).unwrap();
+        assert!(
+            out.contains(
+                "<c r=\"A6\"><v>1</v></c><c r=\"B6\"><f>SUM(A6:A6)</f></c><c r=\"C6\"><f>B6</f></c>"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn two_column_loops_in_a_row_push_each_other() {
+        let rows = "<row r=\"3\"><c r=\"A3\"/><c r=\"B3\"/><c r=\"B3\"/><c r=\"C3\"/>\
+                    <c r=\"D3\"/><c r=\"D3\"/><c r=\"D3\"/>\
+                    <c r=\"E3\"><f>SUM(B3:B3)+SUM(D3:D3)+C3</f></c></row>\
+                    <row r=\"4\"><c r=\"A4\"/><c r=\"B4\"/><c r=\"C4\"><f>B4</f></c></row>";
+        // The blocks arrive in any order.
+        let blocks = [cols(3, 4, 4), cols(4, 9, 9), cols(3, 2, 2)];
+        let (out, _) = rebase(&sheet(rows), &[], &blocks).unwrap();
+        for expected in [
+            "<row r=\"3\"><c r=\"A3\"/><c r=\"B3\"/><c r=\"C3\"/><c r=\"D3\"/>\
+             <c r=\"E3\"/><c r=\"F3\"/><c r=\"G3\"/>\
+             <c r=\"H3\"><f>SUM(B3:C3)+SUM(E3:G3)+D3</f></c></row>",
+            "<row r=\"4\"><c r=\"A4\"/><c r=\"B4\"/><c r=\"C4\"><f>B4</f></c></row>",
+            "<dimension ref=\"A1:H4\"/>",
+        ] {
+            let expected = expected.replace("             ", "");
+            assert!(out.contains(&expected), "missing {expected}\n{out}");
+        }
+    }
+
+    #[test]
+    fn a_column_loop_cannot_run_past_the_last_column() {
+        let row = format!("<row r=\"1\">{}</row>", "<c r=\"A1\"/>".repeat(16_385));
+        let err = rebase(&sheet(&row), &[], &[cols(1, 1, 1)])
+            .err()
+            .expect("too many columns is an error");
+        assert!(err.contains("more than 16,384 columns"), "{err}");
+        let row = format!("<row r=\"1\">{}</row>", "<c r=\"A1\"/>".repeat(16_384));
+        assert!(rebase(&sheet(&row), &[], &[cols(1, 1, 1)]).is_ok());
     }
 }

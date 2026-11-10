@@ -176,6 +176,63 @@ else
                 fail "blta: no document timestamp over the whole file"; printf '%s\n' "$report"
             fi
         fi
+        # Renewal adds the validation data for the last document timestamp and
+        # then a new one, with no key. The earlier updates keep their bytes.
+        if [ -f "$WORK/blta.pdf" ]; then
+            if "$BIN" pdf sign "$WORK/blta.pdf" --renew -o "$WORK/renewed.pdf" 2>"$WORK/renewed.log"; then
+                check_pdfsig renewed 1 partial
+                report=$("$PDFSIG" "${NSS[@]}" "$WORK/renewed.pdf" 2>/dev/null)
+                old=$(printf '%s\n' "$report" | awk '/^Signature #2:/{on=1;next} /^Signature #/{on=0} on')
+                new=$(printf '%s\n' "$report" | awk '/^Signature #3:/{on=1;next} /^Signature #/{on=0} on')
+                if printf '%s\n' "$old" | grep -q "Not total document signed" \
+                    && printf '%s\n' "$new" | grep -q "^  - Total document signed"; then
+                    pass "pdfsig renewed: the new document timestamp covers the whole file, the old one its revision"
+                else
+                    fail "renewed: the document timestamps do not cover what they should"; printf '%s\n' "$report"
+                fi
+                # pdfsig reads a document timestamp's coverage but does not
+                # verify its token, so openssl does: each token against the
+                # bytes its byte range covers and the test root.
+                python3 -I - "$WORK/renewed.pdf" "$WORK/renewed-ts" <<'EOF'
+import re, sys
+data = open(sys.argv[1], "rb").read()
+ranges = re.findall(rb"/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]", data)
+for n, found in enumerate(ranges[1:], 2):
+    a, b, c, d = map(int, found)
+    token = bytes.fromhex(data[b + 1 : c - 1].decode())
+    # The value is padded with zeros after the DER; its header gives the length.
+    first = token[1]
+    size = 2 + first if first < 0x80 else 2 + (first & 0x7F) + int.from_bytes(token[2 : 2 + (first & 0x7F)], "big")
+    open(f"{sys.argv[2]}-{n}.der", "wb").write(token[:size])
+    open(f"{sys.argv[2]}-{n}.bin", "wb").write(data[a : a + b] + data[c : c + d])
+EOF
+                for n in 2 3; do
+                    if openssl ts -verify -token_in -in "$WORK/renewed-ts-$n.der" \
+                        -data "$WORK/renewed-ts-$n.bin" -CAfile "$PKI/root.pem" >"$WORK/renewed-ts-$n.log" 2>&1; then
+                        pass "openssl renewed #$n: the document timestamp verifies over its byte range"
+                    else
+                        fail "renewed #$n: openssl does not verify the document timestamp: $(cat "$WORK/renewed-ts-$n.log")"
+                    fi
+                done
+                size=$(($(wc -c < "$WORK/blta.pdf")))
+                if head -c "$size" "$WORK/renewed.pdf" | cmp -s - "$WORK/blta.pdf"; then
+                    pass "the signed file's bytes are a prefix of the renewed file"
+                else
+                    fail "the renewed file does not start with the signed file's bytes"
+                fi
+            else
+                fail "renewed: rusticdoc pdf sign --renew failed: $(cat "$WORK/renewed.log")"
+            fi
+        fi
+        # Only a file that ends with a document timestamp is renewed.
+        if [ -f "$WORK/bt.pdf" ]; then
+            if "$BIN" pdf sign "$WORK/bt.pdf" --renew -o "$WORK/not-renewed.pdf" 2>"$WORK/not-renewed.log" \
+                || [ -f "$WORK/not-renewed.pdf" ]; then
+                fail "a file signed at b-t was renewed"
+            else
+                pass "a file signed at b-t is not renewed, and no file is written"
+            fi
+        fi
         # A timestamp authority that is down fails the request; nothing is written.
         if RUSTICDOC_SIGNING_TSA_URL=http://127.0.0.1:9/tsa "$BIN" pdf sign "$WORK/fx/three-pages.pdf" \
             "${RSA[@]}" --level b-t -o "$WORK/down.pdf" 2>"$WORK/down.log" || [ -f "$WORK/down.pdf" ]; then

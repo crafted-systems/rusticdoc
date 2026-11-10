@@ -225,6 +225,8 @@ async fn check(state: &AppState, doc: &Document) -> ApiResult<()> {
     }
 }
 
+/// Upload a template
+///
 /// Stores a template and returns its id. Syntax is checked now, without data, so a
 /// broken template is refused here rather than at its first render. The content
 /// never changes: to change a template, store the new one and use its id.
@@ -312,6 +314,8 @@ pub async fn upload(
         .into_response())
 }
 
+/// List templates
+///
 /// Lists this caller's templates, oldest first.
 #[utoipa::path(
     get, path = "/v1/templates", tag = "templates", operation_id = "listTemplates",
@@ -336,6 +340,8 @@ pub async fn list(
     Ok(Json(page))
 }
 
+/// Get a template
+///
 /// One template's details.
 #[utoipa::path(
     get, path = "/v1/templates/{id}", tag = "templates", operation_id = "getTemplate",
@@ -363,6 +369,8 @@ pub async fn show(
     Ok(Json(meta))
 }
 
+/// Download a template
+///
 /// Downloads a template as it was uploaded.
 #[utoipa::path(
     get, path = "/v1/templates/{id}/content", tag = "templates", operation_id = "downloadTemplate",
@@ -393,6 +401,8 @@ pub async fn content(
         .into_response())
 }
 
+/// Delete a template
+///
 /// Deletes a template. Every replica stops serving it at once.
 #[utoipa::path(
     delete, path = "/v1/templates/{id}", tag = "templates", operation_id = "deleteTemplate",
@@ -439,6 +449,8 @@ pub struct TemplateVariables {
     pub example: serde_json::Value,
 }
 
+/// List a template's variables
+///
 /// Lists the data a template reads: each path, which paths are arrays it loops
 /// over, and the fields it reads from their items, with a skeleton of data.
 /// Read from the template's tags, so a path built at render time, such as
@@ -512,6 +524,8 @@ pub struct PreviewForm {
     pub html_engine: Option<String>,
 }
 
+/// Preview a template
+///
 /// Renders a stored template with sample data and draws one page as a PNG,
 /// for checking a template without opening the document. Office templates
 /// convert with LibreOffice, HTML with its HTML engine, and PDF forms are filled;

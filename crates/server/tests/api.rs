@@ -1395,7 +1395,7 @@ async fn certificate_signatures_sign_with_the_configured_key() {
                 ("files", Some("in.pdf"), original.clone()),
                 ("signature", None, b"wet-ink".to_vec()),
             ],
-            "image or certificate",
+            "image, certificate or renew",
         ),
     ] {
         let res = router
@@ -1675,6 +1675,103 @@ async fn timestamped_levels_need_a_timestamp_authority_reached_under_the_outboun
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
     assert!(text(res).await.contains("not allowed"));
+}
+
+#[tokio::test]
+async fn renewals_take_a_file_signed_at_b_lta_and_no_signature_fields() {
+    use rusticdoc_core::pdfops::fixtures;
+    let dir = tempfile::tempdir().unwrap();
+    let renew = |extra: Option<(&'static str, &[u8])>| {
+        let mut parts = vec![
+            ("files", Some("in.pdf"), fixtures::pages(1)),
+            ("signature", None, b"renew".to_vec()),
+        ];
+        parts.extend(extra.map(|(name, value)| (name, None, value.to_vec())));
+        post_binary("/v1/pdf/sign", &parts)
+    };
+
+    // No timestamp authority: a 503 that names the setting, key or no key.
+    for config in [config(), signing_config(dir.path())] {
+        let res = app(AppState::new(config))
+            .oneshot(renew(None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(text(res).await.contains("RUSTICDOC_SIGNING_TSA_URL"));
+    }
+
+    // With one, a file that does not end with a document timestamp is the
+    // client's mistake, found before the authority is asked for anything.
+    let mut with_tsa = signing_config(dir.path());
+    with_tsa.signing.tsa = Some(
+        rusticdoc_core::pdfops::sign::Tsa::new("http://127.0.0.1:9/tsa", Duration::from_secs(2))
+            .with_anchors_pem(&std::fs::read(dir.path().join("cert.pem")).unwrap())
+            .unwrap(),
+    );
+    let router = app(AppState::new(with_tsa.clone()));
+    let res = router.clone().oneshot(renew(None)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let message = text(res).await;
+    assert!(message.contains("cannot be renewed"), "{message}");
+    assert!(message.contains("b-lta"), "{message}");
+
+    // A renewal signs nothing, so it takes nothing a signature takes.
+    for (name, value) in [
+        ("reason", &b"Approved"[..]),
+        ("level", b"b-lta"),
+        ("x", b"72"),
+    ] {
+        let res = router
+            .clone()
+            .oneshot(renew(Some((name, value))))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert!(text(res).await.contains(name));
+    }
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), fixtures::pages(1)),
+                ("files", Some("mark.png"), b"\x89PNG\r\n\x1a\n".to_vec()),
+                ("signature", None, b"renew".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let res = router
+        .oneshot(post_binary(
+            "/v1/pdf/sign",
+            &[
+                ("files", Some("in.pdf"), fixtures::pages(1)),
+                ("signature", None, b"renewal".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(text(res).await.contains("image, certificate or renew"));
+
+    // Where every key has an allow list, a caller on none of them may not
+    // renew either.
+    let mut listed = with_tsa;
+    listed.api_keys = vec!["alpha".into(), "beta".into()];
+    listed.signing.default_allow = Some(vec![rusticdoc_server::auth::key_principal("alpha").0]);
+    let router = app(AppState::new(listed));
+    let as_caller = |caller: &str| {
+        let mut req = renew(None);
+        req.headers_mut()
+            .insert("x-api-key", caller.parse().unwrap());
+        req
+    };
+    let res = router.clone().oneshot(as_caller("beta")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(text(res).await.contains("signing_key_forbidden"));
+    let res = router.oneshot(as_caller("alpha")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

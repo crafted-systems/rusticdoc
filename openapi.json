@@ -15,7 +15,8 @@
         "tags": [
           "service"
         ],
-        "summary": "Liveness. With credentials configured, a caller without them sees the status\nand nothing else.",
+        "summary": "Liveness",
+        "description": "Liveness. With credentials configured, a caller without them sees the status\nand nothing else.",
         "operationId": "health",
         "responses": {
           "200": {
@@ -36,7 +37,8 @@
         "tags": [
           "service"
         ],
-        "summary": "Prometheus text format. With credentials configured it needs them too, unless\n`RUSTICDOC_METRICS_PUBLIC` is set.",
+        "summary": "Metrics",
+        "description": "Prometheus text format. With credentials configured it needs them too, unless\n`RUSTICDOC_METRICS_PUBLIC` is set.",
         "operationId": "metrics",
         "responses": {
           "200": {
@@ -53,7 +55,8 @@
         "tags": [
           "service"
         ],
-        "summary": "Readiness: liveness, and with a store, this replica's copy of the stored fonts\nbeing complete. A load balancer should send no documents here before that,\nbecause they would quietly come out in a fallback font.",
+        "summary": "Readiness",
+        "description": "Readiness: liveness, and with a store, this replica's copy of the stored fonts\nbeing complete. A load balancer should send no documents here before that,\nbecause they would quietly come out in a fallback font.",
         "operationId": "ready",
         "responses": {
           "200": {
@@ -74,7 +77,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Lists this caller's aliases by name, each with the template it names now.",
+        "summary": "List aliases",
+        "description": "Lists this caller's aliases by name, each with the template it names now.",
         "operationId": "listAliases",
         "parameters": [
           {
@@ -153,7 +157,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "An alias, the template it names now, and its history: every version since\nit was last deleted, oldest first.",
+        "summary": "Get an alias",
+        "description": "An alias, the template it names now, and its history: every version since\nit was last deleted, oldest first.",
         "operationId": "getAlias",
         "parameters": [
           {
@@ -224,7 +229,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Points an alias at a template. A new alias starts at version 1; pointing an\nexisting one elsewhere adds a version, and the earlier ones stay. Every\nreplica sees the change at once.",
+        "summary": "Set an alias",
+        "description": "Points an alias at a template. A new alias starts at version 1; pointing an\nexisting one elsewhere adds a version, and the earlier ones stay. Every\nreplica sees the change at once.",
         "operationId": "setAlias",
         "parameters": [
           {
@@ -340,7 +346,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Deletes an alias and its history. The templates it named stay. Setting it\nagain starts at version 1.",
+        "summary": "Delete an alias",
+        "description": "Deletes an alias and its history. The templates it named stay. Setting it\nagain starts at version 1.",
         "operationId": "deleteAlias",
         "parameters": [
           {
@@ -406,7 +413,8 @@
         "tags": [
           "convert"
         ],
-        "summary": "Converts uploads and runs any post-processing fields. HTML goes to Fulgur\nunless `htmlEngine` says `libreoffice`; everything else to LibreOffice.\nSeveral files come back as a ZIP, or as one PDF with `merge=true`.",
+        "summary": "Convert documents",
+        "description": "Converts uploads and runs any post-processing fields. HTML goes to Fulgur\nunless `htmlEngine` says `libreoffice`; everything else to LibreOffice.\nSeveral files come back as a ZIP, or as one PDF with `merge=true`.",
         "operationId": "convert",
         "requestBody": {
           "content": {
@@ -471,7 +479,8 @@
         "tags": [
           "fonts"
         ],
-        "summary": "Lists the fonts LibreOffice and the PDF stage can use.",
+        "summary": "List fonts",
+        "description": "Lists the fonts LibreOffice and the PDF stage can use.",
         "operationId": "list",
         "responses": {
           "200": {
@@ -504,7 +513,8 @@
         "tags": [
           "fonts"
         ],
-        "summary": "Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,\nor one such file. Takes an admin. They are in use on this replica when this\nreturns, and on the others within `syncIntervalSeconds`.",
+        "summary": "Upload fonts",
+        "description": "Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,\nor one such file. Takes an admin. They are in use on this replica when this\nreturns, and on the others within `syncIntervalSeconds`.",
         "operationId": "uploadFonts",
         "requestBody": {
           "content": {
@@ -586,7 +596,8 @@
         "tags": [
           "fonts"
         ],
-        "summary": "Rescans the fonts directory and restarts idle LibreOffice workers, so a\nnew font needs no container restart. Busy workers restart after their\ncurrent job.",
+        "summary": "Reload fonts",
+        "description": "Rescans the fonts directory and restarts idle LibreOffice workers, so a\nnew font needs no container restart. Busy workers restart after their\ncurrent job.",
         "operationId": "reload",
         "responses": {
           "200": {
@@ -638,7 +649,8 @@
         "tags": [
           "fonts"
         ],
-        "summary": "Deletes a stored font. Takes an admin. It leaves this replica when this\nreturns, and the others within the sync interval. Documents that name it fall\nback to another font.",
+        "summary": "Delete a font",
+        "description": "Deletes a stored font. Takes an admin. It leaves this replica when this\nreturns, and the others within the sync interval. Documents that name it fall\nback to another font.",
         "operationId": "deleteFont",
         "parameters": [
           {
@@ -714,7 +726,8 @@
         "tags": [
           "jobs"
         ],
-        "summary": "Where a background job is. Ask again until `status` is `done` or `failed`;\n`Retry-After` says how soon. A job and its result are kept for\n`RUSTICDOC_JOB_TTL` after it ends, then removed.",
+        "summary": "Get a job",
+        "description": "Where a background job is. Ask again until `status` is `done` or `failed`;\n`Retry-After` says how soon. A job and its result are kept for\n`RUSTICDOC_JOB_TTL` after it ends, then removed.",
         "operationId": "getJob",
         "parameters": [
           {
@@ -787,7 +800,8 @@
         "tags": [
           "jobs"
         ],
-        "summary": "Downloads what a finished job made, as the request would have answered it.",
+        "summary": "Download a job's result",
+        "description": "Downloads what a finished job made, as the request would have answered it.",
         "operationId": "getJobResult",
         "parameters": [
           {
@@ -870,7 +884,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Reads the outline of each PDF sent, keyed by file name.",
+        "summary": "Read bookmarks",
+        "description": "Reads the outline of each PDF sent, keyed by file name.",
         "operationId": "bookmarks_read",
         "requestBody": {
           "content": {
@@ -922,7 +937,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Replaces the outline.",
+        "summary": "Write bookmarks",
+        "description": "Replaces the outline.",
         "operationId": "bookmarks_write",
         "requestBody": {
           "content": {
@@ -974,7 +990,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "PDFs to PDF/A or PDF/UA through LibreOffice, with the same\npost-processing fields as `/v1/convert`.",
+        "summary": "Convert PDFs to PDF/A or PDF/UA",
+        "description": "PDFs to PDF/A or PDF/UA through LibreOffice, with the same\npost-processing fields as `/v1/convert`.",
         "operationId": "convert_pdf",
         "requestBody": {
           "content": {
@@ -1039,7 +1056,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Attaches files to a PDF.",
+        "summary": "Attach files",
+        "description": "Attaches files to a PDF.",
         "operationId": "embed",
         "requestBody": {
           "content": {
@@ -1091,7 +1109,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Encrypts a PDF with AES-256.",
+        "summary": "Encrypt a PDF",
+        "description": "Encrypts a PDF with AES-256.",
         "operationId": "encrypt",
         "requestBody": {
           "content": {
@@ -1156,7 +1175,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Embeds Factur-X invoice XML and marks the PDF for it.",
+        "summary": "Embed Factur-X XML",
+        "description": "Embeds Factur-X invoice XML and marks the PDF for it.",
         "operationId": "facturx",
         "requestBody": {
           "content": {
@@ -1208,7 +1228,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Flattens forms and annotations into the page content.",
+        "summary": "Flatten a PDF",
+        "description": "Flattens forms and annotations into the page content.",
         "operationId": "flatten",
         "requestBody": {
           "content": {
@@ -1260,13 +1281,14 @@
         "tags": [
           "pdf-forms"
         ],
-        "summary": "Lists a PDF's form fields with their kinds, pages and values.",
+        "summary": "List form fields",
+        "description": "Lists a PDF's form fields with their kinds, pages and values.",
         "operationId": "fields",
         "requestBody": {
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/OverlayForm"
+                "$ref": "#/components/schemas/FieldsForm"
               }
             }
           },
@@ -1325,7 +1347,8 @@
         "tags": [
           "pdf-forms"
         ],
-        "summary": "Fills a PDF form from data, applying tags in annotations, optionally\nflattening the result.",
+        "summary": "Fill a form",
+        "description": "Fills a PDF form from data, applying tags in annotations, optionally\nflattening the result.",
         "operationId": "fill",
         "requestBody": {
           "content": {
@@ -1400,7 +1423,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Merges PDFs in the order sent.",
+        "summary": "Merge PDFs",
+        "description": "Merges PDFs in the order sent.",
         "operationId": "merge",
         "requestBody": {
           "content": {
@@ -1465,7 +1489,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Reads the metadata of each PDF sent, keyed by file name.",
+        "summary": "Read metadata",
+        "description": "Reads the metadata of each PDF sent, keyed by file name.",
         "operationId": "metadata_read",
         "requestBody": {
           "content": {
@@ -1517,7 +1542,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Writes metadata keys; existing keys not named are kept.",
+        "summary": "Write metadata",
+        "description": "Writes metadata keys; existing keys not named are kept.",
         "operationId": "metadata_write",
         "requestBody": {
           "content": {
@@ -1569,7 +1595,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Recompresses streams and drops unused objects.",
+        "summary": "Optimise a PDF",
+        "description": "Recompresses streams and drops unused objects.",
         "operationId": "optimize",
         "requestBody": {
           "content": {
@@ -1621,7 +1648,8 @@
         "tags": [
           "pdf-forms"
         ],
-        "summary": "Lays the second PDF over the first, page by page.",
+        "summary": "Overlay a PDF",
+        "description": "Lays the second PDF over the first, page by page.",
         "operationId": "overlay",
         "requestBody": {
           "content": {
@@ -1686,7 +1714,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Rotates pages by 90, 180 or 270 degrees.",
+        "summary": "Rotate pages",
+        "description": "Rotates pages by 90, 180 or 270 degrees.",
         "operationId": "rotate",
         "requestBody": {
           "content": {
@@ -1738,7 +1767,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Signs a PDF. With `signature=certificate`, a cryptographic signature with\nthe key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or the\nnamed key `signingKey` chooses: an incremental update with a PAdES\n`/ETSI.CAdES.detached` signature at the `level` asked for (B-B to B-LTA),\napproving or, with `certify`, certifying. It is invisible, shown with the\none image sent, or, with a position and no image, shown as text naming\nthe signer, the date and the reason. Without a configured key that answers\n503; a timestamp authority or revocation source that fails answers 502. By\ndefault (`signature=image`) the images are drawn at exact coordinates,\nwhich is not a cryptographic signature.",
+        "summary": "Sign a PDF",
+        "description": "Signs a PDF. With `signature=certificate`, a cryptographic signature with\nthe key in `RUSTICDOC_SIGNING_KEY` and `RUSTICDOC_SIGNING_CERT`, or the\nnamed key `signingKey` chooses: an incremental update with a PAdES\n`/ETSI.CAdES.detached` signature at the `level` asked for (B-B to B-LTA),\napproving or, with `certify`, certifying. It is invisible, shown with the\none image sent, or, with a position and no image, shown as text naming\nthe signer, the date and the reason. Without a configured key that answers\n503; a timestamp authority or revocation source that fails answers 502. By\ndefault (`signature=image`) the images are drawn at exact coordinates,\nwhich is not a cryptographic signature. `signature=renew` signs nothing:\nit renews the archive timestamp of a file already signed at B-LTA, which\nmust end with a document timestamp from an authority this service trusts\nand be unchanged since; anything else answers 400.",
         "operationId": "sign",
         "requestBody": {
           "content": {
@@ -1775,7 +1805,7 @@
             }
           },
           "403": {
-            "description": "The caller may not use the signing key",
+            "description": "The caller may not use the signing key, or may not renew",
             "content": {
               "application/json": {
                 "schema": {
@@ -1795,7 +1825,7 @@
             }
           },
           "503": {
-            "description": "signature=certificate and no signing key is configured, the level needs a timestamp authority that is not configured, or the certificate has expired",
+            "description": "signature=certificate and no signing key is configured, the level or the renewal needs a timestamp authority that is not configured, or a certificate has expired or been revoked",
             "content": {
               "application/json": {
                 "schema": {
@@ -1823,7 +1853,8 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Splits a PDF by page ranges or into fixed intervals; several outputs\ncome back as a ZIP.",
+        "summary": "Split a PDF",
+        "description": "Splits a PDF by page ranges or into fixed intervals; several outputs\ncome back as a ZIP.",
         "operationId": "split",
         "requestBody": {
           "content": {
@@ -1875,13 +1906,14 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Puts text, an image or a PDF over the content of each page.",
+        "summary": "Add a stamp",
+        "description": "Puts text, an image or a PDF over the content of each page.",
         "operationId": "stamp",
         "requestBody": {
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/OverlayForm"
+                "$ref": "#/components/schemas/MarkForm"
               }
             }
           },
@@ -1927,13 +1959,14 @@
         "tags": [
           "pdf"
         ],
-        "summary": "Puts text, an image or a PDF under the content of each page.",
+        "summary": "Add a watermark",
+        "description": "Puts text, an image or a PDF under the content of each page.",
         "operationId": "watermark",
         "requestBody": {
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/OverlayForm"
+                "$ref": "#/components/schemas/MarkForm"
               }
             }
           },
@@ -1979,8 +2012,8 @@
         "tags": [
           "render"
         ],
-        "summary": "Fills a template and runs the steps.",
-        "description": "Send a multipart form, or JSON with a `templateId` (see `RenderJson`).\n\nAdd `Prefer: respond-async` to get 202 at once, with the job in the body and\nits address in `Location`, and fetch the result from `/v1/jobs/{id}/result`\nonce it is done. This needs `RUSTICDOC_STORE`.\n\nAdd `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its\nown key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself\nwhen the service requires no credentials; `rusticdoc webhook-secret` prints it.",
+        "summary": "Render a template",
+        "description": "Fills a template and runs the steps.\n\nSend a multipart form, or JSON with a `templateId` (see `RenderJson`).\n\nAdd `Prefer: respond-async` to get 202 at once, with the job in the body and\nits address in `Location`, and fetch the result from `/v1/jobs/{id}/result`\nonce it is done. This needs `RUSTICDOC_STORE`.\n\nAdd `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its\nown key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself\nwhen the service requires no credentials; `rusticdoc webhook-secret` prints it.",
         "operationId": "render",
         "parameters": [
           {
@@ -2128,8 +2161,8 @@
         "tags": [
           "render"
         ],
-        "summary": "Renders the template once per element of an array in the data and\nreturns the files in a ZIP.",
-        "description": "`splitBy` names the array with a dotted path such as `items` or\n`order.lines`. Each render sees the whole data with that array replaced\nby the one element, plus `item` (the element) and `batch` (`index`,\n`count`). `batchName` is a template for each file's name, default\n`{{ batch.index }}`.",
+        "summary": "Render a batch",
+        "description": "Renders the template once per element of an array in the data and\nreturns the files in a ZIP.\n\n`splitBy` names the array with a dotted path such as `items` or\n`order.lines`. Each render sees the whole data with that array replaced\nby the one element, plus `item` (the element) and `batch` (`index`,\n`count`). `batchName` is a template for each file's name, default\n`{{ batch.index }}`.",
         "operationId": "batch",
         "parameters": [
           {
@@ -2235,7 +2268,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Lists this caller's templates, oldest first.",
+        "summary": "List templates",
+        "description": "Lists this caller's templates, oldest first.",
         "operationId": "listTemplates",
         "parameters": [
           {
@@ -2312,7 +2346,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Stores a template and returns its id. Syntax is checked now, without data, so a\nbroken template is refused here rather than at its first render. The content\nnever changes: to change a template, store the new one and use its id.",
+        "summary": "Upload a template",
+        "description": "Stores a template and returns its id. Syntax is checked now, without data, so a\nbroken template is refused here rather than at its first render. The content\nnever changes: to change a template, store the new one and use its id.",
         "operationId": "uploadTemplate",
         "requestBody": {
           "content": {
@@ -2414,7 +2449,8 @@
         "tags": [
           "render"
         ],
-        "summary": "Checks a template against sample data without converting anything.",
+        "summary": "Validate a template",
+        "description": "Checks a template against sample data without converting anything.",
         "operationId": "validate",
         "requestBody": {
           "content": {
@@ -2471,7 +2507,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "One template's details.",
+        "summary": "Get a template",
+        "description": "One template's details.",
         "operationId": "getTemplate",
         "parameters": [
           {
@@ -2542,7 +2579,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Deletes a template. Every replica stops serving it at once.",
+        "summary": "Delete a template",
+        "description": "Deletes a template. Every replica stops serving it at once.",
         "operationId": "deleteTemplate",
         "parameters": [
           {
@@ -2608,7 +2646,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Downloads a template as it was uploaded.",
+        "summary": "Download a template",
+        "description": "Downloads a template as it was uploaded.",
         "operationId": "downloadTemplate",
         "parameters": [
           {
@@ -2681,7 +2720,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Renders a stored template with sample data and draws one page as a PNG,\nfor checking a template without opening the document. Office templates\nconvert with LibreOffice, HTML with its HTML engine, and PDF forms are filled;\npoppler's `pdftoppm` draws the page. The page count is in `X-Page-Count`.",
+        "summary": "Preview a template",
+        "description": "Renders a stored template with sample data and draws one page as a PNG,\nfor checking a template without opening the document. Office templates\nconvert with LibreOffice, HTML with its HTML engine, and PDF forms are filled;\npoppler's `pdftoppm` draws the page. The page count is in `X-Page-Count`.",
         "operationId": "previewTemplate",
         "parameters": [
           {
@@ -2799,7 +2839,8 @@
         "tags": [
           "templates"
         ],
-        "summary": "Lists the data a template reads: each path, which paths are arrays it loops\nover, and the fields it reads from their items, with a skeleton of data.\nRead from the template's tags, so a path built at render time, such as\n`row[column]`, is listed only as far as it is written.",
+        "summary": "List a template's variables",
+        "description": "Lists the data a template reads: each path, which paths are arrays it loops\nover, and the fields it reads from their items, with a skeleton of data.\nRead from the template's tags, so a path built at render time, such as\n`row[column]`, is listed only as far as it is written.",
         "operationId": "templateVariables",
         "parameters": [
           {
@@ -2882,7 +2923,8 @@
         "tags": [
           "service"
         ],
-        "summary": "Engine versions and paths.",
+        "summary": "Engine versions",
+        "description": "Engine versions and paths.",
         "operationId": "version",
         "responses": {
           "200": {
@@ -3033,7 +3075,7 @@
       "BinaryFile": {
         "type": "string",
         "format": "binary",
-        "description": "A file in a response, for the API description: generated clients return\nit as bytes."
+        "description": "The file, as bytes."
       },
       "BookmarksWriteForm": {
         "type": "object",
@@ -3043,7 +3085,9 @@
         ],
         "properties": {
           "bookmarks": {
-            "description": "JSON array of `{title, page, children}`."
+            "type": "string",
+            "description": "JSON array of `{title, page, children}`, sent as text.",
+            "example": "[{\"title\": \"Summary\", \"page\": 1}]"
           },
           "files": {
             "type": "string",
@@ -3317,15 +3361,39 @@
           }
         }
       },
+      "FieldsForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "string",
+            "format": "binary",
+            "description": "The PDF whose form fields to list."
+          }
+        }
+      },
       "FillForm": {
         "type": "object",
         "required": [
           "files"
         ],
         "properties": {
-          "ctx": {},
+          "ctx": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "JSON object visible as `ctx`, sent as text."
+          },
           "data": {
-            "description": "JSON object, sent as text or as a file; a field named `customer.name` takes\nthat path."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "JSON object, sent as text or as a file; a field named `customer.name` takes\nthat path.",
+            "example": "{\"customer\": {\"name\": \"Ada\"}}"
           },
           "files": {
             "type": "string",
@@ -3563,6 +3631,88 @@
           }
         }
       },
+      "MarkForm": {
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "colour": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hex colour such as `#ff0000`. Default `#808080`."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "The PDF, and optionally an image or PDF to use as the mark."
+          },
+          "fontSize": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Size of a text mark in points. Default 24."
+          },
+          "opacity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "0 to 1."
+          },
+          "outputFilename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pages": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Page selection such as `1-3,5`."
+          },
+          "position": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`top-left`, `top-center`, `top-right`, `center`, `bottom-left`, `bottom-center`, `bottom-right`."
+          },
+          "rotation": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Degrees."
+          },
+          "scale": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Relative to the page width, 0 to 1."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Text for a text mark; omit when sending an image or PDF."
+          }
+        }
+      },
       "MergeForm": {
         "type": "object",
         "required": [
@@ -3597,7 +3747,9 @@
             "format": "binary"
           },
           "metadata": {
-            "description": "JSON object of keys such as `Title`, `Author`, `Subject`, `Keywords`."
+            "type": "string",
+            "description": "JSON object of keys such as `Title`, `Author`, `Subject`, `Keywords`,\nsent as text.",
+            "example": "{\"Title\": \"Invoice\", \"Author\": \"Ada\"}"
           },
           "outputFilename": {
             "type": [
@@ -3721,12 +3873,7 @@
       },
       "RenderForm": {
         "type": "object",
-        "description": "The multipart form `/v1/render` accepts. Documented here; parsed by hand.",
-        "required": [
-          "template",
-          "underlay",
-          "files"
-        ],
+        "description": "The multipart form `/v1/render`, `/v1/render/batch` and\n`/v1/templates/validate` accept.",
         "properties": {
           "assets": {
             "type": "array",
@@ -3735,6 +3882,23 @@
               "format": "binary"
             },
             "description": "Images (PNG, JPEG, GIF, SVG), stylesheets and fonts an HTML page names\nby file name, as in `<img src=\"logo.png\">`. Every stylesheet applies to\nthe whole page. Nothing is fetched from anywhere else."
+          },
+          "batchName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `/v1/render/batch`: each file's name, as a template."
+          },
+          "bookmarks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "For `bookmarks`: a JSON array of `{\"title\", \"page\", \"children\"}` that\nreplaces the outline, sent as text."
           },
           "certify": {
             "type": [
@@ -3753,6 +3917,10 @@
             "description": "For `sign`: how to reach the signer."
           },
           "ctx": {
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "JSON object visible as `ctx`, sent as text or as a file."
           },
           "currency": {
@@ -3763,7 +3931,49 @@
             "description": "The currency `currency` uses when given none, such as `EUR`. Wins over\nthe template's."
           },
           "data": {
-            "description": "JSON object the template sees as its root, sent as text or as a file."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "JSON object the template sees as its root, sent as text or as a file.",
+            "example": "{\"customer\": {\"name\": \"Ada\"}}"
+          },
+          "downloadFrom": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "Files to fetch from URLs instead of uploading them, as a JSON array of\n`{\"url\": \"...\"}` sent as text. At most 10 entries."
+          },
+          "embeds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "For `embed`: the files to attach."
+          },
+          "embedsMetadata": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For `embed`: a JSON object mapping a file name to\n`{\"mimeType\": \"...\"}`, sent as text."
+          },
+          "facturxConformanceLevel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `factur-x`: `MINIMUM`, `BASIC_WL`, `BASIC`, `EN16931` (default) or\n`EXTENDED`."
+          },
+          "facturxXml": {
+            "type": "string",
+            "format": "binary",
+            "description": "For `factur-x`: the invoice XML to embed."
           },
           "files": {
             "type": "array",
@@ -3772,6 +3982,21 @@
               "format": "binary"
             },
             "description": "Further files, used by `merge`."
+          },
+          "flatten": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "With a PDF template and data, `true` fixes the filled values into the\npage."
+          },
+          "fonts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "Fonts for this request only."
           },
           "htmlEngine": {
             "type": [
@@ -3812,7 +4037,11 @@
             "description": "For `sign`: where it was signed."
           },
           "metadata": {
-            "description": "JSON object of metadata fields for `metadata`."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "JSON object of metadata fields for `metadata`, sent as text."
           },
           "outputFilename": {
             "type": [
@@ -3821,11 +4050,12 @@
             ],
             "description": "File name of the result, without extension."
           },
-          "owner_password": {
+          "ownerPassword": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "For `encrypt`: the password that lifts its restrictions. Defaults to\n`userPassword`."
           },
           "page": {
             "type": [
@@ -3850,6 +4080,20 @@
             ],
             "description": "For `sign`: why the document was signed."
           },
+          "rotateAngle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `rotate`: `90` (default), `180`, `270` or `-90`."
+          },
+          "rotatePages": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `rotate`: the pages to turn, such as `1-3`. Default all."
+          },
           "signatureImage": {
             "type": "string",
             "format": "binary",
@@ -3869,18 +4113,96 @@
             ],
             "description": "For `sign`: a named key instead of the default one."
           },
+          "splitBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `/v1/render/batch`: the array to render once per element."
+          },
+          "splitMode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `split`: `pages` (default) or `intervals`."
+          },
+          "splitSpan": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `split`: page ranges such as `1-3,5` with `pages`, or a page count\nwith `intervals`. Required by the step."
+          },
+          "splitUnify": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "For `split` with `pages`: `true` gives one document holding the pages\ninstead of one per range."
+          },
+          "stamp": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "For `stamp` with an `image` or `pdf` source: the files to draw. At\nmost five marks a request."
+          },
+          "stampExpression": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `stamp` with a `text` source: the text to draw."
+          },
+          "stampOptions": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For `stamp`: a JSON object of `pos`, `op`, `rot`, `sc`, `fontsize` and\n`fillc`, each value a string, sent as text."
+          },
+          "stampPages": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `stamp`: the pages to mark, such as `1-3`. Default all."
+          },
+          "stampSource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `stamp`: what to draw over the page content, `text`, `image` or\n`pdf`."
+          },
           "steps": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Comma-separated steps in order: `convert`, `pdfa`, `metadata`,\n`encrypt`, `merge`, `underlay`, `sign`. `sign` signs cryptographically with the\nservice's key; it must be last and cannot be combined with `encrypt`.",
+            "description": "Comma-separated steps, run in the order given: `convert`, `pdfa`,\n`pdfua`, `merge`, `split`, `watermark`, `stamp`, `underlay`, `rotate`,\n`flatten`, `optimize`, `bookmarks`, `metadata`, `embed`, `factur-x`,\n`encrypt`, `sign`. Each reads the fields described as its own. `sign`\nsigns cryptographically with the service's key; it must be last and\ncannot be combined with `encrypt`.",
             "example": "convert,pdfa,encrypt"
+          },
+          "stripAnnotations": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "With a PDF template and data, `false` keeps the annotations that held\ntags. They are removed by default."
           },
           "template": {
             "type": "string",
             "format": "binary",
             "description": "The template file. Send this or `templateId`."
+          },
+          "templateHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The hex SHA-256 of a template this caller sent recently, in place of\nthe file."
           },
           "templateId": {
             "type": [
@@ -3923,11 +4245,48 @@
             "format": "binary",
             "description": "For `underlay`: the PDF the document is laid over, page by page, such\nas letterhead or a pre-printed form."
           },
-          "user_password": {
+          "userPassword": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "For `encrypt`: the password that opens the document."
+          },
+          "watermark": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "description": "For `watermark` with an `image` or `pdf` source: the files to draw. At\nmost five marks a request."
+          },
+          "watermarkExpression": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `watermark` with a `text` source: the text to draw."
+          },
+          "watermarkOptions": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For `watermark`: a JSON object of `pos`, `op`, `rot`, `sc`, `fontsize`\nand `fillc`, each value a string, sent as text."
+          },
+          "watermarkPages": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `watermark`: the pages to mark, such as `1-3`. Default all."
+          },
+          "watermarkSource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `watermark`: what to draw under the page content, `text`, `image`\nor `pdf`."
           },
           "width": {
             "type": [
@@ -4160,7 +4519,7 @@
               "type": "string",
               "format": "binary"
             },
-            "description": "The PDF first, then one PNG or JPEG per placement. With\n`signature=certificate`, at most one image: the visible appearance."
+            "description": "The PDF first, then one PNG or JPEG per placement. With\n`signature=certificate`, at most one image: the visible appearance.\nWith `signature=renew`, the PDF alone."
           },
           "level": {
             "type": [
@@ -4204,7 +4563,7 @@
               "string",
               "null"
             ],
-            "description": "`image` (default) draws the images and is not a cryptographic\nsignature. `certificate` signs with the service's key (PAdES,\n`/ETSI.CAdES.detached`), invisibly unless an image or a position is\nsent.",
+            "description": "`image` (default) draws the images and is not a cryptographic\nsignature. `certificate` signs with the service's key (PAdES,\n`/ETSI.CAdES.detached`), invisibly unless an image or a position is\nsent. `renew` takes a file signed at `b-lta` and adds validation data\nfor its last document timestamp and a new document timestamp, which\nkeeps the signature verifiable after the old timestamp's certificate\nexpires; it takes no other field than `outputFilename`.",
             "example": "certificate"
           },
           "signerName": {

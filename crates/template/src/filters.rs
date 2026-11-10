@@ -54,38 +54,7 @@ pub(crate) fn date_in(
     names: Option<&DateNames>,
 ) -> Result<String, Error> {
     let fmt = format.unwrap_or("%Y-%m-%d");
-    let zone = Zone::parse(timezone.unwrap_or("UTC"))
-        .map_err(|e| Error::new(ErrorKind::InvalidOperation, e))?;
-    let naive: NaiveDateTime = if let Some(s) = value.as_str() {
-        let s = s.trim();
-        if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-            zone.local(&dt)
-        } else if let Ok(dt) = DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%z") {
-            zone.local(&dt)
-        } else if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-            dt
-        } else if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
-            dt
-        } else if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M") {
-            dt
-        } else if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-            d.and_hms_opt(0, 0, 0).unwrap_or_default()
-        } else {
-            return Err(Error::new(
-                ErrorKind::InvalidOperation,
-                format!("date: cannot parse {s:?}; use ISO 8601 or unix seconds"),
-            ));
-        }
-    } else if let Some(n) = value.as_i64() {
-        unix(n as f64, &zone)?
-    } else if let Ok(n) = f64::try_from(value.clone()) {
-        unix(n, &zone)?
-    } else {
-        return Err(Error::new(
-            ErrorKind::InvalidOperation,
-            format!("date: expected a string or a number, got {}", value.kind()),
-        ));
-    };
+    let naive = parse_when(value, timezone, "date")?;
     let invalid = || {
         Error::new(
             ErrorKind::InvalidOperation,
@@ -101,6 +70,78 @@ pub(crate) fn date_in(
         }
     }
     Ok(out)
+}
+
+/// The local date and time `value` names: an ISO 8601 string or unix seconds.
+/// Values with a zone, and unix times, are read in `timezone`. `filter` names
+/// the calling filter in errors.
+fn parse_when(value: &Value, timezone: Option<&str>, filter: &str) -> Result<NaiveDateTime, Error> {
+    let zone = Zone::parse(timezone.unwrap_or("UTC"))
+        .map_err(|e| Error::new(ErrorKind::InvalidOperation, e))?;
+    if let Some(s) = value.as_str() {
+        let s = s.trim();
+        if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+            Ok(zone.local(&dt))
+        } else if let Ok(dt) = DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%z") {
+            Ok(zone.local(&dt))
+        } else if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
+            Ok(dt)
+        } else if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
+            Ok(dt)
+        } else if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M") {
+            Ok(dt)
+        } else if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            Ok(d.and_hms_opt(0, 0, 0).unwrap_or_default())
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidOperation,
+                format!("{filter}: cannot parse {s:?}; use ISO 8601 or unix seconds"),
+            ))
+        }
+    } else if let Some(n) = value.as_i64() {
+        unix(n as f64, &zone, filter)
+    } else if let Ok(n) = f64::try_from(value.clone()) {
+        unix(n, &zone, filter)
+    } else {
+        Err(Error::new(
+            ErrorKind::InvalidOperation,
+            format!(
+                "{filter}: expected a string or a number, got {}",
+                value.kind()
+            ),
+        ))
+    }
+}
+
+/// First spreadsheet date number this filter writes: 1 March 1900.
+const FIRST_SERIAL: i64 = 61;
+
+/// `{{ d | excel_date }}` gives the number a spreadsheet stores for a date:
+/// the days since 30 December 1899, with the time of day as a fraction. Alone
+/// in a cell it fills a number cell, and the cell's own date format shows it
+/// as a date. Values are read as [`date`] reads them. Dates before 1 March
+/// 1900 are refused: Excel counts a 29 February 1900 that never happened, so
+/// the numbers before it differ between applications.
+pub fn excel_date(value: &Value, timezone: Option<&str>) -> Result<Value, Error> {
+    use chrono::Timelike;
+    let when = parse_when(value, timezone, "excel_date")?;
+    let epoch = NaiveDate::from_ymd_opt(1899, 12, 30).unwrap_or_default();
+    let days = (when.date() - epoch).num_days();
+    if days < FIRST_SERIAL {
+        return Err(Error::new(
+            ErrorKind::InvalidOperation,
+            format!(
+                "excel_date: {} is before 1 March 1900, the first date a spreadsheet numbers reliably",
+                when.date()
+            ),
+        ));
+    }
+    let secs = f64::from(when.num_seconds_from_midnight()) + f64::from(when.nanosecond()) / 1e9;
+    if secs == 0.0 {
+        Ok(Value::from(days))
+    } else {
+        Ok(Value::from(days as f64 + secs / 86_400.0))
+    }
 }
 
 /// The format's items with month, weekday and AM/PM names in the language.
@@ -142,13 +183,18 @@ fn localized_items<'a>(
     )
 }
 
-fn unix(secs: f64, zone: &Zone) -> Result<NaiveDateTime, Error> {
+fn unix(secs: f64, zone: &Zone, filter: &str) -> Result<NaiveDateTime, Error> {
     let whole = secs.floor();
     let nanos = ((secs - whole) * 1e9) as u32;
     Utc.timestamp_opt(whole as i64, nanos)
         .single()
         .map(|dt| zone.local(&dt))
-        .ok_or_else(|| Error::new(ErrorKind::InvalidOperation, "date: time out of range"))
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidOperation,
+                format!("{filter}: time out of range"),
+            )
+        })
 }
 
 /// Most decimals `number` writes.
@@ -291,9 +337,13 @@ impl Context {
             self.locale.map(|l| l.dates),
         )
     }
+
+    fn excel_date(&self, value: &Value) -> Result<Value, Error> {
+        excel_date(value, self.timezone.as_deref())
+    }
 }
 
-/// Adds `currency`, `number`, `date` and `t` reading `ctx`. When `lenient`,
+/// Adds `currency`, `number`, `date`, `excel_date` and `t` reading `ctx`. When `lenient`,
 /// each passes an undefined value through so that it prints as nothing.
 pub(crate) fn add_document_filters(
     env: &mut Environment<'static>,
@@ -330,6 +380,13 @@ pub(crate) fn add_document_filters(
             c.date(&value, format.as_deref()).map(Value::from)
         },
     );
+    let c = ctx.clone();
+    env.add_filter("excel_date", move |value: Value| -> Result<Value, Error> {
+        if lenient && value.is_undefined() {
+            return Ok(value);
+        }
+        c.excel_date(&value)
+    });
     env.add_filter("t", move |key: Value| -> Result<Value, Error> {
         if lenient && key.is_undefined() {
             return Ok(key);
@@ -409,6 +466,27 @@ mod tests {
         assert_eq!(f(Value::from(86400.5), Some("%j"), None), "002");
         assert!(date(&"yesterday".into(), None, None).is_err());
         assert!(date(&"2024-03-05".into(), None, Some("Mars/Olympus")).is_err());
+    }
+
+    #[test]
+    fn excel_dates_are_spreadsheet_serial_numbers() {
+        let f = |v: Value, tz: Option<&str>| excel_date(&v, tz).unwrap();
+        assert_eq!(f("2013-01-01".into(), None), Value::from(41275));
+        assert_eq!(f("1900-03-01".into(), None), Value::from(61));
+        assert_eq!(f("2024-02-29T12:00:00".into(), None), Value::from(45351.5));
+        // A value with a zone lands on the day it is in the template's zone.
+        assert_eq!(
+            f("2024-03-05T23:00:00Z".into(), Some("+02:00")),
+            Value::from(45357.0 + 1.0 / 24.0)
+        );
+        assert_eq!(f(Value::from(86_400 * 20_000), None), Value::from(45569));
+        let early = excel_date(&"1900-02-28".into(), None).unwrap_err();
+        assert!(early.to_string().contains("before 1 March 1900"), "{early}");
+        let bad = excel_date(&"yesterday".into(), None).unwrap_err();
+        assert!(
+            bad.to_string().contains("excel_date: cannot parse"),
+            "{bad}"
+        );
     }
 
     #[test]

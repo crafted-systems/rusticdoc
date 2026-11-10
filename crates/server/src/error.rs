@@ -148,8 +148,8 @@ pub struct ErrorText {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
-/// A file in a response, for the API description: generated clients return
-/// it as bytes.
+// Stands for a file in a response, so that generated clients return bytes.
+/// The file, as bytes.
 #[derive(Debug, Serialize, ToSchema)]
 #[schema(value_type = String, format = Binary)]
 pub struct BinaryFile(pub String);

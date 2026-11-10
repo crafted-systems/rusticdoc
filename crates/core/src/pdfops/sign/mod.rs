@@ -443,35 +443,58 @@ impl Signing {
         options.validate()?;
         let level = options.level.unwrap_or(self.level);
         if level >= Level::BT {
-            match &self.tsa {
-                None => {
-                    return Err(Error::Status(
-                        503,
-                        format!(
-                            "level {} needs a timestamp authority; this service's operator sets RUSTICDOC_SIGNING_TSA_URL",
-                            level.name()
-                        ),
-                    ));
-                }
-                Some(tsa) if !tsa.has_anchors() => {
-                    return Err(Error::Status(
-                        503,
-                        "the timestamp authority has no trusted certificate to check its tokens against; this service's operator sets RUSTICDOC_SIGNING_TSA_CERT".into(),
-                    ));
-                }
-                Some(_) => {}
-            }
-            if self.outbound.is_none() {
+            self.check_network(&format!("level {}", level.name()))?;
+        }
+        Ok(())
+    }
+
+    /// Refuses `what` when the timestamp authority, its trusted certificate
+    /// or the outbound client is missing.
+    fn check_network(&self, what: &str) -> Result<()> {
+        match &self.tsa {
+            None => {
                 return Err(Error::Status(
                     503,
                     format!(
-                        "level {} needs outbound requests, which this build of the service cannot make",
-                        level.name()
+                        "{what} needs a timestamp authority; this service's operator sets RUSTICDOC_SIGNING_TSA_URL"
                     ),
                 ));
             }
+            Some(tsa) if !tsa.has_anchors() => {
+                return Err(Error::Status(
+                    503,
+                    "the timestamp authority has no trusted certificate to check its tokens against; this service's operator sets RUSTICDOC_SIGNING_TSA_CERT".into(),
+                ));
+            }
+            Some(_) => {}
+        }
+        if self.outbound.is_none() {
+            return Err(Error::Status(
+                503,
+                format!(
+                    "{what} needs outbound requests, which this build of the service cannot make"
+                ),
+            ));
         }
         Ok(())
+    }
+
+    /// Refuses a renewal this service cannot make, before any work. A
+    /// renewal uses no key, only the timestamp authority.
+    pub fn check_renewal(&self) -> Result<()> {
+        self.check_network("renewing a document timestamp")
+    }
+
+    /// Renews the document timestamp at the end of `doc`, a file signed at
+    /// B-LTA, within `timeout`. See [`renew_with`].
+    pub async fn renew(&self, doc: &Document, timeout: Duration) -> Result<Document> {
+        self.check_renewal()?;
+        let network = Network {
+            tsa: self.tsa.as_ref(),
+            outbound: self.outbound.as_deref(),
+            limits: &self.limits,
+        };
+        renew_with(doc, network, SystemTime::now(), timeout).await
     }
 
     /// Signs `doc` as `options` say, within `timeout` for the whole of it,
@@ -684,6 +707,203 @@ pub async fn sign_with(
         }
     }
     Ok(Document::new(doc.name.clone(), bytes))
+}
+
+/// The document timestamp a file ends with, once checked.
+struct LastTimestamp {
+    /// What its `/Contents` stands for, padding included, as the VRI key
+    /// hashes it.
+    contents: Vec<u8>,
+    /// The length of the token in it.
+    token_len: usize,
+    /// The authority's certificate and the ones that tie it to a trusted
+    /// certificate: what validation data is collected for.
+    path: Vec<x509_cert::Certificate>,
+}
+
+fn unrenewable(name: &str, what: impl std::fmt::Display) -> Error {
+    Error::InvalidRequest(format!("'{name}' cannot be renewed: {what}"))
+}
+
+/// Finds the document timestamp that covers all of `doc` and checks it: its
+/// token is over these very bytes, and was signed by an authority that
+/// `anchors` trust and whose certificate is still valid at `now`.
+fn last_timestamp(
+    doc: &Document,
+    anchors: &[x509_cert::Certificate],
+    now: SystemTime,
+) -> Result<LastTimestamp> {
+    use ::lopdf::Object;
+    let (name, bytes) = (doc.name.as_str(), &doc.bytes[..]);
+    let pdf = ::lopdf::Document::load_mem(bytes)
+        .map_err(|e| unrenewable(name, format!("it cannot be read: {e}")))?;
+
+    // The signature dictionary whose byte range runs to the end of the file.
+    let mut last = None;
+    for object in pdf.objects.values() {
+        let Ok(dict) = object.as_dict() else { continue };
+        let Ok(range) = dict.get(b"ByteRange").and_then(Object::as_array) else {
+            continue;
+        };
+        let numbers: Vec<usize> = range
+            .iter()
+            .filter_map(|n| n.as_i64().ok().and_then(|n| usize::try_from(n).ok()))
+            .collect();
+        if range.len() == 4
+            && let [0, before, after, rest] = numbers[..]
+            && after.checked_add(rest) == Some(bytes.len())
+        {
+            last = Some((dict, before, after));
+        }
+    }
+    let Some((dict, before, after)) = last else {
+        return Err(unrenewable(
+            name,
+            "no document timestamp covers the whole file; renewal takes a file signed at level b-lta that has not changed since",
+        ));
+    };
+    let is = |key: &[u8], value: &[u8]| dict.get(key).and_then(Object::as_name).ok() == Some(value);
+    if !is(b"Type", b"DocTimeStamp") && !is(b"SubFilter", b"ETSI.RFC3161") {
+        return Err(unrenewable(
+            name,
+            "it ends with a signature, not a document timestamp; renewal takes a file signed at level b-lta",
+        ));
+    }
+    if after < before + 2 || bytes[before] != b'<' || bytes[after - 1] != b'>' {
+        return Err(unrenewable(
+            name,
+            "its document timestamp's byte range does not surround a /Contents value",
+        ));
+    }
+    let contents = hex::decode(&bytes[before + 1..after - 1])
+        .map_err(|_| unrenewable(name, "its document timestamp's /Contents is not hex"))?;
+
+    // The token, without the zeros that pad it.
+    let token_len = {
+        let mut reader = der::SliceReader::new(&contents)
+            .map_err(|e| unrenewable(name, format!("its document timestamp is not DER: {e}")))?;
+        der::Reader::decode::<der::Any>(&mut reader)
+            .map_err(|e| unrenewable(name, format!("its document timestamp is not DER: {e}")))?;
+        usize::try_from(der::Reader::position(&reader)).unwrap_or(contents.len())
+    };
+    let parsed = tsa::parse(&contents[..token_len]).map_err(|e| {
+        let why = e.to_string();
+        let why = why
+            .rsplit_once("the timestamp authority failed: ")
+            .map_or(why.as_str(), |(_, w)| w);
+        unrenewable(
+            name,
+            format!("its document timestamp does not verify: {why}"),
+        )
+    })?;
+    if parsed.imprint.len() < 32 {
+        return Err(unrenewable(
+            name,
+            "its document timestamp uses a digest weaker than SHA-256",
+        ));
+    }
+    let digest = verify::digest_parts(
+        &parsed.imprint_algorithm,
+        &[&bytes[..before], &bytes[after..]],
+    )
+    .ok_or_else(|| {
+        unrenewable(
+            name,
+            "its document timestamp uses a digest this service does not know",
+        )
+    })?;
+    if digest != parsed.imprint {
+        return Err(unrenewable(
+            name,
+            "its document timestamp is over other bytes than the file's",
+        ));
+    }
+    if parsed
+        .time
+        .duration_since(now)
+        .is_ok_and(|ahead| ahead > verify::CLOCK_SKEW)
+    {
+        return Err(unrenewable(
+            name,
+            format!(
+                "its document timestamp is dated {}, after this service's clock",
+                keys::timestamp(parsed.time)
+            ),
+        ));
+    }
+    let path = tsa::signer_path(
+        &parsed.signer,
+        &parsed.certificates,
+        anchors,
+        parsed.time,
+        now,
+    )
+    .map_err(|e| unrenewable(name, format!("its document timestamp is not trusted: {e}")))?;
+    Ok(LastTimestamp {
+        contents,
+        token_len,
+        path,
+    })
+}
+
+/// Renews the archive timestamp of a file signed at B-LTA, as of `now` and
+/// within `timeout`. A document timestamp is good for as long as its
+/// authority's certificate and algorithms are, so before they run out the
+/// file gets a new one: the timestamp that ends the file is checked against
+/// the bytes it covers and the trusted certificates; validation data for the
+/// authority that made it goes into the DSS, with a VRI entry for it; and a
+/// new document timestamp is appended over all of that. Everything is added
+/// as incremental updates, so what was signed stays signed.
+///
+/// A file that does not end with such a timestamp is refused, as is one
+/// whose timestamp is not trusted or whose authority's certificate has
+/// already expired: there is then nothing left to extend.
+pub async fn renew_with(
+    doc: &Document,
+    network: Network<'_>,
+    now: SystemTime,
+    timeout: Duration,
+) -> Result<Document> {
+    check_size(doc)?;
+    let deadline = Instant::now() + timeout;
+    let tsa = network
+        .tsa
+        .ok_or_else(|| Error::Status(503, "no timestamp authority is configured".into()))?;
+    let outbound = network
+        .outbound
+        .ok_or_else(|| Error::Status(503, "no outbound client is configured".into()))?;
+
+    let (d, anchors) = (doc.clone(), tsa.anchors().to_vec());
+    let last = blocking(time_left(deadline, timeout)?, move |_| {
+        last_timestamp(&d, &anchors, now)
+    })
+    .await?;
+    let validation =
+        revocation::collect(&last.path, outbound, network.limits, deadline, now).await?;
+    let (d, contents) = (doc.clone(), last.contents);
+    let bytes = blocking(time_left(deadline, timeout)?, move |_| {
+        dss::append(&d.bytes, &d.name, &validation, &[contents])
+    })
+    .await?;
+
+    let reserve = last.token_len.max(tsa.reserve()) + PLACEHOLDER_HEADROOM;
+    let name = doc.name.clone();
+    let mut update = blocking(time_left(deadline, timeout)?, move |_| {
+        let pdf = ::lopdf::Document::load_mem(&bytes).map_err(incremental::writing)?;
+        incremental::prepare(
+            &bytes,
+            &pdf,
+            &name,
+            incremental::Kind::DocTimeStamp,
+            reserve,
+        )
+    })
+    .await?;
+    let token = tsa
+        .stamp(outbound, &update.digest(), time_left(deadline, timeout)?)
+        .await?;
+    update.fill(&token.der)?;
+    Ok(Document::new(doc.name.clone(), update.bytes))
 }
 
 /// Signs `doc` at B-B as of `now`, which becomes the signature's `/M`.

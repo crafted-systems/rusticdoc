@@ -20,6 +20,11 @@ const SUBJECT_KEY_IDENTIFIER: ObjectIdentifier = ObjectIdentifier::new_unwrap("2
 /// The digest of `data` with the algorithm `oid` names, if it is one of the
 /// SHA family.
 pub(super) fn digest(oid: &ObjectIdentifier, data: &[u8]) -> Option<Vec<u8>> {
+    digest_parts(oid, &[data])
+}
+
+/// [`digest`] over `parts` one after the other, without joining them.
+pub(super) fn digest_parts(oid: &ObjectIdentifier, parts: &[&[u8]]) -> Option<Vec<u8>> {
     let algorithm = match oid.to_string().as_str() {
         SHA1 => &digest::SHA1_FOR_LEGACY_USE_ONLY,
         SHA256 => &digest::SHA256,
@@ -27,7 +32,11 @@ pub(super) fn digest(oid: &ObjectIdentifier, data: &[u8]) -> Option<Vec<u8>> {
         SHA512 => &digest::SHA512,
         _ => return None,
     };
-    Some(digest::digest(algorithm, data).as_ref().to_vec())
+    let mut context = digest::Context::new(algorithm);
+    for part in parts {
+        context.update(part);
+    }
+    Some(context.finish().as_ref().to_vec())
 }
 
 /// SHA-1, for OCSP certificate identifiers and DSS VRI keys, where the

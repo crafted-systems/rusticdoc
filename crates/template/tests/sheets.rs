@@ -1119,3 +1119,153 @@ fn a_sheet_name_with_markup_characters_stays_well_formed() {
         format!("{quoted}.A1:{quoted}.B2")
     );
 }
+
+#[test]
+fn a_column_loop_repeats_cells_to_the_right() {
+    let data = json!({"days": ["Mon", "Tue", "Wed"], "staff": [
+        {"name": "Ada", "hours": [8, 7.5, 6]},
+        {"name": "Lin", "hours": []},
+        {"name": "Sam", "hours": [4, 4, 4]}
+    ]});
+    let doc = xlsx(
+        &[
+            row(
+                1,
+                &[
+                    s("A1", "Name"),
+                    s("B1", "{% col for d in days %}{{ d }}{% endcol %}"),
+                    s("C1", "Total"),
+                ],
+            ),
+            row(
+                2,
+                &[
+                    s("A2", "{% for p in staff %}{{ p.name }}"),
+                    s("B2", " {% col for h in p.hours %}{{ h }}{% endcol %} "),
+                    f("C2", "SUM(B2:B2)"),
+                    s("D2", "{% endfor %}"),
+                ],
+            ),
+            row(3, &[f("A3", "COUNTA(A2:A2)")]),
+        ],
+        &[],
+    );
+    let compiled = compile(Format::Xlsx, &doc).unwrap();
+    assert!(compiled
+        .tags()
+        .contains(&"{% col for d in days %}".to_string()));
+    let out = compiled.render(&data).unwrap();
+    keep("columns.xlsx", &out);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    well_formed("sheet1.xml", &sheet);
+    let c = cells(&sheet);
+    let line = |r: u32, cols: &str| -> Vec<String> {
+        cols.chars()
+            .map(|col| get(&c, &format!("{col}{r}")).to_string())
+            .collect()
+    };
+    assert_eq!(line(1, "ABCDE"), ["Name", "Mon", "Tue", "Wed", "Total"]);
+    // Numbers stay numbers, and the sum covers every copy.
+    assert_eq!(line(2, "ABCDE"), ["Ada", "8", "7.5", "6", "=SUM(B2:D2)"]);
+    assert!(sheet.contains("<c r=\"C2\"><v>7.5</v></c>"), "{sheet}");
+    // No hours at all: the total moves in beside the name.
+    assert_eq!(line(3, "ABC"), ["Lin", "=SUM(A3:A3)", ""]);
+    assert_eq!(line(4, "ABCDE"), ["Sam", "4", "4", "4", "=SUM(B4:D4)"]);
+    assert_eq!(get(&c, "A5"), "=COUNTA(A2:A4)");
+    assert!(sheet.contains("<dimension ref=\"A1:F5\"/>"), "{sheet}");
+
+    // The same template checks clean against the data.
+    let found = validate(Format::Xlsx, &doc, &data);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_closing_tag_in_its_own_cell_lets_a_formula_repeat() {
+    let data = json!({"days": [{"hours": 2, "rate": 10}, {"hours": 3, "rate": 20}]});
+    let doc = xlsx(
+        &[row(
+            1,
+            &[
+                s("A1", "Pay"),
+                s("B1", "{% col for d in days %}{{ d.hours }}"),
+                s("C1", "{{ d.rate }}"),
+                f("D1", "B1*C1"),
+                s("E1", "{% endcol %}"),
+                f("F1", "SUM(B1:D1)"),
+            ],
+        )],
+        &[],
+    );
+    let out = compile(Format::Xlsx, &doc).unwrap().render(&data).unwrap();
+    keep("columns-formula.xlsx", &out);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    well_formed("sheet1.xml", &sheet);
+    let c = cells(&sheet);
+    let line: Vec<&str> = "ABCDEFGHI"
+        .chars()
+        .map(|col| get(&c, &format!("{col}1")))
+        .collect();
+    assert_eq!(
+        line,
+        [
+            "Pay",
+            "2",
+            "10",
+            "=B1*C1",
+            "3",
+            "20",
+            "=E1*F1",
+            "",
+            "=SUM(B1:G1)"
+        ]
+    );
+}
+
+#[test]
+fn misplaced_column_loops_are_refused() {
+    let err = |format: Format, doc: &[u8]| compile(format, doc).unwrap_err();
+    let one = |cells: &[String]| xlsx(&[row(1, cells)], &[]);
+
+    let e = err(
+        Format::Docx,
+        &docx(&p("{% col for d in days %}{{ d }}{% endcol %}")),
+    );
+    assert!(e.message.contains("works in XLSX only"), "{e}");
+
+    let body = "<table:table table:name=\"S\"><table:table-row><table:table-cell office:value-type=\"string\"><text:p>{% col for d in days %}{{ d }}{% endcol %}</text:p></table:table-cell></table:table-row></table:table>";
+    let e = err(Format::Ods, &ods(body));
+    assert!(e.message.contains("works in XLSX only"), "{e}");
+
+    let rows = xlsx(
+        &[
+            row(1, &[s("A1", "{% col for d in days %}{{ d }}")]),
+            row(2, &[s("A2", "{% endcol %}")]),
+        ],
+        &[],
+    );
+    let e = err(Format::Xlsx, &rows);
+    assert!(
+        e.message.contains("must sit in cells of the same row"),
+        "{e}"
+    );
+    assert_eq!(e.location.unwrap().place, "sheet \"Sales\" row 1 (cell A1)");
+
+    let nested = one(&[s(
+        "A1",
+        "{% col for d in days %}{% col for h in d %}{{ h }}{% endcol %}{% endcol %}",
+    )]);
+    let e = err(Format::Xlsx, &nested);
+    assert!(e.message.contains("column loops cannot nest"), "{e}");
+
+    let open = one(&[s("A1", "{% col for d in days %}{{ d }}")]);
+    let e = err(Format::Xlsx, &open);
+    assert!(e.message.contains("add '{% endcol %}'"), "{e}");
+
+    let malformed = one(&[s("A1", "{% col d in days %}{{ d }}{% endcol %}")]);
+    let e = err(Format::Xlsx, &malformed);
+    assert!(
+        e.message
+            .contains("should read '{% col for item in list %}'"),
+        "{e}"
+    );
+}

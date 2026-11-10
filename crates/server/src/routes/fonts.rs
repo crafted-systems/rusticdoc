@@ -138,6 +138,8 @@ async fn scan(state: &AppState) -> ApiResult<Arc<Vec<FontInfo>>> {
     Ok(list)
 }
 
+/// List fonts
+///
 /// Lists the fonts LibreOffice and the PDF stage can use.
 #[utoipa::path(
     get, path = "/v1/fonts", tag = "fonts",
@@ -148,6 +150,8 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<FontInfo>
     Ok(Json(loaded(&state).await?.as_ref().clone()))
 }
 
+/// Reload fonts
+///
 /// Rescans the fonts directory and restarts idle LibreOffice workers, so a
 /// new font needs no container restart. Busy workers restart after their
 /// current job.
@@ -225,6 +229,8 @@ pub async fn reload(State(state): State<AppState>) -> ApiResult<Json<Reloaded>> 
     }))
 }
 
+/// Upload fonts
+///
 /// Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,
 /// or one such file. Takes an admin. They are in use on this replica when this
 /// returns, and on the others within `syncIntervalSeconds`.
@@ -313,6 +319,8 @@ pub async fn upload(
         .into_response())
 }
 
+/// Delete a font
+///
 /// Deletes a stored font. Takes an admin. It leaves this replica when this
 /// returns, and the others within the sync interval. Documents that name it fall
 /// back to another font.

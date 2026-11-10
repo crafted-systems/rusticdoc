@@ -158,6 +158,11 @@ impl Tsa {
         !self.anchors.is_empty()
     }
 
+    /// The certificates tokens are trusted through.
+    pub(super) fn anchors(&self) -> &[Certificate] {
+        &self.anchors
+    }
+
     /// Bytes to reserve for a token in a placeholder.
     pub(super) fn reserve(&self) -> usize {
         self.largest
@@ -422,6 +427,43 @@ pub(super) fn check_signer(
     at: SystemTime,
     now: SystemTime,
 ) -> std::result::Result<(), String> {
+    signer_path(signer, pool, anchors, at, now).map(|_| ())
+}
+
+/// Adds to `path` the root that issued its last certificate, when `pool` has
+/// it. A pool is not signed, so only one kind of certificate is taken from
+/// it: a self-signed one whose key made the signature on the trusted
+/// certificate. Its own signature shows that the holder of that key wrote
+/// all of it, which no certificate further from the trusted one can show.
+fn with_root(
+    mut path: Vec<Certificate>,
+    pool: &[Certificate],
+    valid: &dyn Fn(&Certificate) -> bool,
+) -> Vec<Certificate> {
+    let Some(last) = path.last() else { return path };
+    if verify::issued_by(last, last) {
+        return path;
+    }
+    if let Some(root) = pool.iter().find(|c| {
+        verify::is_ca(c) && valid(c) && verify::issued_by(c, c) && verify::issued_by(last, c)
+    }) {
+        path.push(root.clone());
+    }
+    path
+}
+
+/// [`check_signer`], giving the certificates it trusted: the signer, the CA
+/// certificates between, and the anchor. Where the anchor is not a root, the
+/// root that issued it follows when `pool` has it; see [`with_root`]. Nothing
+/// else a token carries has been checked, since a token's certificate set is
+/// not signed.
+pub(super) fn signer_path(
+    signer: &Certificate,
+    pool: &[Certificate],
+    anchors: &[Certificate],
+    at: SystemTime,
+    now: SystemTime,
+) -> std::result::Result<Vec<Certificate>, String> {
     let subject = signer.tbs_certificate.subject.to_string();
     if anchors.is_empty() {
         return Err("no certificate is trusted for timestamps (RUSTICDOC_SIGNING_TSA_CERT)".into());
@@ -445,15 +487,17 @@ pub(super) fn check_signer(
             "the certificate {subject} is not valid now or was not at the token's time"
         ));
     }
+    let mut path = vec![signer.clone()];
     if anchors.iter().any(|a| a == signer) {
-        return Ok(());
+        return Ok(with_root(path, pool, &valid));
     }
     let mut current = signer.clone();
     let mut expired_anchor = None;
     for _ in 0..MAX_PATH {
         if let Some(anchor) = anchors.iter().find(|a| verify::issued_by(&current, a)) {
             if valid(anchor) {
-                return Ok(());
+                path.push(anchor.clone());
+                return Ok(with_root(path, pool, &valid));
             }
             expired_anchor = Some(anchor.tbs_certificate.subject.to_string());
             break;
@@ -463,6 +507,7 @@ pub(super) fn check_signer(
         }) else {
             break;
         };
+        path.push(next.clone());
         current = next.clone();
     }
     Err(match expired_anchor {

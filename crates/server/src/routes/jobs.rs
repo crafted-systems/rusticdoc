@@ -60,6 +60,8 @@ pub struct JobSchema {
     pub error: Option<serde_json::Value>,
 }
 
+/// Get a job
+///
 /// Where a background job is. Ask again until `status` is `done` or `failed`;
 /// `Retry-After` says how soon. A job and its result are kept for
 /// `RUSTICDOC_JOB_TTL` after it ends, then removed.
@@ -90,6 +92,8 @@ pub async fn show(
     Ok(res)
 }
 
+/// Download a job's result
+///
 /// Downloads what a finished job made, as the request would have answered it.
 #[utoipa::path(
     get, path = "/v1/jobs/{id}/result", tag = "jobs", operation_id = "getJobResult",
