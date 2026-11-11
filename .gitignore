@@ -13,3 +13,4 @@ Cargo.lock.orig
 /test/thirdparty/upstream/
 /test/thirdparty/out/
 /test/load/out/
+/local/
