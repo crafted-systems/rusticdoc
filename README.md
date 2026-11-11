@@ -161,7 +161,7 @@ rusticdoc serve
 
 See the [CLI reference](https://rusticdoc.com/docs/reference/cli/).
 
-## 🏗️ Run it in production
+## 🏗️ Deploy and operate
 
 - **Configure** everything with environment variables, all optional. See the [configuration reference](https://rusticdoc.com/docs/reference/configuration/).
 - **Store** templates, fonts and job results in S3 or a shared volume with `RUSTICDOC_STORE`. See [many containers](https://rusticdoc.com/docs/operate/many-containers/).
@@ -205,7 +205,7 @@ The workspace has four crates: `rusticdoc-template` (the template engine), `rust
 
 ## 📍 Status
 
-The current version is 0.1.3, and Crafted Systems, who make rusticdoc, run it in production. Versions follow [ZeroVer](https://0ver.org/), so a new minor number may change behaviour, as the [changelog](https://rusticdoc.com/docs/project/changelog/) explains. Some things haven't been checked yet, such as the Kubernetes manifest on a production cluster, and Word's default font, Aptos, isn't in the image. The [known limits](https://rusticdoc.com/docs/project/known-limits/) list all of them. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+The current version is 0.1.3. Versions follow [ZeroVer](https://0ver.org/), so a new minor number may change behaviour, as the [changelog](https://rusticdoc.com/docs/project/changelog/) explains. Some things haven't been checked yet, such as the Kubernetes manifest on a production cluster, and Word's default font, Aptos, isn't in the image. The [known limits](https://rusticdoc.com/docs/project/known-limits/) list all of them. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## 📄 Licence
 

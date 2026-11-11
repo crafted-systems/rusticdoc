@@ -1,6 +1,6 @@
 # Status
 
-What hasn't been checked yet. Crafted Systems, who make rusticdoc, run it in production; this list is what that use and the tests haven't covered. The [roadmap](ROADMAP.md) lists what's left to build, and [known limits](https://rusticdoc.com/docs/project/known-limits/) lists every limit.
+What hasn't been checked yet. The [roadmap](ROADMAP.md) lists what's left to build, and [known limits](https://rusticdoc.com/docs/project/known-limits/) lists every limit.
 
 The site has no status page: `/status` and `/docs/project/status` redirect to known limits.
 
