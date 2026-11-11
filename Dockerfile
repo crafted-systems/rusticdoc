@@ -73,6 +73,9 @@ RUN groupadd --gid 1001 rusticdoc \
         hyphen-en-us hyphen-en-gb hyphen-de hyphen-fr hyphen-es hyphen-it hyphen-nl hyphen-pt-pt hyphen-pt-br \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -t trixie-backports \
         libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw libreoffice-math python3-uno \
+    # Programs nothing here runs. LibreOffice's OpenPGP library needs only gpg, so
+    # the rest of GnuPG goes, with its network daemon; so does mount.
+    && apt-get purge -y -qq gnupg gnupg-l10n gpgsm gpg-agent dirmngr pinentry-curses mount \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     # Arbitrary user IDs, as on OpenShift: group 0 owns the home directory.
     && usermod -aG root rusticdoc \

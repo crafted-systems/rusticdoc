@@ -34,7 +34,7 @@ rusticdoc contains what a hostile document tries to do, and the [security overvi
 
 ## Check the image you run
 
-Scan it. The last Trivy scan reported 691 findings in Debian packages, 1 critical and 108 high, none with a Debian fix at the time of the scan. One more advisory, with no severity, is in a module `pdfcpu` builds against. These numbers will change.
+Scan it. The last Grype scan reported 761 findings in Debian packages, 31 critical and 204 high, none with a Debian fix at the time of the scan. 24 of them, 12 critical, are curl findings that the image's backported curl already fixes; the project's `.grype.yaml` lists them. An earlier Trivy scan also found one advisory, with no severity, in a module `pdfcpu` builds against. These numbers will change.
 
 Three `make` targets attack a running image and fail if it gives way. They need Docker and the image, and they start their own containers:
 

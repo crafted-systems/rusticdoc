@@ -66,6 +66,9 @@ jobs:
           tags: rusticdoc:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # The runtime stage is rebuilt every time, so the scan below sees
+          # Debian's packages as they are today, not as a cached layer has them.
+          no-cache-filters: runtime
       - name: smoke
         run: |
           docker run -d --name rd -p 9027:9027 rusticdoc:ci
@@ -75,5 +78,14 @@ jobs:
           head -c 4 out.pdf | grep -q PDF
           docker logs rd | tail -5
           docker rm -f rd
+      # Fails on a high or critical finding that has a fix the image lacks.
+      # Findings with no fix yet do not fail it. Reads .grype.yaml.
+      - name: scan for fixable vulnerabilities
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: rusticdoc:ci
+          only-fixed: true
+          severity-cutoff: high
+          output-format: table
       - name: several replicas on one store
         run: test/store/replicas.sh rusticdoc:ci

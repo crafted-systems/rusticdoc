@@ -61,6 +61,9 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=release-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=release-${{ matrix.arch }}
+          # The runtime stage is rebuilt every time, so a release always has
+          # Debian's latest security fixes; the Rust build stays cached.
+          no-cache-filters: runtime
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ env.TAG }}
