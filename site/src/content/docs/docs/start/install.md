@@ -9,7 +9,7 @@ You can run rusticdoc from the published image, with Compose, or from a source b
 
 ## The image
 
-The image is `ghcr.io/crafted-systems/rusticdoc:0.1.1`, built for amd64 and arm64. You can also build it from a checkout of the repository:
+The image is `ghcr.io/crafted-systems/rusticdoc:0.1.1`, built for amd64 and arm64. `latest` points at the newest release, but name a version anywhere you need to know what's running. You can also build it from a checkout of the repository:
 
 ```bash
 docker build -t rusticdoc .

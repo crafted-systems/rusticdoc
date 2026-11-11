@@ -1,7 +1,7 @@
 name: release
 
 # A tag such as v0.1.1 publishes ghcr.io/crafted-systems/rusticdoc:0.1.1 for amd64 and
-# arm64. Each architecture builds on a runner of its own, because building the
+# arm64, and tags it latest too when it is the highest version. Each architecture builds on a runner of its own, because building the
 # Servo style engine under emulation takes hours; the two images are then
 # joined under one tag. Versions follow ZeroVer (https://0ver.org): they stay
 # below 1.0, and a new minor number may break compatibility. The image carries
@@ -110,9 +110,22 @@ jobs:
       - name: join the architectures under the version
         id: join
         working-directory: digests
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="${TAG#v}"
-          docker buildx imagetools create -t "${IMAGE}:${version}" \
+          tags=(-t "${IMAGE}:${version}")
+          # latest follows the highest version, so republishing an older tag
+          # leaves it where it is.
+          newest="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v0." --jq '.[].ref' \
+            | sed 's#^refs/tags/##' | grep -E '^v0\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
+          if [[ "$TAG" == "$newest" ]]; then
+            tags+=(-t "${IMAGE}:latest")
+          else
+            echo "$TAG is older than $newest, so latest is not moved"
+          fi
+          # One index under both tags, so they share the digest the attestation covers.
+          docker buildx imagetools create "${tags[@]}" \
             $(printf "${IMAGE}@sha256:%s " $(ls | sed 's/^sha256://'))
           docker buildx imagetools inspect "${IMAGE}:${version}"
           digest="$(docker buildx imagetools inspect "${IMAGE}:${version}" --format '{{json .Manifest}}' | jq -r .digest)"
