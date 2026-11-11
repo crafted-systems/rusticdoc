@@ -43,7 +43,7 @@ This installs both skills for the assistants it finds on your machine, and `npx 
 
 ### From a release
 
-Every [release](https://github.com/crafted-systems/rusticdoc/releases) has `rusticdoc-templates.skill` and `rusticdoc-api.skill` attached, listed in its `SHA256SUMS`. Each is a zip with one folder, so unzipping it gives `<folder>/rusticdoc-templates/SKILL.md`:
+Every [release](https://github.com/crafted-systems/rusticdoc/releases) from 0.1.3 on has `rusticdoc-templates.skill` and `rusticdoc-api.skill` attached, listed in its `SHA256SUMS`. Each is a zip with one folder, so unzipping it gives `<folder>/rusticdoc-templates/SKILL.md`:
 
 ```bash
 unzip rusticdoc-templates.skill -d ~/.claude/skills/

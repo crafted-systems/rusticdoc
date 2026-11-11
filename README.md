@@ -102,7 +102,7 @@ Run the image, hardened:
 ```bash
 docker run -d --name rusticdoc --read-only --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 -p 127.0.0.1:9027:9027 \
-  ghcr.io/crafted-systems/rusticdoc:0.1.2
+  ghcr.io/crafted-systems/rusticdoc:0.1.3
 ```
 
 Fill a template and get a PDF:
@@ -205,7 +205,7 @@ The workspace has four crates: `rusticdoc-template` (the template engine), `rust
 
 ## 📍 Status
 
-The current version is 0.1.2. Versions follow [ZeroVer](https://0ver.org/), so a new minor number may change behaviour, as the [changelog](https://rusticdoc.com/docs/project/changelog/) explains. Some things haven't been checked yet, such as the Kubernetes manifest on a production cluster, and Word's default font, Aptos, isn't in the image. The [known limits](https://rusticdoc.com/docs/project/known-limits/) list all of them. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+The current version is 0.1.3, and Crafted Systems, who make rusticdoc, run it in production. Versions follow [ZeroVer](https://0ver.org/), so a new minor number may change behaviour, as the [changelog](https://rusticdoc.com/docs/project/changelog/) explains. Some things haven't been checked yet, such as the Kubernetes manifest on a production cluster, and Word's default font, Aptos, isn't in the image. The [known limits](https://rusticdoc.com/docs/project/known-limits/) list all of them. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## 📄 Licence
 
