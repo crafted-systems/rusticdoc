@@ -579,6 +579,37 @@ async fn image_and_pdf_overlays() {
         Error::InvalidRequest(_)
     ));
 
+    // A header that declares 20000 by 20000 pixels is refused by what it
+    // says, before any pixel is decoded.
+    let mut huge = b"\x89PNG\r\n\x1a\n\0\0\0\x0d".to_vec();
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend_from_slice(&20_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&20_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut crc = flate2::Crc::new();
+    crc.update(&ihdr);
+    huge.extend_from_slice(&ihdr);
+    huge.extend_from_slice(&crc.sum().to_be_bytes());
+    // The start of its pixel data, which is as far as a reader of sizes goes.
+    let mut crc = flate2::Crc::new();
+    crc.update(b"IDAT");
+    huge.extend_from_slice(&[0, 0, 0, 0]);
+    huge.extend_from_slice(b"IDAT");
+    huge.extend_from_slice(&crc.sum().to_be_bytes());
+    let too_large = Overlay {
+        placement: None,
+        kind: OverlayKind::Image {
+            bytes: huge,
+            name: "huge.png".into(),
+        },
+        ..image.clone()
+    };
+    let err = LopdfEngine::default()
+        .stamp(&input, &too_large, T)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("20000 by 20000"), "{err}");
+
     let overlay = Overlay {
         placement: None,
         kind: OverlayKind::Pdf {

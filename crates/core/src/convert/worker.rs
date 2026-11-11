@@ -163,7 +163,7 @@ impl Worker {
             .current_dir(dir.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| {
@@ -172,6 +172,9 @@ impl Worker {
                 launch.python.display()
             ))
         })?;
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(log_stderr(id, stderr));
+        }
         let stdin = child.stdin.take().ok_or_else(|| engine("bridge stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| engine("bridge stdout"))?;
         let mut worker = Self {
@@ -263,7 +266,7 @@ impl Worker {
     }
 
     /// SIGKILLs the bridge's process group (the bridge leads it) and the
-    /// `soffice` it reported, which runs in a session of its own.
+    /// group of the `soffice` it reported, which runs in a session of its own.
     fn kill_tree(&mut self) {
         // The bridge's process group is ours to signal: the bridge stays a
         // zombie until this side reaps it, so its group id cannot be
@@ -279,6 +282,10 @@ impl Worker {
         if let Some(pid) = self.soffice_pid.take()
             && bridge_alive
         {
+            // The bridge starts it in a session of its own, so it leads a
+            // group: whatever it started goes with it. When the binary is the
+            // `soffice` wrapper, that is where the real `soffice.bin` is.
+            targets.push(-(pid as i32));
             targets.push(pid as i32);
         }
         for target in targets {
@@ -288,6 +295,39 @@ impl Worker {
             }
         }
     }
+}
+
+/// Longest line of a worker's stderr that is logged.
+const MAX_STDERR_LINE: usize = 2048;
+
+/// Logs what the bridge and its LibreOffice print to stderr, a line at a time,
+/// as the value of a field. Left as the service's own stderr, a child that
+/// works on clients' documents could write lines that read as the service's.
+async fn log_stderr(worker: u64, mut stderr: tokio::process::ChildStderr) {
+    use tokio::io::AsyncReadExt as _;
+    let emit = |line: &mut Vec<u8>| {
+        let text = String::from_utf8_lossy(line);
+        let text = text.trim_end();
+        if !text.is_empty() {
+            tracing::info!(worker, line = text, "libreoffice stderr");
+        }
+        line.clear();
+    };
+    let mut line = Vec::new();
+    let mut chunk = vec![0u8; 4096];
+    while let Ok(n) = stderr.read(&mut chunk).await {
+        if n == 0 {
+            break;
+        }
+        for &byte in &chunk[..n] {
+            if byte == b'\n' {
+                emit(&mut line);
+            } else if line.len() < MAX_STDERR_LINE {
+                line.push(byte);
+            }
+        }
+    }
+    emit(&mut line);
 }
 
 impl Drop for Worker {

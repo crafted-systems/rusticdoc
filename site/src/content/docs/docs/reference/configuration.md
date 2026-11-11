@@ -18,7 +18,7 @@ An empty variable counts as unset.
 
 A bad value doesn't always stop the service. These do stop it from starting, with a message that names the problem:
 
-- A bad value in `RUSTICDOC_STORE`, `RUSTICDOC_STORE_SCOPE`, `RUSTICDOC_ADMIN_KEYS`, `RUSTICDOC_API_KEYS`, `RUSTICDOC_TENANT_KEYS`, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE` or `RUSTICDOC_STORE_SYNC_INTERVAL`.
+- A bad value in `RUSTICDOC_STORE`, `RUSTICDOC_STORE_SCOPE`, `RUSTICDOC_ADMIN_KEYS`, `RUSTICDOC_API_KEYS`, `RUSTICDOC_TENANT_KEYS`, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_JOB_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE` or `RUSTICDOC_STORE_SYNC_INTERVAL`.
 - `RUSTICDOC_BASIC_AUTH_USERNAME` and `RUSTICDOC_BASIC_AUTH_PASSWORD` when only one is set, or `RUSTICDOC_BASIC_AUTH_ADMIN` without basic auth.
 - `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM` without OpenID Connect, or in the wrong form.
 - OpenID Connect with only one of the issuer and audience set, or with an issuer or JWKS URL that is neither `https` nor `http` on a loopback host.
@@ -148,6 +148,7 @@ Each of these takes a comma-separated list from `lopdf`, `qpdf`, `pdfcpu` and `q
 | `RUSTICDOC_MAX_FONT_STORAGE` | `1GB` | Maximum bytes of fonts in the store. Every replica copies them all to disk |
 | `RUSTICDOC_FONT_CACHE_DIR` | `rusticdoc-stored-fonts` in the temp directory | This replica's copy of the stored fonts. It's local, and it's rebuilt when the replica starts |
 | `RUSTICDOC_JOB_TTL` | `1h` | How long a background job and its result are kept after it ends. Every replica removes expired jobs from the store |
+| `RUSTICDOC_MAX_JOB_STORAGE` | `5GB` | Maximum bytes of background-job results in one scope at a time. A job whose result would go past it fails with `quota_exceeded`. Replicas storing at the same moment can go over by whatever is in flight |
 | `RUSTICDOC_STORE_SYNC_INTERVAL` | `30s` | How often a replica looks for fonts added or deleted elsewhere |
 
 ## S3 credentials and endpoint

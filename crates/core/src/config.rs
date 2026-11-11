@@ -4,7 +4,7 @@ use std::time::Duration;
 
 /// Service and engine settings, read from `RUSTICDOC_*` environment
 /// variables. Every field has a default, so the binary starts with none set.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Address the HTTP server listens on.
     pub bind: String,
@@ -41,6 +41,8 @@ pub struct Config {
     pub max_templates: usize,
     /// Most bytes of templates one scope may hold.
     pub max_template_storage: u64,
+    /// Most bytes of background-job results one scope may hold at a time.
+    pub max_job_storage: u64,
     /// Most fonts the store may hold.
     pub max_stored_fonts: usize,
     /// Most bytes of fonts the store may hold. Every replica copies them to disk.
@@ -215,6 +217,25 @@ pub struct OidcConfig {
     pub jwks_url: String,
 }
 
+/// Not derived: the settings hold every key, the basic-auth password and the
+/// webhook secret, and one `{:?}` in a log line would print them. This says
+/// what is configured and nothing of what it is.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bind", &self.bind)
+            .field("root_path", &self.root_path)
+            .field("api_keys", &self.api_keys.len())
+            .field("tenant_keys", &self.tenant_keys.len())
+            .field("admin_keys", &self.admin_keys.len())
+            .field("basic_auth", &self.basic_auth.is_some())
+            .field("oidc", &self.oidc.is_some())
+            .field("webhook_secret", &self.webhook_secret.is_some())
+            .field("store", &self.store.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -247,6 +268,7 @@ impl Default for Config {
             max_template_bytes: 50 * 1024 * 1024,
             max_templates: 10_000,
             max_template_storage: 5 * 1024 * 1024 * 1024,
+            max_job_storage: 5 * 1024 * 1024 * 1024,
             max_stored_fonts: 2_000,
             max_font_storage: 1024 * 1024 * 1024,
             font_cache_dir: std::env::temp_dir().join("rusticdoc-stored-fonts"),
@@ -424,6 +446,14 @@ impl Config {
                 _ => c
                     .problems
                     .push(format!("RUSTICDOC_MAX_TEMPLATE_STORAGE: bad size '{v}'")),
+            }
+        }
+        if let Some(v) = get("MAX_JOB_STORAGE") {
+            match parse_bytes(&v) {
+                Some(n) if n > 0 => c.max_job_storage = n as u64,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_JOB_STORAGE: bad size '{v}'")),
             }
         }
         if let Some(v) = get("MAX_STORED_FONTS") {

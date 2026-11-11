@@ -1,6 +1,7 @@
 //! Walking the AcroForm field tree into terminal fields with their widgets.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use lopdf::{Dictionary, Document, Object, ObjectId};
 
@@ -48,11 +49,13 @@ pub(super) struct Field {
     pub name: String,
     pub kind: Kind,
     pub flags: i64,
-    pub value: Option<Object>,
-    pub default: Option<Object>,
-    pub options: Vec<String>,
+    // Inherited entries are shared with every field under the node that set
+    // them, not copied: a form can hang thousands of fields under one `/Opt`.
+    pub value: Option<Arc<Object>>,
+    pub default: Option<Arc<Object>>,
+    pub options: Arc<Vec<String>>,
     /// The raw `/Opt` array of a choice field.
-    pub opt: Option<Object>,
+    pub opt: Option<Arc<Object>>,
     pub da: Option<String>,
     pub quadding: i64,
     pub widgets: Vec<Widget>,
@@ -60,12 +63,12 @@ pub(super) struct Field {
 
 impl Field {
     /// 1-based number of the page the first widget sits on; 0 when none.
-    pub(super) fn page(&self, doc: &Document) -> u32 {
-        let pages = doc.get_pages();
+    /// `numbers` is every page's number by its id, built once for the form.
+    pub(super) fn page(&self, numbers: &HashMap<ObjectId, u32>) -> u32 {
         self.widgets
             .iter()
             .find_map(|w| w.page)
-            .and_then(|pid| pages.iter().find(|(_, id)| **id == pid).map(|(n, _)| *n))
+            .and_then(|pid| numbers.get(&pid).copied())
             .unwrap_or(0)
     }
 
@@ -85,9 +88,11 @@ pub(super) const FF_EDIT: u32 = 19;
 struct Inherited {
     ft: Option<String>,
     ff: Option<i64>,
-    v: Option<Object>,
-    dv: Option<Object>,
-    opt: Option<Object>,
+    v: Option<Arc<Object>>,
+    dv: Option<Arc<Object>>,
+    opt: Option<Arc<Object>>,
+    /// The export values of `opt`, read once where it is set.
+    options: Arc<Vec<String>>,
     da: Option<String>,
     q: Option<i64>,
 }
@@ -101,13 +106,14 @@ impl Inherited {
             self.ff = Some(ff);
         }
         if let Some(v) = get(doc, dict, b"V") {
-            self.v = Some(v.clone());
+            self.v = Some(Arc::new(v.clone()));
         }
         if let Some(dv) = get(doc, dict, b"DV") {
-            self.dv = Some(dv.clone());
+            self.dv = Some(Arc::new(dv.clone()));
         }
         if let Some(opt) = get(doc, dict, b"Opt") {
-            self.opt = Some(opt.clone());
+            self.options = Arc::new(options(doc, opt));
+            self.opt = Some(Arc::new(opt.clone()));
         }
         if let Some(Object::String(da, _)) = get(doc, dict, b"DA") {
             self.da = Some(super::text::decode_text_string(da));
@@ -230,11 +236,7 @@ impl Walker<'_> {
             flags,
             value: inherited.v.clone(),
             default: inherited.dv.clone(),
-            options: inherited
-                .opt
-                .as_ref()
-                .map(|opt| options(self.doc, opt))
-                .unwrap_or_default(),
+            options: inherited.options.clone(),
             opt: inherited.opt.clone(),
             da: inherited.da.clone(),
             quadding: inherited.q.unwrap_or(0),

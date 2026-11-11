@@ -14,7 +14,7 @@ The service speaks plain HTTP, so terminate TLS in front of it (see [security](/
 RUSTICDOC_API_KEYS=first-key,second-key
 ```
 
-Make every key long and random, for example with `openssl rand -hex 32`. The service doesn't check a key's strength, and it names each caller's stored files after a digest of the key, so anyone who can read the store could guess a short one.
+Make every key long and random, for example with `openssl rand -hex 32`. The service warns at every start about a key shorter than 16 characters and checks nothing else of its strength. It names each caller in the logs and its stored files after a digest of the key, so anyone who can read either could guess a short one.
 
 Callers send a key in either header:
 

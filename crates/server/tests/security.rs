@@ -374,7 +374,16 @@ fn every_start_warns_about_what_is_open() {
         "evaluating client templates in this process is worth saying at every start"
     );
     c.render_mode = rusticdoc_core::config::RenderMode::Isolated;
+    let warnings = rusticdoc_server::startup_warnings(&c);
+    assert!(
+        matches!(warnings.as_slice(), [short] if short.contains("could be guessed")),
+        "a one-letter key is worth a warning, and nothing else is: {warnings:?}"
+    );
+    c.api_keys = vec!["a-key-long-enough-to-keep".into()];
     assert!(rusticdoc_server::startup_warnings(&c).is_empty());
+    // What is printed of the settings names no key and no secret.
+    let shown = format!("{c:?}");
+    assert!(!shown.contains("a-key-long-enough"), "{shown}");
     let mut c = config();
     c.webhook_disabled = true;
     let warnings = rusticdoc_server::startup_warnings(&c);

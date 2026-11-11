@@ -101,7 +101,8 @@ impl PartialEq for Tsa {
 pub struct Token {
     /// The DER `ContentInfo`.
     pub der: Vec<u8>,
-    /// The certificates the token carries: the authority's, and any chain.
+    /// The authority's certificate and the chain from it to a trusted one,
+    /// each checked. Whatever else the token carries is left out.
     pub certificates: Vec<Certificate>,
     /// When the authority says it stamped.
     pub time: SystemTime,
@@ -292,7 +293,7 @@ pub(super) fn check(
             verify::CLOCK_SKEW.as_secs() / 60
         )));
     }
-    check_signer(
+    let path = signer_path(
         &parsed.signer,
         &parsed.certificates,
         anchors,
@@ -302,7 +303,10 @@ pub(super) fn check(
     .map_err(|e| refused(format!("its token is not trusted: {e}")))?;
     Ok(Token {
         der,
-        certificates: parsed.certificates,
+        // Not everything the token carries: that set is not signed, and these
+        // are asked about, at the addresses they name, to prove the signature
+        // later.
+        certificates: path,
         time: parsed.time,
     })
 }
@@ -413,21 +417,6 @@ pub(super) fn parse(der: &[u8]) -> Result<Parsed> {
         signer: cert.clone(),
         certificates,
     })
-}
-
-/// Whether the certificate that signed a token at `at` can be trusted now:
-/// a critical extended key usage of `id-kp-timeStamping`; valid both at `at`
-/// and `now`; and either one of `anchors` or issued, through CA certificates
-/// from `pool`, by one of them, every certificate on the way and the anchor
-/// valid at both times too.
-pub(super) fn check_signer(
-    signer: &Certificate,
-    pool: &[Certificate],
-    anchors: &[Certificate],
-    at: SystemTime,
-    now: SystemTime,
-) -> std::result::Result<(), String> {
-    signer_path(signer, pool, anchors, at, now).map(|_| ())
 }
 
 /// Adds to `path` the root that issued its last certificate, when `pool` has

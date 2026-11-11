@@ -94,21 +94,28 @@ pub async fn run_limited(
     // argument files, point at passwords.
     tracing::debug!(engine, ?bin, args = args.len(), "running");
 
-    let child = cmd.spawn().map_err(|e| Error::Engine {
+    let mut child = cmd.spawn().map_err(|e| Error::Engine {
         engine,
         message: format!("cannot start {}: {e}", bin.display()),
     })?;
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+    // Only the end of what it prints is used, so only the end is kept: an
+    // engine can be made to print a line for every object of a file.
+    let (out, err) = (child.stdout.take(), child.stderr.take());
+    let finished = async {
+        let (status, stdout, stderr) = tokio::join!(child.wait(), tail(out), tail(err));
+        status.map(|status| (status, stdout, stderr))
+    };
+    let (status, stdout, stderr) = match tokio::time::timeout(timeout, finished).await {
         Ok(result) => result?,
         Err(_) => return Err(Error::Timeout(timeout)),
     };
 
-    if output.status.success() {
+    if status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&stderr);
+    let stdout = String::from_utf8_lossy(&stdout);
     let tail: String = stderr
         .lines()
         .chain(stdout.lines())
@@ -124,7 +131,7 @@ pub async fn run_limited(
         engine,
         message: format!(
             "exit {}{}",
-            output.status.code().unwrap_or(-1),
+            status.code().unwrap_or(-1),
             if tail.is_empty() {
                 String::new()
             } else {
@@ -132,4 +139,34 @@ pub async fn run_limited(
             }
         ),
     })
+}
+
+/// How much of the end of a child's output is kept.
+const KEPT_OUTPUT: usize = 64 * 1024;
+
+/// Reads a child's output to its end and returns the last of it, at most
+/// [`KEPT_OUTPUT`] bytes. All of it is read, so the child never blocks on a
+/// full pipe.
+async fn tail(stream: Option<impl tokio::io::AsyncRead + Unpin>) -> Vec<u8> {
+    use tokio::io::AsyncReadExt as _;
+    let Some(mut stream) = stream else {
+        return Vec::new();
+    };
+    let mut kept = Vec::new();
+    // On the heap: held across an await, it would otherwise be part of every
+    // future that runs an engine, and those are moved about on the stack.
+    let mut chunk = vec![0u8; 8192];
+    while let Ok(n) = stream.read(&mut chunk).await {
+        if n == 0 {
+            break;
+        }
+        kept.extend_from_slice(&chunk[..n]);
+        if kept.len() > 2 * KEPT_OUTPUT {
+            kept.drain(..kept.len() - KEPT_OUTPUT);
+        }
+    }
+    if kept.len() > KEPT_OUTPUT {
+        kept.drain(..kept.len() - KEPT_OUTPUT);
+    }
+    kept
 }
