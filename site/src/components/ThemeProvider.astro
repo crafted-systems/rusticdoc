@@ -16,11 +16,12 @@
 // title, which comes after the sidebar; the marketing pages pass their main.
 // Browsers without it paint as before.
 //
-// The speculation rules have the browser prepare a page while the pointer rests
-// on a link to it (about 200 ms), or from the moment a finger touches one, so
-// the click shows a page that is already loaded. They cover the site's own
-// pages, which all end in a slash, and not files such as /openapi.json.
-// Chromium follows them; other browsers ignore them and load on click.
+// The speculation rules have the browser fetch a page while the pointer rests on
+// a link to it (about 200 ms), or from the moment a finger touches one, so the
+// click finds its HTML already downloaded. They don't prerender: with prerender
+// on, a click on a page still being prepared could need a second click.
+// They cover the site's own pages, which all end in a slash, and not files such
+// as /openapi.json. Chromium follows them; other browsers load on click.
 import bodyFont from '@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2?url';
 
 interface Props {
@@ -29,7 +30,6 @@ interface Props {
 const { expect = '_top' } = Astro.props;
 const pages = { href_matches: ['/', '/*/'] };
 const speculation = JSON.stringify({
-  prerender: [{ where: pages, eagerness: 'moderate' }],
   prefetch: [{ where: pages, eagerness: 'moderate' }],
 });
 ---
