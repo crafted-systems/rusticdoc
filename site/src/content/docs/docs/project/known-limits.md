@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-Read this list before you depend on rusticdoc. It's a young project, and these are the things that don't work or could surprise you.
+Read this list before you depend on rusticdoc. These are the things that don't work or could surprise you.
 
 ## Requests
 
