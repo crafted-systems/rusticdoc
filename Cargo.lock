@@ -812,6 +812,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2687,9 +2696,9 @@ dependencies = [
 
 [[package]]
 name = "minijinja"
-version = "3.0.5"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00f5a04892e86ddb4fc254e9160835370b63a0d44042d3ab4725bc2dbcbab136"
+checksum = "509eeb2603a84eccabb4d75f6ec8ba23b46bbf441aaeb863d6b83a5887fd51e4"
 dependencies = [
  "serde",
 ]
@@ -3928,7 +3937,7 @@ dependencies = [
  "krilla",
  "libc",
  "lopdf 0.47.0",
- "minijinja 3.0.5",
+ "minijinja 3.1.0",
  "object_store",
  "parley",
  "quick-xml 0.42.0",
@@ -3971,7 +3980,7 @@ dependencies = [
  "libc",
  "lopdf 0.47.0",
  "mime",
- "minijinja 3.0.5",
+ "minijinja 3.1.0",
  "prometheus-client",
  "rcgen",
  "regex",
@@ -4003,7 +4012,7 @@ dependencies = [
  "chrono-tz",
  "hex",
  "image",
- "minijinja 3.0.5",
+ "minijinja 3.1.0",
  "num2words",
  "quick-xml 0.42.0",
  "regex",
@@ -6318,10 +6327,11 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.4.1"
+version = "9.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f17fbc870bfac28c6228aed7d6e6df352e26bf7015c4313727e16a7a01ce5e"
+checksum = "df3845f734baabdd02de353a20580e30ceccd03897def44a4eb8e9654992e294"
 dependencies = [
+ "constant_time_eq",
  "crc32fast",
  "flate2",
  "getrandom 0.4.3",
@@ -6331,6 +6341,7 @@ dependencies = [
  "nix",
  "typed-path",
  "windows-sys 0.61.2",
+ "zeroize",
  "zopfli",
 ]
 
