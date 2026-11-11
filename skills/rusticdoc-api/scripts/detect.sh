@@ -13,7 +13,7 @@ set -u
 
 url="${RUSTICDOC_URL:-http://localhost:9027}"
 url="${url%/}"
-image="ghcr.io/crafted-systems/rusticdoc:0.1.3"
+image="ghcr.io/crafted-systems/rusticdoc:0.1.4"
 service=no
 cli=no
 docker_ok=no

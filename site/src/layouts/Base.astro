@@ -75,7 +75,7 @@ const footer = [
     <header class="masthead">
       <a class="brand" href="/" aria-label="rusticdoc home">
         <Logo />
-        <span>rusticdoc</span>
+        <span>rustic<span class="wordmark-doc">doc</span></span>
       </a>
       <nav aria-label="Main">
         <SiteMenus path={path} />
@@ -88,7 +88,7 @@ const footer = [
     <footer class="colophon">
       <div class="colophon-inner">
         <div class="colophon-brand">
-          <a class="brand" href="/" aria-label="rusticdoc home"><Logo /><span>rusticdoc</span></a>
+          <a class="brand" href="/" aria-label="rusticdoc home"><Logo /><span>rustic<span class="wordmark-doc">doc</span></span></a>
           <p>Fill Office and PDF templates from JSON, in one container you run yourself. Open source under the <a href={`${REPO}/blob/main/LICENSE`}>Apache-2.0 licence</a>.</p>
         </div>
         {footer.map((col) => (
