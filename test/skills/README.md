@@ -16,7 +16,7 @@ Start a service. The template cases need LibreOffice, so use the image. The API 
 ```bash
 docker run -d --rm --name rd-evals -p 127.0.0.1:9027:9027 \
   -e RUSTICDOC_API_KEYS=test-key-0123456789abcdef -e RUSTICDOC_STORE=file:///tmp/store \
-  ghcr.io/crafted-systems/rusticdoc:0.1.2
+  ghcr.io/crafted-systems/rusticdoc:0.1.3
 export RUSTICDOC_URL=http://localhost:9027 RUSTICDOC_API_KEY=test-key-0123456789abcdef
 ```
 

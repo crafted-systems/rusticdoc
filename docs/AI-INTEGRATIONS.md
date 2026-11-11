@@ -14,7 +14,7 @@ rusticdoc's skills render on their own in any host with a shell, in one of three
 |---|---|---|
 | HTTP with `curl` to a running service | `RUSTICDOC_URL`, and `RUSTICDOC_API_KEY` when the service has credentials | Everything |
 | The `rusticdoc` CLI (Linux and macOS releases) | The binary on `PATH` | Filling and validating templates, HTML to PDF with Fulgur, and the PDF operations the built-in engine covers. Office to PDF needs LibreOffice, so it returns `503` on a plain Mac |
-| The image, one command at a time: `docker run --rm -v "$PWD:/work" -w /work --user "$(id -u)" ghcr.io/crafted-systems/rusticdoc:0.1.2 render ...` | Docker, and the user's agreement | Everything, with no service left running. Optional, see 2.1 |
+| The image, one command at a time: `docker run --rm -v "$PWD:/work" -w /work --user "$(id -u)" ghcr.io/crafted-systems/rusticdoc:0.1.3 render ...` | Docker, and the user's agreement | Everything, with no service left running. Optional, see 2.1 |
 
 rusticdoc also has things Carbone's skill can't lean on:
 
