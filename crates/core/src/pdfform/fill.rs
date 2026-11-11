@@ -208,7 +208,7 @@ impl Filler<'_> {
 
     /// The rendered value of a field whose `/V` or `/DV` is a template.
     fn template_value(&mut self, field: &Field) -> Result<Option<String>> {
-        for candidate in [&field.value, &field.default] {
+        for candidate in [field.value.as_deref(), field.default.as_deref()] {
             if let Some(Object::String(bytes, _)) = candidate {
                 let source = text::decode_text_string(bytes);
                 if text::is_template(&source) {

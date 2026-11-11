@@ -831,3 +831,55 @@ fn cyclic_objects_do_not_overflow() {
     .unwrap();
     assert!(fields(&filled).unwrap().is_empty());
 }
+
+/// A form whose AcroForm carries `options` options and `fields` choice fields
+/// that all inherit them.
+fn build_shared_options(options: usize, fields: usize) -> Vec<u8> {
+    let mut doc = Document::with_version("1.7");
+    let pages_id = doc.new_object_id();
+    let kids: Vec<ObjectId> = (0..fields)
+        .map(|i| {
+            doc.add_object(dictionary! {
+                "Type" => "Annot",
+                "Subtype" => "Widget",
+                "FT" => "Ch",
+                "T" => Object::string_literal(format!("f{i}")),
+                "Rect" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+            })
+        })
+        .collect();
+    let page_id = page(&mut doc, pages_id, "", kids.clone());
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1,
+        }),
+    );
+    let form = doc.add_object(dictionary! {
+        "Fields" => kids.into_iter().map(Object::Reference).collect::<Vec<_>>(),
+        "Opt" => (0..options).map(|_| Object::string_literal("x")).collect::<Vec<_>>(),
+    });
+    let catalog = doc.add_object(dictionary! {
+        "Type" => "Catalog", "Pages" => pages_id, "AcroForm" => form,
+    });
+    doc.trailer.set("Root", catalog);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn options_every_field_inherits_are_not_copied_without_limit() {
+    // A few options under many fields list as before.
+    let listed = fields(&build_shared_options(3, 200)).unwrap();
+    assert_eq!(listed.len(), 200);
+    assert_eq!(listed[199].options, ["x", "x", "x"]);
+    assert_eq!(listed[199].page, 1);
+    // Many under many would be 400 million strings: refused, and soon.
+    let bomb = build_shared_options(100_000, 4_000);
+    assert!(bomb.len() < 2 << 20, "{}", bomb.len());
+    let started = std::time::Instant::now();
+    let err = fields(&bomb).unwrap_err();
+    assert!(matches!(err, Error::InvalidRequest(_)), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}

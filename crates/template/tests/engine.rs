@@ -912,3 +912,68 @@ fn undefined_values_can_print_as_empty_per_render() {
         part(&out, "xl/worksheets/sheet1.xml")
     );
 }
+
+/// A table in a cell in a table, `levels` times, around one tag.
+fn nested_tables(levels: usize) -> Vec<u8> {
+    let body = format!(
+        "{}{}{}",
+        "<w:tbl><w:tr><w:tc>".repeat(levels),
+        p("{{ name }}"),
+        "</w:tc></w:tr></w:tbl>".repeat(levels)
+    );
+    docx(&body)
+}
+
+#[test]
+fn nesting_is_read_as_deep_as_allowed_and_refused_past_it() {
+    // On a small stack, so the depth allowed is one the walkers can afford.
+    let small = std::thread::Builder::new().stack_size(1 << 20);
+    small
+        .spawn(|| {
+            // Three elements a level, under the document, its body and the
+            // paragraph: just inside the limit.
+            let deep = nested_tables(80);
+            let out = render(Format::Docx, &deep, json!({"name": "Ada"}));
+            assert!(part(&out, "word/document.xml").contains("Ada"));
+            assert!(validate(Format::Docx, &deep, &json!({"name": "Ada"})).is_empty());
+
+            // Far past it: an error, where walking the tree would have run
+            // out of stack.
+            let bomb = nested_tables(200_000);
+            let Err(err) = compile(Format::Docx, &bomb) else {
+                panic!("nesting past the limit compiled");
+            };
+            assert!(err.to_string().contains("nested"), "{err}");
+            assert!(!validate(Format::Docx, &bomb, &json!({})).is_empty());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn of_two_entries_with_one_name_only_one_is_read_and_written() {
+    // Written under two names of one length, then one renamed in place, in
+    // its own header and in the directory: no writer makes this by itself.
+    let mut bytes = zip(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.text"),
+        ("content.xml", b"<a/>"),
+        ("content.xmm", b"<b/>"),
+    ]);
+    let mut renamed = 0;
+    for at in 0..bytes.len() - 11 {
+        if &bytes[at..at + 11] == b"content.xmm" {
+            bytes[at + 10] = b'l';
+            renamed += 1;
+        }
+    }
+    assert_eq!(renamed, 2);
+    // The reader keeps one of them, so one is all that is cleaned and all
+    // that is written: nothing unread can ride along to LibreOffice.
+    let out = render(Format::Odt, &bytes, json!({}));
+    let contents = entries(&out)
+        .into_iter()
+        .filter(|(name, _)| name == "content.xml")
+        .count();
+    assert_eq!(contents, 1);
+}

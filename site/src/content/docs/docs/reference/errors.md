@@ -54,7 +54,7 @@ You also get this code when a step that needs a PDF runs on something else, with
 | Code | Meaning | What to do |
 |---|---|---|
 | `admin_required` | This route changes fonts, and the caller isn't an admin | Send one of `RUSTICDOC_ADMIN_KEYS`, or make the caller an admin with `RUSTICDOC_BASIC_AUTH_ADMIN`, `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM`. See [authentication](/docs/guides/authentication/) |
-| `quota_exceeded` | Stored templates or fonts are at a limit | Delete some, or raise `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS` or `RUSTICDOC_MAX_FONT_STORAGE` |
+| `quota_exceeded` | Stored templates, fonts or background-job results are at a limit | Delete some, or raise `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS` or `RUSTICDOC_MAX_FONT_STORAGE`. For job results, wait for earlier ones to expire or raise `RUSTICDOC_MAX_JOB_STORAGE` |
 | `url_not_allowed` | A webhook or `downloadFrom` URL fails an allow or deny list | Change the URL, or the lists in `RUSTICDOC_WEBHOOK_ALLOW_LIST`, `RUSTICDOC_WEBHOOK_DENY_LIST`, `RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST` or `RUSTICDOC_DOWNLOAD_FROM_DENY_LIST` |
 
 A private address gets a `400`, not a `403`.

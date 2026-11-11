@@ -114,7 +114,7 @@ As on a synchronous response, an engine failure is reported by the name of its s
 
 ## How long a job is kept
 
-A job and its result are kept for `RUSTICDOC_JOB_TTL` (default `1h`) after the job ends. After that, both routes return `404` immediately. Each replica clears expired jobs out of the store every quarter of the TTL, at least 10 seconds and at most 10 minutes apart.
+A job and its result are kept for `RUSTICDOC_JOB_TTL` (default `1h`) after the job ends. One caller's results may hold `RUSTICDOC_MAX_JOB_STORAGE` (default `5GB`) at a time; a job whose result would go past that fails with `quota_exceeded`. After that, both routes return `404` immediately. Each replica clears expired jobs out of the store every quarter of the TTL, at least 10 seconds and at most 10 minutes apart.
 
 A job runs on the replica that accepted it, so if that replica stops before the job ends, nothing finishes it. Once `runsUntil` passes, the job shows as `failed` with `job_lost` and a `503` status, and it's removed a TTL later. Send the request again.
 

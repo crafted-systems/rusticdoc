@@ -484,14 +484,14 @@ pub async fn variables(
         .await?;
         let fields: Vec<(String, Option<String>)> =
             fields.into_iter().map(|f| (f.name, f.value)).collect();
-        crate::variables::analyse_form(&fields)
+        analysed(move || crate::variables::analyse_form(&fields)).await?
     } else {
         let tags = state
             .pipeline
             .renderer()
             .tags(&doc, state.config.api_timeout)
             .await?;
-        crate::variables::analyse(&tags)
+        analysed(move || crate::variables::analyse(&tags)).await?
     };
     Ok(Json(TemplateVariables {
         template_id: id,
@@ -499,6 +499,25 @@ pub async fn variables(
         variables: found.variables,
         example: found.example,
     }))
+}
+
+/// Runs the analysis off the request threads, since it is all computation, and
+/// turns its refusal of a template that names too much into a 422.
+async fn analysed(
+    work: impl FnOnce() -> Result<crate::variables::Variables, crate::variables::TooMany>
+    + Send
+    + 'static,
+) -> ApiResult<crate::variables::Variables> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "io_error", e.to_string()))?
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "template_error",
+                e.to_string(),
+            )
+        })
 }
 
 /// The fields `POST /v1/templates/{id}/preview` accepts, as JSON or as a

@@ -100,16 +100,15 @@ class Office:
                 elif code is not None:
                     raise RuntimeError("libreoffice exited with %d during start" % code)
                 if time.monotonic() > deadline:
-                    self.proc.kill()
-                    self.proc.wait()
+                    self.kill()
                     raise RuntimeError("libreoffice did not accept a connection in time")
                 time.sleep(0.05)
         self.desktop = self.ctx.ServiceManager.createInstanceWithContext(
             "com.sun.star.frame.Desktop", self.ctx)
 
     def launch(self):
-        # Its own session, so a signal to the bridge's group misses it and
-        # the Rust side kills it by pid; umask 077 keeps the UNO pipe private.
+        # Its own session, so a signal to the bridge's group misses it and the
+        # Rust side kills its group by pid; umask 077 keeps the UNO pipe private.
         self.proc = subprocess.Popen(
             self.args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             preexec_fn=set_pdeathsig, env=self.env, start_new_session=True)
@@ -124,8 +123,15 @@ class Office:
         except Exception:
             pass
         if self.alive():
+            self.kill()
+
+    def kill(self):
+        # Its group: under the soffice wrapper, soffice.bin is a child of it.
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except OSError:
             self.proc.kill()
-            self.proc.wait()
+        self.proc.wait()
 
     def convert(self, req):
         load = {"Hidden": True, "ReadOnly": True, "UpdateDocMode": 0,

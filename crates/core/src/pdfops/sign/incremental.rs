@@ -145,7 +145,9 @@ pub(super) fn dict_in(pdf: &Pdf, dict: &Dictionary, key: &[u8]) -> Option<Dictio
 
 /// `Signature1`, or the first `SignatureN` no top-level field uses.
 fn field_name(pdf: &Pdf, fields: &[Object]) -> String {
-    let taken: Vec<Vec<u8>> = fields
+    // A set, so a form that takes every name up to some large N costs N
+    // lookups and not N of them for each.
+    let taken: std::collections::HashSet<&[u8]> = fields
         .iter()
         .filter_map(|f| match f {
             Object::Reference(id) => pdf.get_dictionary(*id).ok(),
@@ -153,11 +155,10 @@ fn field_name(pdf: &Pdf, fields: &[Object]) -> String {
             _ => None,
         })
         .filter_map(|d| d.get(b"T").and_then(Object::as_str).ok())
-        .map(<[u8]>::to_vec)
         .collect();
     (1..)
         .map(|n| format!("Signature{n}"))
-        .find(|name| !taken.iter().any(|t| t == name.as_bytes()))
+        .find(|name| !taken.contains(name.as_bytes()))
         .expect("a free name")
 }
 
@@ -647,12 +648,7 @@ pub(super) fn prepare(
         Some((appearance, options, now, shown_name)) => {
             let (w, h, form) = match &appearance.image {
                 Some(bytes) => {
-                    let mut image = ::lopdf::xobject::image_from(bytes.clone()).map_err(|e| {
-                        Error::InvalidRequest(format!(
-                            "'{}' is not a usable PNG or JPEG: {e}",
-                            appearance.name
-                        ))
-                    })?;
+                    let mut image = crate::pdfops::draw::image_xobject(bytes, &appearance.name)?;
                     let px = |key: &[u8]| {
                         image
                             .dict

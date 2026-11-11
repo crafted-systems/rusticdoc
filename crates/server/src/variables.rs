@@ -168,6 +168,38 @@ struct Analysis {
     frames: Vec<Frame>,
     /// Every path seen, with what was seen of it, in first-seen order.
     seen: Vec<(Path, Kind)>,
+    /// Where each path is in `seen`, so finding one does not read them all.
+    index: HashMap<Path, usize>,
+    /// Set once the template names more than the analysis will hold.
+    over: Option<TooMany>,
+}
+
+/// Most parts one path may have. Deeper data than this is not written by hand.
+pub const MAX_DEPTH: usize = 64;
+/// Most distinct paths one template may name.
+pub const MAX_PATHS: usize = 10_000;
+
+/// Why a template's variables are not listed: it names more than the analysis
+/// holds, and the work grows faster than the template does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TooMany {
+    Depth,
+    Paths,
+}
+
+impl std::fmt::Display for TooMany {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Depth => write!(
+                f,
+                "the template reads a path more than {MAX_DEPTH} parts deep, which is more than its variables are listed for"
+            ),
+            Self::Paths => write!(
+                f,
+                "the template reads more than {MAX_PATHS} different paths, which is more than its variables are listed for"
+            ),
+        }
+    }
 }
 
 impl Analysis {
@@ -175,6 +207,8 @@ impl Analysis {
         Self {
             frames: vec![Frame::default()],
             seen: Vec::new(),
+            index: HashMap::new(),
+            over: None,
         }
     }
 
@@ -204,7 +238,11 @@ impl Analysis {
     }
 
     fn note(&mut self, path: &Path, kind: Kind) {
-        if path.is_empty() {
+        if path.is_empty() || self.over.is_some() {
+            return;
+        }
+        if path.len() > MAX_DEPTH {
+            self.over = Some(TooMany::Depth);
             return;
         }
         // Every parent is an object, or an array when the next part is an item.
@@ -220,14 +258,19 @@ impl Analysis {
     }
 
     fn record(&mut self, path: &[Seg], kind: Kind) {
-        match self.seen.iter_mut().find(|(p, _)| p == path) {
-            Some((_, known)) => {
+        match self.index.get(path) {
+            Some(&at) => {
+                let known = &mut self.seen[at].1;
                 // What a path holds wins over its merely being printed.
                 if *known == Kind::Value || kind == Kind::Array {
                     *known = kind;
                 }
             }
-            None => self.seen.push((path.to_vec(), kind)),
+            None if self.seen.len() >= MAX_PATHS => self.over = Some(TooMany::Paths),
+            None => {
+                self.index.insert(path.to_vec(), self.seen.len());
+                self.seen.push((path.to_vec(), kind));
+            }
         }
     }
 
@@ -488,7 +531,10 @@ impl Analysis {
         }
     }
 
-    fn finish(self) -> Variables {
+    fn finish(self) -> Result<Variables, TooMany> {
+        if let Some(over) = self.over {
+            return Err(over);
+        }
         let mut seen: Vec<(Path, Kind)> = self.seen;
         // A path whose fields are read is an object; one with items, an array.
         let snapshot = seen.clone();
@@ -505,7 +551,7 @@ impl Analysis {
             }
         }
         let example = example(&seen, &[]);
-        Variables {
+        Ok(Variables {
             variables: seen
                 .iter()
                 .map(|(path, kind)| Variable {
@@ -514,7 +560,7 @@ impl Analysis {
                 })
                 .collect(),
             example,
-        }
+        })
     }
 }
 
@@ -662,10 +708,13 @@ fn split_top(text: &str, sep: char) -> Vec<&str> {
 }
 
 /// The variables of a template, from its tags in document order.
-pub fn analyse(tags: &[String]) -> Variables {
+pub fn analyse(tags: &[String]) -> Result<Variables, TooMany> {
     let mut analysis = Analysis::new();
     for tag in tags {
         analysis.tag(tag);
+        if analysis.over.is_some() {
+            break;
+        }
     }
     analysis.finish()
 }
@@ -673,7 +722,7 @@ pub fn analyse(tags: &[String]) -> Variables {
 /// The variables of a PDF form: each field's name is a path into the data,
 /// with numbers for array items (`items.0.qty`), unless its value holds tags,
 /// which are read instead, as filling would.
-pub fn analyse_form(fields: &[(String, Option<String>)]) -> Variables {
+pub fn analyse_form(fields: &[(String, Option<String>)]) -> Result<Variables, TooMany> {
     let mut analysis = Analysis::new();
     for (name, value) in fields {
         let value = value.as_deref().unwrap_or("");
@@ -729,6 +778,7 @@ mod tests {
     fn of(tags: &[&str]) -> Vec<(String, Kind)> {
         let tags: Vec<String> = tags.iter().map(|t| t.to_string()).collect();
         analyse(&tags)
+            .unwrap()
             .variables
             .into_iter()
             .map(|v| (v.path, v.kind))
@@ -777,7 +827,7 @@ mod tests {
         .iter()
         .map(|t| t.to_string())
         .collect();
-        let found = analyse(&tags);
+        let found = analyse(&tags).unwrap();
         let paths: Vec<&str> = found.variables.iter().map(|v| v.path.as_str()).collect();
         assert!(
             paths.contains(&"customer.orders[].lines[].sku"),
@@ -842,7 +892,8 @@ mod tests {
             ("customer.name".into(), None),
             ("items.0.qty".into(), Some(String::new())),
             ("greeting".into(), Some("Dear {{ person.first }}".into())),
-        ]);
+        ])
+        .unwrap();
         let paths: Vec<&str> = found.variables.iter().map(|v| v.path.as_str()).collect();
         assert_eq!(
             paths,
@@ -872,5 +923,23 @@ mod tests {
         assert!(has(&found, "pairs", Kind::Array));
         assert!(has(&found, "row.unit price", Kind::Value));
         assert!(!found.iter().any(|(p, _)| p == "code" || p == "a"));
+    }
+
+    #[test]
+    fn a_path_too_deep_or_too_many_paths_are_refused_quickly() {
+        let started = std::time::Instant::now();
+        let deep = format!("{{{{ {} }}}}", vec!["a"; 20_000].join("."));
+        assert_eq!(analyse(&[deep]).unwrap_err(), TooMany::Depth);
+        let many: Vec<String> = (0..200_000).map(|i| format!("{{{{ v{i} }}}}")).collect();
+        assert_eq!(analyse(&many).unwrap_err(), TooMany::Paths);
+        // As many paths as are allowed, each as deep as is allowed.
+        let full: Vec<String> = (0..MAX_PATHS / MAX_DEPTH)
+            .map(|i| format!("{{{{ r{i}.{} }}}}", vec!["a"; MAX_DEPTH - 1].join(".")))
+            .collect();
+        assert_eq!(
+            analyse(&full).unwrap().variables.len(),
+            MAX_PATHS / MAX_DEPTH * MAX_DEPTH
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
     }
 }

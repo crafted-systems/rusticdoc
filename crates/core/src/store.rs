@@ -1018,9 +1018,10 @@ impl Store {
     /// Every live alias of a scope, by name, each with its records.
     async fn live_aliases(&self, scope: &str) -> StoreResult<Vec<(String, AliasRecords)>> {
         let prefix = ObjectPath::from(format!("aliases/{scope}"));
-        let listed: Vec<_> = self.objects.list(Some(&prefix)).try_collect().await?;
+        // Read as it comes: only the names and ids are kept, not the listing.
+        let mut listed = self.objects.list(Some(&prefix));
         let mut by_name: std::collections::BTreeMap<String, AliasRecords> = Default::default();
-        for object in &listed {
+        while let Some(object) = listed.try_next().await? {
             let parts: Vec<String> = object
                 .location
                 .parts()
@@ -1048,6 +1049,49 @@ impl Store {
                 (!records.live().is_empty()).then_some((name, records))
             })
             .collect())
+    }
+
+    /// Removes what deleted aliases leave behind: a marker with nothing else
+    /// under its name, once it is older than `age`. The marker is what keeps a
+    /// record written before the deletion from bringing the alias back, and a
+    /// record that late no longer arrives. Without this every name ever used
+    /// would stay in the store, outside the limit on aliases. Every replica runs
+    /// this, and a delete that finds nothing is not an error. Returns how many
+    /// went.
+    pub async fn sweep_alias_markers(&self, age: Duration) -> StoreResult<usize> {
+        let before = chrono::Utc::now() - chrono_duration(age);
+        // For each alias: how many objects it has, and its marker when that is
+        // old enough to go.
+        let mut names: std::collections::HashMap<(String, String), (usize, Option<ObjectPath>)> =
+            Default::default();
+        let mut listed = self.objects.list(Some(&ObjectPath::from("aliases")));
+        while let Some(object) = listed.try_next().await? {
+            let parts: Vec<String> = object
+                .location
+                .parts()
+                .map(|p| p.as_ref().to_string())
+                .collect();
+            let [_, scope, name, file] = parts.as_slice() else {
+                continue;
+            };
+            let entry = names.entry((scope.clone(), name.clone())).or_default();
+            entry.0 += 1;
+            if matches!(alias_file(file), Some((_, false))) && object.last_modified < before {
+                entry.1 = Some(object.location);
+            }
+        }
+        let mut removed = 0;
+        for (count, marker) in names.into_values() {
+            let (1, Some(marker)) = (count, marker) else {
+                continue;
+            };
+            match self.objects.delete(&marker).await {
+                Ok(()) => removed += 1,
+                Err(object_store::Error::NotFound { .. }) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(removed)
     }
 
     /// How many aliases a scope holds, for its limit.
@@ -1120,6 +1164,18 @@ impl Store {
         ));
         self.objects.put(&path, Bytes::from(encoded).into()).await?;
         Ok(())
+    }
+
+    /// The bytes a scope's jobs hold in the store, results and states alike,
+    /// for its limit.
+    pub async fn job_usage(&self, scope: &str) -> StoreResult<u64> {
+        let prefix = ObjectPath::from(format!("jobs/{scope}"));
+        let mut listed = self.objects.list(Some(&prefix));
+        let mut bytes = 0u64;
+        while let Some(object) = listed.try_next().await? {
+            bytes = bytes.saturating_add(object.size);
+        }
+        Ok(bytes)
     }
 
     /// Stores what a job made. Written before the state that names it.
@@ -1337,6 +1393,36 @@ mod tests {
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&fresh, &link).unwrap();
         assert!(create_owned_private_dir(&link).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_deleted_alias_leaves_nothing_once_its_marker_is_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&format!("file://{}", dir.path().display())).unwrap();
+        let doc = Document::new("t.txt", b"{{ a }}".to_vec());
+        let template = store.put_template("s", &doc).await.unwrap();
+        for name in ["kept", "gone"] {
+            store.set_alias("s", name, &template.id).await.unwrap();
+        }
+        store.delete_alias("s", "gone").await.unwrap();
+        let under = |name: &str| {
+            std::fs::read_dir(dir.path().join("aliases/s").join(name))
+                .map(|d| d.count())
+                .unwrap_or(0)
+        };
+        assert_eq!((under("kept"), under("gone")), (1, 1));
+
+        // A fresh marker stays, since it may still have a record to hold back.
+        let day = Duration::from_secs(86_400);
+        assert_eq!(store.sweep_alias_markers(day).await.unwrap(), 0);
+        assert_eq!(under("gone"), 1);
+        // An old one goes, and a live alias is not touched.
+        assert_eq!(store.sweep_alias_markers(Duration::ZERO).await.unwrap(), 1);
+        assert_eq!((under("kept"), under("gone")), (1, 0));
+        assert_eq!(store.alias_count("s").await.unwrap(), 1);
+        // The name can be used again.
+        store.set_alias("s", "gone", &template.id).await.unwrap();
+        assert_eq!(store.alias_count("s").await.unwrap(), 2);
     }
 
     #[test]

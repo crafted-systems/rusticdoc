@@ -2143,3 +2143,63 @@ async fn json_bodies_carry_the_language_fields() {
         "{message}"
     );
 }
+
+#[tokio::test]
+async fn one_callers_job_results_stop_at_its_limit() {
+    let pair = two_replicas(|c| {
+        c.api_keys = vec!["alice-key".into(), "bob-key".into()];
+        c.max_job_storage = 6_000;
+    });
+    let run = |key: &'static str| {
+        let router = pair.a.clone();
+        async move {
+            let id = store_text(&router, "hello.txt", b"Hello {{ name }}", Some(key)).await;
+            let res = router
+                .clone()
+                .oneshot(async_render(
+                    serde_json::json!({ "templateId": id, "data": { "name": "a".repeat(4_000) } }),
+                    Some(key),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::ACCEPTED);
+            let location = res.headers()[header::LOCATION]
+                .to_str()
+                .unwrap()
+                .to_string();
+            job_until_ended(&router, &location, Some(key)).await
+        }
+    };
+    let first = run("alice-key").await;
+    assert_eq!(first["status"], "done", "{first}");
+    // The next would take her results past what one caller may hold.
+    let second = run("alice-key").await;
+    assert_eq!(second["status"], "failed", "{second}");
+    assert_eq!(second["error"]["error"], "quota_exceeded", "{second}");
+    // Another caller's are counted apart.
+    let other = run("bob-key").await;
+    assert_eq!(other["status"], "done", "{other}");
+}
+
+#[tokio::test]
+async fn health_says_where_the_store_is_to_an_admin_only() {
+    let pair = two_replicas(|c| {
+        c.api_keys = vec!["alice-key".into()];
+        c.admin_keys = vec!["admin-key".into()];
+    });
+    let store_of = |key: &'static str| {
+        let router = pair.a.clone();
+        async move {
+            let res = router
+                .oneshot(call("GET", "/health", Some(key)))
+                .await
+                .unwrap();
+            json(res).await["details"]["store"].clone()
+        }
+    };
+    let seen = store_of("alice-key").await;
+    assert_eq!(seen["fontsSynced"], false);
+    assert!(seen.get("location").is_none(), "{seen}");
+    let seen = store_of("admin-key").await;
+    assert!(seen["location"].as_str().unwrap().starts_with("file://"));
+}

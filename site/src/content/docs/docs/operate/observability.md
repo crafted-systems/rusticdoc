@@ -153,7 +153,7 @@ A caller the service knows gets the detail, and so does anyone when no credentia
 | `engines.libreoffice`, `engines.qpdf` | Whether each engine is configured |
 | `details.libreoffice.status` | `up` or `down`, depending on whether it's configured |
 | `details.libreoffice.pool` | `workers`, `busy`, `idle`, `started`, `restarts` and `max_jobs` |
-| `details.store` | Only with a store: `location` and `fontsSynced` |
+| `details.store` | Only with a store: `fontsSynced`, and for an admin, or when no credentials are configured, `location` |
 
 When credentials are configured, a caller without them only sees `{"status":"up"}`.
 

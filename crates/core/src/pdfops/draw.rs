@@ -352,9 +352,7 @@ pub(super) fn overlay_within(
             rgb: parse_colour(colour)?,
         },
         OverlayKind::Image { bytes, name } => {
-            let stream = ::lopdf::xobject::image_from(bytes.clone()).map_err(|e| {
-                Error::InvalidRequest(format!("'{name}' is not a usable PNG or JPEG: {e}"))
-            })?;
+            let stream = image_xobject(bytes, name)?;
             let width = stream.dict.get(b"Width").and_then(Object::as_i64)? as f32;
             let height = stream.dict.get(b"Height").and_then(Object::as_i64)? as f32;
             Art::Image {
@@ -553,6 +551,30 @@ fn import_pages(pdf: &mut Pdf, source: &Document, deadline: Deadline) -> Result<
     pdf.objects.extend(src.objects);
     pdf.max_id = pdf.max_id.max(src.max_id);
     Ok(forms.into_iter().map(|f| pdf.add_object(f)).collect())
+}
+
+/// Most pixels an image drawn onto a page may have. Its file's size says
+/// nothing of this: a PNG of a few hundred kilobytes can declare a gigabyte.
+pub(in crate::pdfops) const MAX_DRAWN_PIXELS: u64 = 25_000_000;
+
+/// A PNG or JPEG as an image XObject. Its size is read from its header and
+/// checked before anything is decoded.
+pub(in crate::pdfops) fn image_xobject(bytes: &[u8], name: &str) -> Result<::lopdf::Stream> {
+    let unusable = |e: &dyn std::fmt::Display| {
+        Error::InvalidRequest(format!("'{name}' is not a usable PNG or JPEG: {e}"))
+    };
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| unusable(&e))?
+        .into_dimensions()
+        .map_err(|e| unusable(&e))?;
+    if u64::from(width) * u64::from(height) > MAX_DRAWN_PIXELS {
+        return Err(Error::InvalidRequest(format!(
+            "'{name}' is {width} by {height} pixels; an image drawn onto a page may have {} million at most",
+            MAX_DRAWN_PIXELS / 1_000_000
+        )));
+    }
+    ::lopdf::xobject::image_from(bytes.to_vec()).map_err(|e| unusable(&e))
 }
 
 #[cfg(test)]
