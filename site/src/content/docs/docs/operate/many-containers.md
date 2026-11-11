@@ -47,7 +47,7 @@ A Docker named volume starts out owned by root, but the service runs as user 100
 ```bash
 docker volume create rusticdoc-store
 docker run --rm -v rusticdoc-store:/data --entrypoint sh --user root \
-  ghcr.io/crafted-systems/rusticdoc:0.1.2 -c 'chown 1001:1001 /data'
+  ghcr.io/crafted-systems/rusticdoc:0.1.3 -c 'chown 1001:1001 /data'
 ```
 
 `make replicas` runs several real containers against VersityGW, an S3 gateway, and then against a shared Docker volume.

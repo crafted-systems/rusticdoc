@@ -3,12 +3,12 @@ name: rusticdoc-templates
 description: Write, fix, check and render rusticdoc templates, the Word (.docx), Excel (.xlsx), PowerPoint (.pptx), OpenDocument, HTML, Markdown, text and PDF form files that rusticdoc fills from JSON with {{ }} and {% %} tags. Use when someone wants a document template for rusticdoc (an invoice, letter, statement, report, certificate or contract), wants to turn an existing document into one, has a rusticdoc template error to fix, or wants a template filled and rendered to PDF.
 license: Apache-2.0
 metadata:
-  version: "0.1.2"
+  version: "0.1.3"
 ---
 
 # rusticdoc templates
 
-rusticdoc is a self-hosted document service. It fills a template from JSON, converts the result with LibreOffice (Office files) or Fulgur (HTML), and can run PDF steps on it. This skill describes rusticdoc 0.1.2. Folder paths below are relative to this skill's folder.
+rusticdoc is a self-hosted document service. It fills a template from JSON, converts the result with LibreOffice (Office files) or Fulgur (HTML), and can run PDF steps on it. This skill describes rusticdoc 0.1.3. Folder paths below are relative to this skill's folder.
 
 The syntax is Jinja-style, evaluated by minijinja. It is **not** Carbone (`{d.name}`), docxtemplater (`{#items}{/items}`), Mustache or Handlebars, so never write those forms.
 
@@ -135,7 +135,7 @@ bash $S /v1/render              -F template=@invoice.docx -F data=@sample.json -
 bash $S /v1/render              -F template=@invoice.html -F assets=@logo.png -F data=@sample.json -F steps=convert -o invoice.pdf
 ```
 
-`/v1/templates/variables` and `/v1/templates/preview` for a file are newer than the 0.1.2 image, so an older service answers `404` to them. Validate instead: it reports every value the sample data lacks. To preview on an older service, the template has to be stored first (`POST /v1/templates`, then `/v1/templates/{id}/preview`), so ask the user before storing anything in their service, and delete it afterwards.
+`/v1/templates/variables` and `/v1/templates/preview` for a file are new in 0.1.3, so an older service answers `404` to them. Validate instead: it reports every value the sample data lacks. To preview on an older service, the template has to be stored first (`POST /v1/templates`, then `/v1/templates/{id}/preview`), so ask the user before storing anything in their service, and delete it afterwards.
 
 A status other than `200` means the output file holds a JSON error, `{"error": "...", "message": "..."}`, not a document. A `422 template_error` names the tag and where it is. `references/validate.md` explains the findings.
 
@@ -150,7 +150,7 @@ rusticdoc render invoice.html --asset logo.png --data sample.json --steps conver
 **Image**, only after the user agrees. Start a local service with networking limited to this machine, use it as above, and stop it when you're done:
 
 ```bash
-docker run -d --rm --name rusticdoc-local -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.1.2
+docker run -d --rm --name rusticdoc-local -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.1.3
 until curl -sf localhost:9027/health >/dev/null; do sleep 1; done
 # … bash scripts/call.sh … as above …
 docker stop rusticdoc-local
@@ -160,7 +160,7 @@ For a single render with no service, run the CLI inside the image with no networ
 
 ```bash
 docker run --rm --network none -v "$PWD:/work" -w /work --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  ghcr.io/crafted-systems/rusticdoc:0.1.2 render invoice.docx --data sample.json --steps convert -o invoice.pdf
+  ghcr.io/crafted-systems/rusticdoc:0.1.3 render invoice.docx --data sample.json --steps convert -o invoice.pdf
 ```
 
 ## 9. Mistakes to avoid

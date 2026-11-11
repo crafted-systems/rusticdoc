@@ -9,11 +9,14 @@ sidebar:
 
 rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults and may add features, without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
-## Unreleased
+## 0.1.3
+
+Released on 11 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.1.3`, for amd64 and arm64.
 
 - `POST /v1/templates/variables` lists the data a template sent as a file reads, and `POST /v1/templates/preview` draws a page of one as a PNG. They answer as the routes for stored templates do and need no store. See [stored templates](/docs/guides/stored-templates/#see-what-a-template-reads).
-- Agent skills in [`skills/`](https://github.com/crafted-systems/rusticdoc/tree/main/skills) teach AI assistants to write, check and render templates and to call the API. See [skills](/docs/ai/skills/).
+- Agent skills in [`skills/`](https://github.com/crafted-systems/rusticdoc/tree/main/skills) teach AI assistants to write, check and render templates and to call the API. This release attaches them as `.skill` files. See [skills](/docs/ai/skills/).
 - The site serves the docs for language models at [`/llms.txt`](/llms.txt) and [`/llms-full.txt`](/llms-full.txt).
+- Moving between pages of the site no longer waits on the network to recheck its stylesheets, or shows an empty page while the next one loads.
 
 ## 0.1.2
 
