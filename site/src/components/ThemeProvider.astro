@@ -7,9 +7,35 @@
 //
 // The body font is preloaded so it is usually ready for the first paint; when it
 // is not, its metric-matched fallback takes the same room.
+//
+// The browser would otherwise paint a new page as soon as it has read the top
+// bar, and the view transition between pages would fade to that: a bar over an
+// empty page, until the rest arrives. The expect link holds the first paint
+// until the element named by `expect` has been read, so the old page stays on
+// screen until the new one can show its content. Docs pages wait for their
+// title, which comes after the sidebar; the marketing pages pass their main.
+// Browsers without it paint as before.
+//
+// The speculation rules have the browser prepare a page while the pointer rests
+// on a link to it (about 200 ms), or from the moment a finger touches one, so
+// the click shows a page that is already loaded. They cover the site's own
+// pages, which all end in a slash, and not files such as /openapi.json.
+// Chromium follows them; other browsers ignore them and load on click.
 import bodyFont from '@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2?url';
+
+interface Props {
+  expect?: string;
+}
+const { expect = '_top' } = Astro.props;
+const pages = { href_matches: ['/', '/*/'] };
+const speculation = JSON.stringify({
+  prerender: [{ where: pages, eagerness: 'moderate' }],
+  prefetch: [{ where: pages, eagerness: 'moderate' }],
+});
 ---
+<link rel="expect" href={`#${expect}`} blocking="render" />
 <link rel="preload" href={bodyFont} as="font" type="font/woff2" crossorigin />
+<script type="speculationrules" is:inline set:html={speculation} />
 <script is:inline>
   (() => {
     let stored = '';

@@ -4,3 +4,10 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Strict-Transport-Security: max-age=31536000
   Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+# Astro names every built asset after a hash of its content, so a file at one
+# of these addresses never changes. Caching them for a year spares each page
+# visit a round trip per stylesheet, font and script to check they're current,
+# and the stylesheets hold back the first paint until that check returns.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
