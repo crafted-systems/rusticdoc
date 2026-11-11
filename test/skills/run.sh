@@ -9,11 +9,14 @@
 #   ARM    skill or none
 #   CASE   ids from CASES (default: every case)
 #
-# The agents keep their permission checks. Claude may only read and write files
-# in the case folder and run curl, bash on the skill's scripts, python3 and
-# rusticdoc; anything else is refused. Codex runs in its workspace-write sandbox,
-# which keeps writes to the case folder; network access is turned on in it so
-# curl can reach the service. Read what the cases ask before you run them.
+# The agents keep their permission checks, but this is not a sandbox. Claude may
+# use its file tools and run curl, the skills' two scripts, python3, rusticdoc,
+# ls, cat, unzip and jq without asking; other commands are refused. python3 is
+# there because the Word cases build files with python-docx, and it can run any
+# code with your permissions. Codex runs in its workspace-write sandbox, which
+# keeps writes to the case folder, with network access turned on so curl can
+# reach the service. Run the evals on a machine or VM you don't mind an agent
+# using, and read what the cases ask first.
 #
 # Environment:
 #   RUSTICDOC_URL      the service the agents and the checks call (default http://localhost:9027)
@@ -55,8 +58,9 @@ mkdir -p "$out"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# What Claude may do without asking. Everything else is refused in print mode.
-claude_tools='Read Write Edit Glob Grep Bash(curl:*) Bash(bash:*) Bash(python3:*) Bash(rusticdoc:*) Bash(ls:*) Bash(cat:*) Bash(unzip:*) Bash(jq:*)'
+# What Claude may do without asking; print mode refuses everything else. bash
+# only runs the skills' own scripts. python3 can still run anything.
+claude_tools='Read Write Edit Glob Grep Bash(curl:*) Bash(bash .claude/skills/rusticdoc-templates/scripts/detect.sh:*) Bash(bash .claude/skills/rusticdoc-templates/scripts/call.sh:*) Bash(bash .claude/skills/rusticdoc-api/scripts/detect.sh:*) Bash(bash .claude/skills/rusticdoc-api/scripts/call.sh:*) Bash(python3:*) Bash(rusticdoc:*) Bash(ls:*) Bash(cat:*) Bash(unzip:*) Bash(jq:*)'
 
 run_case() {
   local id="$1" dir="$work/$1" started prompt

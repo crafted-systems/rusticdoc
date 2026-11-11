@@ -30,10 +30,12 @@ CASES=test/skills/cases-api.json test/skills/run.sh codex skill
 python3 test/skills/report.py test/skills/out/*/results.jsonl
 ```
 
-`run.sh` copies each case's inputs into a fresh folder outside the repository, so an agent without the skills can't find them by looking around. With `ARM=skill` it installs both skills where that agent looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex. The agents keep their permission checks:
+`run.sh` copies each case's inputs into a fresh folder outside the repository, so an agent without the skills can't find them by looking around. With `ARM=skill` it installs both skills where that agent looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex. The agents keep their permission checks, but that isn't a sandbox:
 
-- Claude may only use file tools and run `curl`, `bash`, `python3`, `rusticdoc`, `ls`, `cat`, `unzip` and `jq`. Anything else is refused.
-- Codex runs in its workspace-write sandbox, with network access turned on so it can reach the service.
+- Claude may use its file tools and run `curl`, the skills' two scripts, `python3`, `rusticdoc`, `ls`, `cat`, `unzip` and `jq` without asking, and other commands are refused. `python3` is allowed because the Word cases build files with python-docx, and it can run any code with your permissions.
+- Codex runs in its workspace-write sandbox, which keeps writes to the case folder, with network access turned on so it can reach the service.
+
+Run the evals on a machine or VM you don't mind an agent using.
 
 Read the cases before you run them. Each case's folder, with the agent's transcript, ends up in `test/skills/out/`, which git ignores.
 
