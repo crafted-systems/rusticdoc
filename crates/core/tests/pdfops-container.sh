@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cross-checks the PDF engines against the real binaries, which this machine
-# may not have: qpdf and pdfcpu from the gotenberg-slim-office image, and
+# may not have: qpdf and pdfcpu from the rusticdoc image, and
 # pdfinfo, pdftotext and veraPDF from gotenberg/integration-tools.
 #
 # The host builds the fixtures and runs the lopdf operations (through the
@@ -15,7 +15,7 @@ WORK=${1:-$(mktemp -d)}
 mkdir -p "$WORK"
 WORK=$(cd "$WORK" && pwd)
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
-ENGINES=${ENGINES_IMAGE:-ghcr.io/crafted-systems/gotenberg-slim-office:latest}
+ENGINES=${ENGINES_IMAGE:-ghcr.io/crafted-systems/rusticdoc:latest}
 TOOLS=${TOOLS_IMAGE:-gotenberg/integration-tools:latest}
 PLATFORM=${DOCKER_PLATFORM:-linux/arm64}
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Drives the real bridge (crates/core/bridge/unobridge.py) inside a container
 # that has LibreOffice and python3-uno, and checks the outputs with verapdf
-# and pdfinfo from gotenberg/integration-tools. Needs docker and a sample
-# DOCX; the other samples (ODT, XLSX, PPTX, a password-protected ODT) are
-# made by the bridge itself.
+# and pdfinfo from gotenberg/integration-tools. Needs docker. The DOCX is the
+# site's one-page report unless you pass another; the other samples (ODT,
+# XLSX, PPTX, a password-protected ODT) are made by the bridge itself.
 #
 #   crates/core/tests/libreoffice-container.sh [path/to/sample.docx]
 #
@@ -13,8 +13,8 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 BRIDGE="$HERE/../bridge/unobridge.py"
-DOCX=${1:-/Users/vincent/Code/Playground/gotenberg/gotenberg-slim/test/testdata/page_1.docx}
-OFFICE_IMAGE=${OFFICE_IMAGE:-ghcr.io/crafted-systems/gotenberg-slim-office:latest}
+DOCX=${1:-$HERE/../../../site/samples/fixtures/report.docx}
+OFFICE_IMAGE=${OFFICE_IMAGE:-ghcr.io/crafted-systems/rusticdoc:latest}
 TOOLS_IMAGE=${TOOLS_IMAGE:-gotenberg/integration-tools:latest}
 PLATFORM=${PLATFORM:-linux/arm64}
 SOFFICE=${SOFFICE:-/usr/lib/libreoffice/program/soffice.bin}

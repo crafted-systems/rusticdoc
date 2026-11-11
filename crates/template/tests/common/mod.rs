@@ -636,7 +636,7 @@ pub fn xlsx_styled(rows: &[String]) -> Vec<u8> {
 /// The images that have `soffice`, best first.
 const OFFICE_IMAGES: [&str; 2] = [
     "rusticdoc:local",
-    "ghcr.io/crafted-systems/gotenberg-slim-office:latest",
+    "ghcr.io/crafted-systems/rusticdoc:latest",
 ];
 const TOOLS_IMAGE: &str = "gotenberg/integration-tools:latest";
 

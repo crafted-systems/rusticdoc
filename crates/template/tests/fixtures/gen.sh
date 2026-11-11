@@ -3,7 +3,7 @@
 # to this script. Needs Docker and the office image.
 set -e
 cd "$(dirname "$0")"
-IMAGE=ghcr.io/crafted-systems/gotenberg-slim-office:latest
+IMAGE=${IMAGE:-ghcr.io/crafted-systems/rusticdoc:latest}
 mkdir -p profile
 soffice() {
   docker run --rm --platform linux/arm64 -v "$PWD:/w" -v "$PWD/profile:/tmp/p" \
