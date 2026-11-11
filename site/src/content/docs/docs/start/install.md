@@ -9,7 +9,7 @@ You can run rusticdoc from the published image, with Compose, or from a source b
 
 ## The image
 
-The image is `ghcr.io/crafted-systems/rusticdoc:0.1.3`, built for amd64 and arm64. `latest` points at the newest release, but name a version anywhere you need to know what's running. You can also build it from a checkout of the repository:
+The image is `ghcr.io/crafted-systems/rusticdoc:0.1.4`, built for amd64 and arm64. `latest` points at the newest release, but name a version anywhere you need to know what's running. You can also build it from a checkout of the repository:
 
 ```bash
 docker build -t rusticdoc .
@@ -23,7 +23,7 @@ The build pins its base images by digest. What you get is one Rust binary on Deb
 docker run -d --name rusticdoc \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   --tmpfs /tmp --tmpfs /home/rusticdoc:uid=1001,gid=1001 \
-  -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.1.3
+  -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.1.4
 ```
 
 | Flag | Why |
@@ -50,7 +50,7 @@ docker compose -f deploy/compose.yaml up -d --build
 To use the published image instead of building one:
 
 ```bash
-RUSTICDOC_IMAGE=ghcr.io/crafted-systems/rusticdoc:0.1.3 \
+RUSTICDOC_IMAGE=ghcr.io/crafted-systems/rusticdoc:0.1.4 \
   docker compose -f deploy/compose.yaml up -d --no-build
 ```
 
@@ -77,19 +77,19 @@ Every [GitHub release](https://github.com/crafted-systems/rusticdoc/releases) ha
 
 | System | Archive |
 |---|---|
-| Linux, x86-64 | `rusticdoc-0.1.3-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux, ARM64 | `rusticdoc-0.1.3-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS, Apple silicon | `rusticdoc-0.1.3-aarch64-apple-darwin.tar.gz` |
-| macOS, Intel | `rusticdoc-0.1.3-x86_64-apple-darwin.tar.gz` |
+| Linux, x86-64 | `rusticdoc-0.1.4-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, ARM64 | `rusticdoc-0.1.4-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS, Apple silicon | `rusticdoc-0.1.4-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `rusticdoc-0.1.4-x86_64-apple-darwin.tar.gz` |
 
 These commands fetch the Apple silicon build, check it and put it on your `PATH`:
 
 ```bash
-curl -fsSLO https://github.com/crafted-systems/rusticdoc/releases/download/v0.1.3/rusticdoc-0.1.3-aarch64-apple-darwin.tar.gz
-curl -fsSLO https://github.com/crafted-systems/rusticdoc/releases/download/v0.1.3/SHA256SUMS
+curl -fsSLO https://github.com/crafted-systems/rusticdoc/releases/download/v0.1.4/rusticdoc-0.1.4-aarch64-apple-darwin.tar.gz
+curl -fsSLO https://github.com/crafted-systems/rusticdoc/releases/download/v0.1.4/SHA256SUMS
 shasum -a 256 --check --ignore-missing SHA256SUMS
-tar -xzf rusticdoc-0.1.3-aarch64-apple-darwin.tar.gz
-sudo mv rusticdoc-0.1.3-aarch64-apple-darwin/rusticdoc /usr/local/bin/
+tar -xzf rusticdoc-0.1.4-aarch64-apple-darwin.tar.gz
+sudo mv rusticdoc-0.1.4-aarch64-apple-darwin/rusticdoc /usr/local/bin/
 rusticdoc --version
 ```
 
@@ -106,14 +106,14 @@ By itself, the downloaded CLI can render, validate and run the PDF operations th
 The service and the CLI are the same binary, so the image already has the CLI in it:
 
 ```bash
-docker run --rm --entrypoint rusticdoc ghcr.io/crafted-systems/rusticdoc:0.1.3 engines
+docker run --rm --entrypoint rusticdoc ghcr.io/crafted-systems/rusticdoc:0.1.4 engines
 ```
 
 To work on files in your current directory, mount it. The container's user has to be able to write there, so on Linux pass your own user ID. Keep group 0, because that group owns the home directory:
 
 ```bash
 docker run --rm -v "$PWD:/work" -w /work --user "$(id -u):0" \
-  --entrypoint rusticdoc ghcr.io/crafted-systems/rusticdoc:0.1.3 \
+  --entrypoint rusticdoc ghcr.io/crafted-systems/rusticdoc:0.1.4 \
   render invoice.docx --data invoice.json --steps convert -o invoice.pdf
 ```
 

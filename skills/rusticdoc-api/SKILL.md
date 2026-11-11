@@ -3,12 +3,12 @@ name: rusticdoc-api
 description: Call the rusticdoc document service or its CLI from code or a shell. Covers rendering templates to PDF, converting Office files, PDF operations (merge, split, watermark, stamp, encrypt, sign, PDF/A, Factur-X, forms), stored templates and aliases, background jobs, webhooks and verifying their signatures, authentication, errors and the generated SDKs. Use when someone is integrating rusticdoc into an application, writing a client, webhook receiver or CI step for it, scripting its CLI, or debugging a rusticdoc HTTP error.
 license: Apache-2.0
 metadata:
-  version: "0.1.3"
+  version: "0.1.4"
 ---
 
 # rusticdoc API
 
-rusticdoc is a self-hosted document service: one container, usually on port 9027, with no hosted version. It fills templates from JSON, converts with LibreOffice or Fulgur, and runs PDF steps, all in one multipart request. This skill describes rusticdoc 0.1.3. Folder paths below are relative to this skill's folder. For writing the templates themselves, use the `rusticdoc-templates` skill.
+rusticdoc is a self-hosted document service: one container, usually on port 9027, with no hosted version. It fills templates from JSON, converts with LibreOffice or Fulgur, and runs PDF steps, all in one multipart request. This skill describes rusticdoc 0.1.4. Folder paths below are relative to this skill's folder. For writing the templates themselves, use the `rusticdoc-templates` skill.
 
 ## 1. Before calling it
 
