@@ -267,6 +267,13 @@ Names the template creates itself, like a loop variable, a `{% set %}` or a macr
 
 For a PDF form, the variables are its fields' names, read as paths (`items.0.qty` becomes `items[].qty`), and the tags in the fields' values. Tags in annotations aren't listed.
 
+To ask the same of a template you haven't stored, send it as `template` to `POST /v1/templates/variables`. The answer is the same, less `templateId`, and the route needs no store:
+
+```bash test
+curl -F template=@letter.txt http://localhost:9027/v1/templates/variables -o variables.json
+jq -e '.example == {"customer": {"name": ""}, "total": ""}' variables.json
+```
+
 ## Preview a page
 
 `POST /v1/templates/{id}/preview` renders the template with sample data and draws one page as a PNG. It takes JSON or a form:
@@ -298,6 +305,15 @@ The response is `image/png`, with the rendered document's page count in `X-Page-
 | `503 engine_unavailable` | `pdftoppm` isn't installed, or LibreOffice is needed and missing. Without `pdftoppm`, the error comes back before anything is rendered |
 
 The container image includes `pdftoppm`. Anywhere else, install poppler or set `RUSTICDOC_PDFTOPPM_BIN`.
+
+To preview a draft without storing it, send it as `template` to `POST /v1/templates/preview`, a form with the same fields. It needs no store, and it answers as above:
+
+```bash test
+curl -s -D headers.txt -F template=@invoice.html -F width=400 \
+  http://localhost:9027/v1/templates/preview -o page.png
+[ "$(head -c 4 page.png | tail -c 3)" = PNG ]
+grep -qi "^x-page-count: 1" headers.txt
+```
 
 ## Scope
 

@@ -105,6 +105,8 @@ const SAMPLES = {
   deleteTemplate: [{ method: 'DELETE' }],
   downloadTemplate: [{ out: 'invoice.docx' }],
   templateVariables: [{}],
+  draftVariables: [{ form: ['template=@invoice.docx'] }],
+  previewDraft: [{ form: ['template=@invoice.docx', 'data=<invoice.json', 'width=400'], out: 'page.png' }],
   previewTemplate: [
     { label: 'Form', form: ['data=<invoice.json', 'width=400'], out: 'page.png' },
     { label: 'JSON', json: { data: { customer: { name: 'Ada' } }, width: 400 }, out: 'page.png' },

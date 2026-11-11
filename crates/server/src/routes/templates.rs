@@ -474,9 +474,74 @@ pub async fn variables(
 ) -> ApiResult<Json<TemplateVariables>> {
     let store = store_of(&state)?;
     let (id, doc) = resolve(&store, &scope(&state, &principal), &id).await?;
-    let format = doc.extension();
-    let found = if format == "pdf" {
-        rusticdoc_core::pdfops::require_pdf(&doc)?;
+    let found = read_variables(&state, &doc).await?;
+    Ok(Json(TemplateVariables {
+        template_id: id,
+        format: doc.extension(),
+        variables: found.variables,
+        example: found.example,
+    }))
+}
+
+/// What a template sent as a file reads from its data.
+#[derive(Serialize, ToSchema)]
+pub struct DraftVariables {
+    #[schema(example = "docx")]
+    pub format: String,
+    /// Every path the template reads, parents first, as for a stored
+    /// template.
+    pub variables: Vec<crate::variables::Variable>,
+    /// Data of the right shape, with empty strings where values go.
+    #[schema(value_type = Object)]
+    pub example: serde_json::Value,
+}
+
+/// The form `POST /v1/templates/variables` takes.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct DraftVariablesForm {
+    /// The template: Office, text, HTML or a PDF form.
+    #[schema(value_type = String, format = Binary)]
+    pub template: Vec<u8>,
+}
+
+/// List a file's variables
+///
+/// Lists the data a template sent as a file reads, as
+/// `GET /v1/templates/{id}/variables` does for a stored one, without storing
+/// it. Needs no store.
+#[utoipa::path(
+    post, path = "/v1/templates/variables", tag = "templates", operation_id = "draftVariables",
+    request_body(content((DraftVariablesForm = "multipart/form-data"))),
+    responses(
+        (status = 200, description = "What the template reads", body = DraftVariables),
+        (status = 400, description = "The request has no template file", body = ErrorBody),
+        (status = 422, description = "The template has syntax errors", body = ErrorBody),
+    ),
+    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+)]
+pub async fn draft_variables(
+    State(state): State<AppState>,
+    req: Request,
+) -> ApiResult<Json<DraftVariables>> {
+    let mut form = Form::from_request(req, &state).await?;
+    let doc = form.require_file("the template as a 'template' file")?;
+    let found = read_variables(&state, &doc).await?;
+    Ok(Json(DraftVariables {
+        format: doc.extension(),
+        variables: found.variables,
+        example: found.example,
+    }))
+}
+
+/// The paths a template reads: a PDF form's fields and the tags in their
+/// values, or the tags of any other template.
+async fn read_variables(
+    state: &AppState,
+    doc: &Document,
+) -> ApiResult<crate::variables::Variables> {
+    if doc.extension() == "pdf" {
+        rusticdoc_core::pdfops::require_pdf(doc)?;
         let bytes = doc.bytes.clone();
         let fields = rusticdoc_core::pdfops::blocking(state.config.api_timeout, move |_| {
             rusticdoc_core::pdfform::fields(&bytes)
@@ -484,21 +549,15 @@ pub async fn variables(
         .await?;
         let fields: Vec<(String, Option<String>)> =
             fields.into_iter().map(|f| (f.name, f.value)).collect();
-        analysed(move || crate::variables::analyse_form(&fields)).await?
+        analysed(move || crate::variables::analyse_form(&fields)).await
     } else {
         let tags = state
             .pipeline
             .renderer()
-            .tags(&doc, state.config.api_timeout)
+            .tags(doc, state.config.api_timeout)
             .await?;
-        analysed(move || crate::variables::analyse(&tags)).await?
-    };
-    Ok(Json(TemplateVariables {
-        template_id: id,
-        format,
-        variables: found.variables,
-        example: found.example,
-    }))
+        analysed(move || crate::variables::analyse(&tags)).await
+    }
 }
 
 /// Runs the analysis off the request threads, since it is all computation, and
@@ -574,93 +633,183 @@ pub async fn preview(
     req: Request,
 ) -> ApiResult<Response> {
     let store = store_of(&state)?;
-    let bin = state.config.pdftoppm_bin.clone();
-    // Before any work: without the drawing engine none of it is any use.
-    if bin.is_none() {
-        return Err(ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "engine_unavailable",
-            "previews need poppler's pdftoppm, which this service does not have; set RUSTICDOC_PDFTOPPM_BIN",
-        ));
-    }
-    let timeout = state.config.api_timeout;
-    let started = std::time::Instant::now();
-    let mut form = Form::from_request(req, &state).await?;
-    let data = form.json("data")?;
-    let ctx = form.json("ctx")?;
-    let render_choices = crate::routes::render::render_options(&mut form, &state)?;
-    let page = match form.field("page").map(str::trim).filter(|p| !p.is_empty()) {
-        None => 1,
-        Some(text) => match text.parse::<u32>() {
-            Ok(n) if (1..=crate::preview::MAX_PAGE).contains(&n) => n,
-            _ => {
-                return Err(ApiError::bad_request(format!(
-                    "'page' is a page number from 1 to {}",
-                    crate::preview::MAX_PAGE
-                )));
-            }
-        },
-    };
-    let size = crate::preview::Size::parse(form.field("width"), form.field("dpi"))?;
+    let ask = PreviewAsk::read(&state, req).await?;
     let (_, template) = resolve(&store, &scope(&state, &principal), &id).await?;
+    ask.draw(&state, template).await
+}
 
-    let pdf = if template.extension() == "pdf" {
-        rusticdoc_core::pdfops::require_pdf(&template)?;
-        if data.as_object().is_none_or(|m| m.is_empty()) {
-            template.bytes.clone()
-        } else {
-            let mut data = data;
-            if let serde_json::Value::Object(map) = &mut data {
-                map.entry("ctx").or_insert(ctx);
-            }
-            let options = rusticdoc_core::pdfform::FillOptions {
-                flatten: false,
-                strip_tag_annotations: true,
-            };
-            state
-                .pipeline
-                .renderer()
-                .fill(
-                    &template.bytes,
-                    &data,
-                    &options,
-                    state.config.max_render_bytes,
-                    timeout,
-                    &render_choices,
-                )
-                .await?
-                .into()
+/// The form `POST /v1/templates/preview` takes: the fields of
+/// [`PreviewForm`], and the template as a file.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct DraftPreviewForm {
+    /// The template: Office, text, HTML or a PDF form.
+    #[schema(value_type = String, format = Binary)]
+    pub template: Vec<u8>,
+    /// Sample data the template sees as its root, as JSON text.
+    #[schema(example = json!({"customer": {"name": "Ada"}}))]
+    pub data: Option<serde_json::Value>,
+    /// Visible as `ctx`, as JSON text.
+    pub ctx: Option<serde_json::Value>,
+    /// The page to draw, from 1. Default 1.
+    pub page: Option<u32>,
+    /// The image's width in pixels, from 16 to 2000; the height follows the
+    /// page. Default 800. Send this or `dpi`.
+    pub width: Option<u32>,
+    /// Draw at this resolution, from 18 to 300, as large as the page is. An
+    /// image may not pass 4000 pixels on a side.
+    pub dpi: Option<u32>,
+    /// What turns HTML into PDF: `fulgur` (default) or `libreoffice`.
+    #[schema(rename = "htmlEngine")]
+    pub html_engine: Option<String>,
+}
+
+/// Preview a file
+///
+/// Renders a template sent as a file with sample data and draws one page as a
+/// PNG, as `POST /v1/templates/{id}/preview` does for a stored one, without
+/// storing it. Needs no store. The page count is in `X-Page-Count`.
+#[utoipa::path(
+    post, path = "/v1/templates/preview", tag = "templates", operation_id = "previewDraft",
+    request_body(content((DraftPreviewForm = "multipart/form-data"))),
+    responses(
+        (status = 200, description = "The page as a PNG", content_type = "image/png", body = crate::error::BinaryFile,
+            headers(("X-Page-Count" = u32, description = "How many pages the rendered document has"))),
+        (status = 400, description = "The request is wrong, has no template file, or the page does not exist", body = ErrorBody),
+        (status = 422, description = "The template failed to render", body = ErrorBody),
+        (status = 503, description = "pdftoppm or LibreOffice is unavailable, or the request timed out", body = ErrorBody),
+    ),
+    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+)]
+pub async fn draft_preview(State(state): State<AppState>, req: Request) -> ApiResult<Response> {
+    let mut ask = PreviewAsk::read(&state, req).await?;
+    let template = ask.form.require_file("the template as a 'template' file")?;
+    ask.draw(&state, template).await
+}
+
+/// What a preview asks for, read and checked before the template is found.
+struct PreviewAsk {
+    form: Form,
+    data: serde_json::Value,
+    ctx: serde_json::Value,
+    render_choices: rusticdoc_template::RenderOptions,
+    page: u32,
+    size: crate::preview::Size,
+    started: std::time::Instant,
+}
+
+impl PreviewAsk {
+    async fn read(state: &AppState, req: Request) -> ApiResult<Self> {
+        // Before any work: without the drawing engine none of it is any use.
+        if state.config.pdftoppm_bin.is_none() {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "engine_unavailable",
+                "previews need poppler's pdftoppm, which this service does not have; set RUSTICDOC_PDFTOPPM_BIN",
+            ));
         }
-    } else {
-        let mut req = rusticdoc_core::RenderRequest::new(template);
-        req.data = data;
-        req.ctx = ctx;
-        req.render_options = render_choices;
-        let mut options = crate::routes::options::convert_options(&form)?;
-        options.pdfa = None;
-        options.pdfua = false;
-        req.convert_options = options;
-        req.steps = vec![rusticdoc_core::Step::Convert {
-            to: rusticdoc_core::Format::parse("pdf")?,
-        }];
-        state.engines.check_steps(&req.steps)?;
-        crate::routes::render::execute(&state, req).await?.bytes
-    };
-    let left = timeout.saturating_sub(started.elapsed());
-    let drawn = crate::preview::draw(bin.as_deref(), pdf, page, size, left).await?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, "image/png".to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                "inline; filename=\"preview.png\"".to_string(),
-            ),
-            (
-                HeaderName::from_static("x-page-count"),
-                drawn.pages.to_string(),
-            ),
-        ],
-        drawn.png,
-    )
-        .into_response())
+        let started = std::time::Instant::now();
+        let mut form = Form::from_request(req, state).await?;
+        // First, because the first file left is the template.
+        let data = form.json("data")?;
+        let ctx = form.json("ctx")?;
+        let render_choices = crate::routes::render::render_options(&mut form, state)?;
+        let page = match form.field("page").map(str::trim).filter(|p| !p.is_empty()) {
+            None => 1,
+            Some(text) => match text.parse::<u32>() {
+                Ok(n) if (1..=crate::preview::MAX_PAGE).contains(&n) => n,
+                _ => {
+                    return Err(ApiError::bad_request(format!(
+                        "'page' is a page number from 1 to {}",
+                        crate::preview::MAX_PAGE
+                    )));
+                }
+            },
+        };
+        let size = crate::preview::Size::parse(form.field("width"), form.field("dpi"))?;
+        Ok(Self {
+            form,
+            data,
+            ctx,
+            render_choices,
+            page,
+            size,
+            started,
+        })
+    }
+
+    /// Renders `template` to PDF, filling a PDF form instead, and draws the
+    /// page asked for.
+    async fn draw(self, state: &AppState, template: Document) -> ApiResult<Response> {
+        let Self {
+            form,
+            data,
+            ctx,
+            render_choices,
+            page,
+            size,
+            started,
+        } = self;
+        let bin = state.config.pdftoppm_bin.clone();
+        let timeout = state.config.api_timeout;
+        let pdf = if template.extension() == "pdf" {
+            rusticdoc_core::pdfops::require_pdf(&template)?;
+            if data.as_object().is_none_or(|m| m.is_empty()) {
+                template.bytes.clone()
+            } else {
+                let mut data = data;
+                if let serde_json::Value::Object(map) = &mut data {
+                    map.entry("ctx").or_insert(ctx);
+                }
+                let options = rusticdoc_core::pdfform::FillOptions {
+                    flatten: false,
+                    strip_tag_annotations: true,
+                };
+                state
+                    .pipeline
+                    .renderer()
+                    .fill(
+                        &template.bytes,
+                        &data,
+                        &options,
+                        state.config.max_render_bytes,
+                        timeout,
+                        &render_choices,
+                    )
+                    .await?
+                    .into()
+            }
+        } else {
+            let mut req = rusticdoc_core::RenderRequest::new(template);
+            req.data = data;
+            req.ctx = ctx;
+            req.render_options = render_choices;
+            let mut options = crate::routes::options::convert_options(&form)?;
+            options.pdfa = None;
+            options.pdfua = false;
+            req.convert_options = options;
+            req.steps = vec![rusticdoc_core::Step::Convert {
+                to: rusticdoc_core::Format::parse("pdf")?,
+            }];
+            state.engines.check_steps(&req.steps)?;
+            crate::routes::render::execute(state, req).await?.bytes
+        };
+        let left = timeout.saturating_sub(started.elapsed());
+        let drawn = crate::preview::draw(bin.as_deref(), pdf, page, size, left).await?;
+        Ok((
+            [
+                (header::CONTENT_TYPE, "image/png".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "inline; filename=\"preview.png\"".to_string(),
+                ),
+                (
+                    HeaderName::from_static("x-page-count"),
+                    drawn.pages.to_string(),
+                ),
+            ],
+            drawn.png,
+        )
+            .into_response())
+    }
 }

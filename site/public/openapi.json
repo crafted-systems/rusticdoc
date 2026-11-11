@@ -2444,6 +2444,89 @@
         ]
       }
     },
+    "/v1/templates/preview": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Preview a file",
+        "description": "Renders a template sent as a file with sample data and draws one page as a\nPNG, as `POST /v1/templates/{id}/preview` does for a stored one, without\nstoring it. Needs no store. The page count is in `X-Page-Count`.",
+        "operationId": "previewDraft",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftPreviewForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The page as a PNG",
+            "headers": {
+              "X-Page-Count": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "How many pages the rendered document has"
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is wrong, has no template file, or the page does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template failed to render",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "pdftoppm or LibreOffice is unavailable, or the request timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
     "/v1/templates/validate": {
       "post": {
         "tags": [
@@ -2480,6 +2563,69 @@
           },
           "400": {
             "description": "The request is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          },
+          {
+            "basic": []
+          }
+        ]
+      }
+    },
+    "/v1/templates/variables": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "List a file's variables",
+        "description": "Lists the data a template sent as a file reads, as\n`GET /v1/templates/{id}/variables` does for a stored one, without storing\nit. Needs no store.",
+        "operationId": "draftVariables",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftVariablesForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the template reads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftVariables"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request has no template file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The template has syntax errors",
             "content": {
               "application/json": {
                 "schema": {
@@ -3185,6 +3331,100 @@
               "null"
             ],
             "description": "Output format. Default `pdf`."
+          }
+        }
+      },
+      "DraftPreviewForm": {
+        "type": "object",
+        "description": "The form `POST /v1/templates/preview` takes: the fields of\n[`PreviewForm`], and the template as a file.",
+        "required": [
+          "template"
+        ],
+        "properties": {
+          "ctx": {
+            "description": "Visible as `ctx`, as JSON text."
+          },
+          "data": {
+            "description": "Sample data the template sees as its root, as JSON text."
+          },
+          "dpi": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Draw at this resolution, from 18 to 300, as large as the page is. An\nimage may not pass 4000 pixels on a side.",
+            "minimum": 0
+          },
+          "htmlEngine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What turns HTML into PDF: `fulgur` (default) or `libreoffice`."
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The page to draw, from 1. Default 1.",
+            "minimum": 0
+          },
+          "template": {
+            "type": "string",
+            "format": "binary",
+            "description": "The template: Office, text, HTML or a PDF form."
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The image's width in pixels, from 16 to 2000; the height follows the\npage. Default 800. Send this or `dpi`.",
+            "minimum": 0
+          }
+        }
+      },
+      "DraftVariables": {
+        "type": "object",
+        "description": "What a template sent as a file reads from its data.",
+        "required": [
+          "format",
+          "variables",
+          "example"
+        ],
+        "properties": {
+          "example": {
+            "type": "object",
+            "description": "Data of the right shape, with empty strings where values go."
+          },
+          "format": {
+            "type": "string",
+            "example": "docx"
+          },
+          "variables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variable"
+            },
+            "description": "Every path the template reads, parents first, as for a stored\ntemplate."
+          }
+        }
+      },
+      "DraftVariablesForm": {
+        "type": "object",
+        "description": "The form `POST /v1/templates/variables` takes.",
+        "required": [
+          "template"
+        ],
+        "properties": {
+          "template": {
+            "type": "string",
+            "format": "binary",
+            "description": "The template: Office, text, HTML or a PDF form."
           }
         }
       },

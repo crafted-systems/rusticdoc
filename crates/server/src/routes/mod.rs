@@ -28,6 +28,8 @@ pub fn router(config: &Config) -> Router<AppState> {
     let mut router = Router::new()
         .route("/v1/render", post(render::render))
         .route("/v1/templates/validate", post(render::validate))
+        .route("/v1/templates/variables", post(templates::draft_variables))
+        .route("/v1/templates/preview", post(templates::draft_preview))
         .route("/v1/version", get(health::version))
         .route(
             "/v1/templates",

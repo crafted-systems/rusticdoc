@@ -341,6 +341,96 @@ async fn validate_reports_without_rendering_a_file() {
 }
 
 #[tokio::test]
+async fn a_files_variables_need_no_store() {
+    let router = app(AppState::new(config()));
+    let template = "Dear {{ customer.name }},\n{% for line in lines %}{{ line.sku }}\n{% endfor %}";
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/templates/variables",
+            &[("template", Some("order.txt"), template)],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_str(&text(res).await).unwrap();
+    assert_eq!(body["format"], "txt");
+    assert!(body.get("templateId").is_none());
+    assert_eq!(
+        body["example"],
+        serde_json::json!({"customer": {"name": ""}, "lines": [{"sku": ""}]})
+    );
+
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/templates/variables",
+            &[("data", None, "{}")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(text(res).await.contains("'template' file"));
+
+    let res = router
+        .oneshot(post_form(
+            "/v1/templates/variables",
+            &[("template", Some("bad.txt"), "{% for x in %}")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn a_file_previews_with_no_store() {
+    let c = config();
+    if c.pdftoppm_bin.is_none() {
+        eprintln!("skipped: no pdftoppm here");
+        return;
+    }
+    let router = app(AppState::new(c));
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/templates/preview",
+            &[
+                ("template", Some("page.html"), "<h1>Hello {{ name }}</h1>"),
+                ("data", None, r#"{"name":"Ada"}"#),
+                ("width", None, "200"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/png");
+    assert_eq!(res.headers()["x-page-count"], "1");
+    let png = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 200);
+
+    // Missing data is the template's error, as on a render.
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/templates/preview",
+            &[("template", Some("page.html"), "<h1>Hello {{ name }}</h1>")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let res = router
+        .oneshot(post_form(
+            "/v1/templates/preview",
+            &[("data", None, r#"{"name":"Ada"}"#)],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn api_keys_gate_the_api_but_not_health() {
     let mut c = config();
     c.api_keys = vec!["k1".into(), "k2".into()];
