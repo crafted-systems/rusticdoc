@@ -15,5 +15,9 @@
     "not_found_handling": "404-page"
   },
   // Serves the site on the domain. The domain's zone is on the same account.
-  "routes": [{ "pattern": "rusticdoc.com", "custom_domain": true }]
+  "routes": [{ "pattern": "rusticdoc.com", "custom_domain": true }],
+  // A branch other than main is built as a preview with `npx wrangler preview`,
+  // which refuses to run without this block. Nothing in it needs setting: a
+  // preview serves the same files on an address of its own.
+  "previews": {}
 }
