@@ -1,0 +1,12 @@
+{
+  "sent": "2026-11-11",
+  "deadline": "2026-11-25",
+  "currency": "KES",
+  "overdue": true,
+  "customer": { "title": "Ms ", "name": "Wanjiru Kamau" },
+  "invoices": [
+    { "number": "INV-2033", "due": "2026-10-01", "amount": 18400 },
+    { "number": "INV-2038", "due": "2026-10-20", "amount": 6250.5 }
+  ],
+  "sender": { "name": "Amani Otieno", "role": "Accounts, Mawingu Coffee Co." }
+}

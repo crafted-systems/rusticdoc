@@ -39,6 +39,10 @@ The current release is 0.1.2 and the project is young, so read the [known limits
 - [Security](/docs/operate/security/)
 - [Observability](/docs/operate/observability/)
 
+## Use with AI
+
+- [Agent skills](/docs/ai/skills/)
+
 ## Reference
 
 - [HTTP API](/docs/reference/api/)

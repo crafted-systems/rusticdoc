@@ -1,7 +1,8 @@
 name: cli
 
 # Builds the rusticdoc command-line tool for Linux and macOS and attaches the
-# archives, with a SHA256SUMS file, to the GitHub release of the tag. A v0.*
+# archives, with a SHA256SUMS file, to the GitHub release of the tag. The agent
+# skills in skills/ go with them, each zipped as <name>.skill. A v0.*
 # tag runs it; it can also be run by hand for a tag that already exists, as
 # long as its release is still a draft: a published release can't be changed.
 # The archives carry a signed provenance attestation, which
@@ -77,9 +78,34 @@ jobs:
           path: ${{ env.ARCHIVE }}
           retention-days: 7
 
+  skills:
+    name: agent skills
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the tag
+        shell: bash
+        run: |
+          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "not a version tag such as v0.1.0: $TAG"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+      # The site workflow has already checked that the references match the
+      # docs and that each SKILL.md names the workspace version.
+      - name: Zip each skill
+        run: |
+          mkdir dist
+          cd skills
+          for s in */; do s="${s%/}"; zip -qrX "../dist/$s.skill" "$s"; done
+          ls -l ../dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-skills
+          path: dist/*.skill
+          retention-days: 7
+
   attach:
     name: attach to the release
-    needs: build
+    needs: [build, skills]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -93,7 +119,7 @@ jobs:
           path: dist
       - name: Checksums
         working-directory: dist
-        run: sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum *.tar.gz *.skill > SHA256SUMS && cat SHA256SUMS
       - name: Attest the archives
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

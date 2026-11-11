@@ -1,0 +1,19 @@
+{
+  "id": "ORD-881",
+  "customer": {
+    "name": "Amani \"Mani\" Otieno",
+    "email": "amani@example.com"
+  },
+  "items": [
+    {
+      "sku": "HB-1",
+      "qty": 2
+    },
+    {
+      "sku": "KAA-1",
+      "qty": 1
+    }
+  ],
+  "paid": true,
+  "note": null
+}

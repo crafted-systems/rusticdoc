@@ -1,0 +1,20 @@
+{
+  "number": "ORD-881",
+  "currency": "KES",
+  "customer": "Amani Otieno",
+  "items": [
+    {
+      "name": "House blend",
+      "qty": 2,
+      "price": 2400
+    },
+    {
+      "name": "Kenya AA",
+      "qty": 1,
+      "price": 3100
+    }
+  ],
+  "subtotal": 7900,
+  "discount": 0,
+  "total": 7900
+}

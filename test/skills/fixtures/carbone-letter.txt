@@ -1,0 +1,9 @@
+Dear {d.customer.name},
+
+Invoice {d.number}, issued {d.issued:formatD(DD MMMM YYYY)}
+
+{d.items[i].name}    {d.items[i].qty} x {d.items[i].price:formatC(2)}
+{d.items[i+1].name}
+
+Total due: {d.total:formatC(2)} {d.currency}
+{d.payment_url:ifEM:show('No online payment'):elseShow('Pay at ' .. d.payment_url)}

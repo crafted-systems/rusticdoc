@@ -9,6 +9,8 @@
     "preview": "astro preview --port 4327",
     "reference": "node scripts/generate-reference.mjs",
     "check:reference": "node scripts/generate-reference.mjs --check",
+    "skills": "node scripts/generate-skills.mjs",
+    "check:skills": "node scripts/generate-skills.mjs --check",
     "check:links": "node scripts/check-links.mjs",
     "test:examples": "node scripts/test-examples.mjs",
     "check:config": "node scripts/check-config.mjs"

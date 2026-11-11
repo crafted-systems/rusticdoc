@@ -1,0 +1,98 @@
+{
+  "skill": "rusticdoc-api",
+  "service": "needs RUSTICDOC_API_KEY and RUSTICDOC_STORE",
+  "cases": [
+    {
+      "id": "py-render",
+      "inputs": [
+        "existing-invoice.docx",
+        "invoice.json",
+        "broken-invoice.md"
+      ],
+      "template": null,
+      "data": [],
+      "prompt": "Write render_invoice.py with a function render_invoice(template_path, data, out_path) that sends a template and a dict of data to our rusticdoc service, renders it to PDF and saves it at out_path. It must raise an exception with the service's error code when rendering fails, and never write an error response to out_path. Read the service URL and API key from the RUSTICDOC_URL and RUSTICDOC_API_KEY environment variables. Use only the Python standard library. Then run it to render existing-invoice.docx with invoice.json to invoice.pdf.",
+      "checks": [
+        {
+          "output": "invoice.pdf",
+          "contains": [
+            "Amani Otieno",
+            "36,300.00"
+          ]
+        },
+        {
+          "source_lacks": {
+            "files": [
+              "render_invoice.py"
+            ],
+            "patterns": [
+              "test-key-0123456789abcdef"
+            ]
+          }
+        },
+        {
+          "python": "import json, os, render_invoice\nrender_invoice.render_invoice('existing-invoice.docx', json.load(open('invoice.json')), 'check-ok.pdf')\nassert open('check-ok.pdf','rb').read(4) == b'%PDF'\ntry:\n    render_invoice.render_invoice('broken-invoice.md', json.load(open('invoice.json')), 'check-bad.pdf')\nexcept Exception as e:\n    assert 'template_error' in str(e), str(e)\nelse:\n    raise SystemExit('no exception for a broken template')\nassert not os.path.exists('check-bad.pdf') or open('check-bad.pdf','rb').read(4) != b'{\"er', 'error saved as a pdf'\nprint('ok')"
+        }
+      ]
+    },
+    {
+      "id": "job-poll",
+      "inputs": [
+        "existing-invoice.docx",
+        "invoice.json"
+      ],
+      "template": null,
+      "data": [],
+      "prompt": "Our rusticdoc service has a store. Write job.sh, a bash script that renders existing-invoice.docx with invoice.json to PDF as a background job rather than waiting on the request, polls until the job finishes, and saves the result as job.pdf. It must fail with a clear message if the job fails. Read the URL and key from RUSTICDOC_URL and RUSTICDOC_API_KEY. Run it.",
+      "checks": [
+        {
+          "output": "job.pdf",
+          "contains": [
+            "Amani Otieno"
+          ]
+        },
+        {
+          "source_has": {
+            "files": [
+              "job.sh"
+            ],
+            "patterns": [
+              "(?i)respond-async",
+              "/v1/jobs/"
+            ]
+          }
+        },
+        {
+          "source_lacks": {
+            "files": [
+              "job.sh"
+            ],
+            "patterns": [
+              "test-key-0123456789abcdef"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "webhook-verify",
+      "inputs": [
+        "deliveries",
+        "signing.hex"
+      ],
+      "template": null,
+      "data": [],
+      "prompt": "deliveries/ holds two real webhook deliveries from our rusticdoc service, each as headers.json (lower-case header names) and body.bin, and signing.hex holds our signing key as hex. Write verify.py with a function verify(headers: dict, body: bytes, key: bytes, now: int) -> bool that returns True only for an authentic, fresh delivery (treat a timestamp more than 300 seconds from now as stale). Header names in the dict may be in any case. Standard library only.",
+      "checks": [
+        {
+          "verify_suite": {
+            "module": "verify",
+            "function": "verify",
+            "deliveries": "deliveries",
+            "key": "signing.hex"
+          }
+        }
+      ]
+    }
+  ]
+}

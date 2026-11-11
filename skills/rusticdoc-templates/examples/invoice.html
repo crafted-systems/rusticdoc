@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Invoice {{ number }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm;
+    @bottom-center { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; color: #667 }
+  }
+  body { font-family: "Liberation Sans", sans-serif; font-size: 10.5pt; color: #1a1a2e }
+  header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #2b59c3; padding-bottom: 8px }
+  h1 { margin: 0; font-size: 22pt; color: #2b59c3 }
+  .meta { text-align: right }
+  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 18px 0 }
+  .label { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.06em; color: #667 }
+  table { width: 100%; border-collapse: collapse }
+  th { text-align: left; background: #2b59c3; color: white; padding: 6px }
+  td { padding: 6px; border-bottom: 1px solid #dde }
+  tr { break-inside: avoid }
+  .n { text-align: right }
+  .total td { border-bottom: none; font-size: 13pt; font-weight: bold }
+  .note { margin-top: 24px; font-size: 9pt; color: #445 }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Invoice</h1>
+    <div>{{ seller.name }}<br>{{ seller.address }}</div>
+  </div>
+  <div class="meta">
+    <div><b>{{ number }}</b></div>
+    <div>Issued {{ issued | date("%d %B %Y") }}</div>
+    <div>Due {{ due | date("%d %B %Y") }}</div>
+  </div>
+</header>
+
+<section class="parties">
+  <div><div class="label">Billed to</div>{{ customer.name }}<br>{{ customer.address }}</div>
+  <div><div class="label">Amount due</div><b>{{ total | currency(currency) }}</b></div>
+</section>
+
+<table>
+  <thead>
+    <tr><th>Item</th><th class="n">Qty</th><th class="n">Unit price</th><th class="n">Amount</th></tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr>
+      <td>{{ item.name }}</td>
+      <td class="n">{{ item.qty }}</td>
+      <td class="n">{{ item.price | currency(currency) }}</td>
+      <td class="n">{{ (item.qty * item.price) | currency(currency) }}</td>
+    </tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="3" class="n">Total</td>
+      <td class="n">{{ total | currency(currency) }}</td>
+    </tr>
+  </tbody>
+</table>
+
+{% if payment_url is defined %}
+<p class="note">Pay online at {{ payment_url }}</p>
+{% endif %}
+</body>
+</html>

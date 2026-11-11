@@ -1,0 +1,15 @@
+{
+  "customers": [
+    {
+      "name": "Amani Otieno",
+      "email": "amani@example.com",
+      "phone": "+254 700 000 001",
+      "balance": 1200.5
+    },
+    {
+      "name": "Wanjiru Kamau",
+      "email": "wanjiru@example.com",
+      "balance": 0
+    }
+  ]
+}

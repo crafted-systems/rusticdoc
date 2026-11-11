@@ -1,0 +1,30 @@
+{
+  "title": "Sales, October 2026",
+  "currency": "KES",
+  "sales": [
+    {
+      "date": "2026-10-03",
+      "region": "Nairobi",
+      "rep": "Amani",
+      "amount": 120000
+    },
+    {
+      "date": "2026-10-09",
+      "region": "Mombasa",
+      "rep": "Wanjiru",
+      "amount": 84500
+    },
+    {
+      "date": "2026-10-15",
+      "region": "Kisumu",
+      "rep": "Otieno",
+      "amount": 61250
+    },
+    {
+      "date": "2026-10-22",
+      "region": "Nairobi",
+      "rep": "Akinyi",
+      "amount": 97300
+    }
+  ]
+}

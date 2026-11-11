@@ -3,7 +3,7 @@ PORT ?= 9027
 PYTHON ?= python3
 GENERATOR ?= openapitools/openapi-generator-cli:v7.12.0
 
-.PHONY: build test lint fmt run openapi docker up down outbound isolation disk replicas sign-check golden barcodes office thirdparty load sdk sdk-typescript sdk-python sdk-go clean
+.PHONY: build test lint fmt run openapi agent-docs skills docker up down outbound isolation disk replicas sign-check golden barcodes office thirdparty load sdk sdk-typescript sdk-python sdk-go clean
 
 build:
 	cargo build --release -p rusticdoc
@@ -26,6 +26,18 @@ run:
 # The API description the SDKs are generated from. CI checks it is current.
 openapi:
 	cargo run -q -p rusticdoc -- openapi > openapi.json
+
+# The agent skills in skills/: references copied from the docs, shared scripts
+# and the version. CI checks they are current.
+agent-docs:
+	node site/scripts/generate-skills.mjs
+
+# Each skill zipped as <name>.skill in target/skills, with its folder at the
+# top, for uploading to claude.ai or ChatGPT and for the release.
+skills: agent-docs
+	rm -rf target/skills && mkdir -p target/skills
+	cd skills && for s in */; do s=$${s%/}; zip -qrX ../target/skills/$$s.skill $$s -x '*.DS_Store'; done
+	ls -l target/skills
 
 docker:
 	docker build -t $(IMAGE) .

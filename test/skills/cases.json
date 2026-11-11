@@ -1,0 +1,506 @@
+{
+  "skill": "rusticdoc-templates",
+  "cases": [
+    {
+      "id": "invoice-html",
+      "inputs": [
+        "invoice.json"
+      ],
+      "template": "invoice.html",
+      "data": [
+        "invoice.json"
+      ],
+      "prompt": "Make an invoice template for rusticdoc from the data in invoice.json. I want a clean A4 PDF with a line-item table and the total.",
+      "checks": [
+        {
+          "data": "invoice.json",
+          "contains": [
+            "Amani Otieno",
+            "Single-origin beans",
+            "Delivery to Mombasa",
+            "28,800",
+            "36,300"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "invoice-docx",
+      "inputs": [
+        "invoice.json"
+      ],
+      "template": "invoice.docx",
+      "data": [
+        "invoice.json"
+      ],
+      "prompt": "Create a Word (.docx) invoice template for rusticdoc using the data in invoice.json, with one table row per line item showing the quantity, unit price and line amount, and the total under the table.",
+      "checks": [
+        {
+          "data": "invoice.json",
+          "contains": [
+            "Single-origin beans",
+            "Paper filters",
+            "Delivery to Mombasa",
+            "28,800.00",
+            "5,700.00",
+            "36,300.00"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "data-for-template",
+      "inputs": [
+        "existing-invoice.docx"
+      ],
+      "template": "existing-invoice.docx",
+      "data": [
+        "sample.json"
+      ],
+      "writes_data": true,
+      "prompt": "existing-invoice.docx is a rusticdoc template. Write realistic sample data for it as sample.json, for a customer in Kisumu with four line items, and render it to PDF to check it.",
+      "checks": [
+        {
+          "data": "sample.json",
+          "contains": [
+            "Kisumu"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "from-carbone",
+      "inputs": [
+        "carbone-letter.txt",
+        "invoice.json"
+      ],
+      "template": "letter.txt",
+      "data": [
+        "invoice.json"
+      ],
+      "prompt": "carbone-letter.txt was written for Carbone. Rewrite it as a rusticdoc template, letter.txt, that renders with invoice.json and keeps what the original shows.",
+      "template_avoids": [
+        "\\{d\\."
+      ],
+      "checks": [
+        {
+          "data": "invoice.json",
+          "contains": [
+            "Amani Otieno",
+            "Single-origin beans",
+            "Delivery to Mombasa",
+            "36,300"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "from-mustache",
+      "inputs": [
+        "mustache-list.html",
+        "mustache-data.json"
+      ],
+      "template": "list.html",
+      "data": [
+        "mustache-data.json"
+      ],
+      "prompt": "mustache-list.html is a Mustache template. Convert it to a rusticdoc template, list.html, that renders with mustache-data.json and keeps the message for an empty list.",
+      "template_avoids": [
+        "\\{\\{#",
+        "\\{\\{\\^"
+      ],
+      "checks": [
+        {
+          "data": "mustache-data.json",
+          "contains": [
+            "Price list",
+            "House blend",
+            "Kenya AA"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "optional-fields",
+      "inputs": [
+        "customers.json"
+      ],
+      "template": "customers.md",
+      "data": [
+        "customers.json"
+      ],
+      "prompt": "Write a rusticdoc Markdown template, customers.md, that lists each customer in customers.json with their name, email, phone and balance. Some customers have no phone number; show 'no phone' for them.",
+      "checks": [
+        {
+          "data": "customers.json",
+          "contains": [
+            "no phone",
+            "Wanjiru Kamau",
+            "+254 700 000 001"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "line-totals",
+      "inputs": [
+        "order-plain.json"
+      ],
+      "template": "order.txt",
+      "data": [
+        "order-plain.json"
+      ],
+      "prompt": "Make a plain-text order summary template, order.txt, for rusticdoc and order-plain.json. Show each item's line total (quantity times price) as money in KES, and the order total.",
+      "checks": [
+        {
+          "data": "order-plain.json",
+          "contains": [
+            "4,800.00",
+            "3,100.00",
+            "7,900.00"
+          ],
+          "absent": [
+            "2,400.00KES",
+            "2,400.00 KES 2,400.00"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "discount-condition",
+      "inputs": [
+        "order-discount.json",
+        "order-plain.json"
+      ],
+      "template": "order.html",
+      "data": [
+        "order-discount.json",
+        "order-plain.json"
+      ],
+      "prompt": "Make an HTML order confirmation template for rusticdoc, order.html, that shows a Discount line only when the order has a discount. It must work for both order-discount.json and order-plain.json.",
+      "checks": [
+        {
+          "data": "order-discount.json",
+          "contains": [
+            "Discount",
+            "790"
+          ]
+        },
+        {
+          "data": "order-plain.json",
+          "absent": [
+            "Discount"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xlsx-sales",
+      "inputs": [
+        "sales.json",
+        "starter.xlsx"
+      ],
+      "template": "sales.xlsx",
+      "data": [
+        "sales.json"
+      ],
+      "prompt": "Create an Excel template, sales.xlsx, for rusticdoc that lists every sale in sales.json as a row (date, region, rep, amount) with a total row underneath that adds up the amounts. Start from starter.xlsx, our blank workbook.",
+      "checks": [
+        {
+          "data": "sales.json",
+          "contains": [
+            "Nairobi",
+            "Mombasa",
+            "Kisumu",
+            "Akinyi"
+          ],
+          "contains_any": [
+            [
+              "363,050",
+              "363050",
+              "363 050"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pptx-deck",
+      "inputs": [
+        "products.json",
+        "starter.pptx"
+      ],
+      "template": "deck.pptx",
+      "data": [
+        "products.json"
+      ],
+      "prompt": "Build a PowerPoint template, deck.pptx, for rusticdoc with a title slide for the company, then one slide per product in products.json showing its name, price and tagline. Start from starter.pptx, our blank deck.",
+      "checks": [
+        {
+          "data": "products.json",
+          "contains": [
+            "House blend",
+            "Kenya AA",
+            "Decaf Swiss Water",
+            "Bright and fruity"
+          ],
+          "pages_min": 4
+        }
+      ]
+    },
+    {
+      "id": "qr-certificate",
+      "inputs": [
+        "attendee.json"
+      ],
+      "template": "certificate.docx",
+      "data": [
+        "attendee.json"
+      ],
+      "prompt": "Make a Word certificate template, certificate.docx, for rusticdoc and attendee.json, with a QR code that links to verify_url so people can check the certificate.",
+      "template_uses": [
+        "barcode\\(\\s*[\"']qr"
+      ],
+      "checks": [
+        {
+          "data": "attendee.json",
+          "contains": [
+            "Akinyi Odhiambo",
+            "FS2-2026-00417"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "logo-image",
+      "inputs": [
+        "brand.json"
+      ],
+      "template": "note.docx",
+      "data": [
+        "brand.json"
+      ],
+      "prompt": "brand.json has the company logo as base64 in its logo field. Make a Word thank-you note template for rusticdoc, note.docx, with the logo at the top, then the message to the customer.",
+      "template_uses": [
+        "\\|\\s*image"
+      ],
+      "checks": [
+        {
+          "data": "brand.json",
+          "contains": [
+            "Amani Otieno",
+            "Thank you for your order."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pdf-form",
+      "inputs": [
+        "form.pdf",
+        "applicant.json"
+      ],
+      "template": "form.pdf",
+      "data": [],
+      "output": "filled.pdf",
+      "prompt": "Use rusticdoc to fill form.pdf with applicant.json, flattened so the values can't be edited. Save the result as filled.pdf.",
+      "checks": [
+        {
+          "output": "filled.pdf",
+          "contains": [
+            "Wanjiru Kamau"
+          ],
+          "no_fields": true
+        }
+      ]
+    },
+    {
+      "id": "dates-money",
+      "inputs": [
+        "letter-data.json"
+      ],
+      "template": "reminder.html",
+      "data": [
+        "letter-data.json"
+      ],
+      "prompt": "Make a short payment reminder template for rusticdoc, reminder.html, for letter-data.json. Write the due date like 25 November 2026 and show the amount as euros.",
+      "checks": [
+        {
+          "data": "letter-data.json",
+          "contains": [
+            "25 November 2026"
+          ],
+          "contains_any": [
+            [
+              "24,650.50",
+              "24.650,50",
+              "24 650,50"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "json-payload",
+      "inputs": [
+        "payload-order.json"
+      ],
+      "template": "webhook.json",
+      "data": [
+        "payload-order.json"
+      ],
+      "prompt": "Write a rusticdoc template, webhook.json, that turns payload-order.json into a JSON object with orderId, customerName, customerEmail, lineCount (the number of items) and paid.",
+      "checks": [
+        {
+          "data": "payload-order.json",
+          "json": {
+            "orderId": "ORD-881",
+            "customerName": "Amani \"Mani\" Otieno",
+            "customerEmail": "amani@example.com",
+            "lineCount": 2,
+            "paid": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "statement-pages",
+      "inputs": [
+        "statement.json"
+      ],
+      "template": "statement.html",
+      "data": [
+        "statement.json"
+      ],
+      "prompt": "Make a bank statement template for rusticdoc, statement.html, from statement.json: every transaction in a table, the column headings repeated on each page, and 'Page X of Y' at the bottom of every page.",
+      "checks": [
+        {
+          "data": "statement.json",
+          "contains": [
+            "Transaction 01",
+            "Transaction 60",
+            "Page 1 of"
+          ],
+          "pages_min": 2
+        }
+      ]
+    },
+    {
+      "id": "csv-export",
+      "inputs": [
+        "customers.json"
+      ],
+      "template": "customers.csv",
+      "data": [
+        "customers.json"
+      ],
+      "prompt": "Write a CSV template for rusticdoc, customers.csv, for customers.json: a header row, then one row per customer with name, email and balance.",
+      "checks": [
+        {
+          "data": "customers.json",
+          "csv_rows": 3
+        }
+      ]
+    },
+    {
+      "id": "translated",
+      "inputs": [
+        "letter-data.json"
+      ],
+      "template": "reminder.txt",
+      "data": [
+        "letter-data.json"
+      ],
+      "prompt": "Make a payment reminder template for rusticdoc, reminder.txt, for letter-data.json. Its wording must come out in English or French depending on the language the request asks for. Show me that the French version works.",
+      "checks": [
+        {
+          "data": "letter-data.json",
+          "fields": {
+            "lang": "fr"
+          },
+          "contains_any": [
+            [
+              "Bonjour",
+              "Madame",
+              "Monsieur",
+              "Cher",
+              "Chère",
+              "paiement",
+              "Rappel",
+              "Cordialement",
+              "montant"
+            ]
+          ]
+        },
+        {
+          "data": "letter-data.json",
+          "fields": {
+            "lang": "en"
+          },
+          "contains_any": [
+            [
+              "Dear",
+              "payment",
+              "Payment",
+              "reminder",
+              "Reminder"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "docx-optional-paragraph",
+      "inputs": [
+        "order-discount.json",
+        "order-plain.json"
+      ],
+      "template": "terms.docx",
+      "data": [
+        "order-discount.json",
+        "order-plain.json"
+      ],
+      "prompt": "Write a Word template for rusticdoc, terms.docx, confirming an order for the customer. Include a paragraph about the discount only when the order has one. Check it with order-discount.json and order-plain.json.",
+      "checks": [
+        {
+          "data": "order-discount.json",
+          "contains_re": [
+            "\\b790(\\.00)?\\b"
+          ]
+        },
+        {
+          "data": "order-plain.json",
+          "absent_re": [
+            "\\b790(\\.00)?\\b"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fix-broken",
+      "inputs": [
+        "broken-invoice.md",
+        "invoice.json"
+      ],
+      "template": "broken-invoice.md",
+      "data": [
+        "invoice.json"
+      ],
+      "prompt": "broken-invoice.md is a rusticdoc template that fails with invoice.json. Fix it in place so it renders, with correct line amounts.",
+      "checks": [
+        {
+          "data": "invoice.json",
+          "contains": [
+            "Amani Otieno",
+            "Single-origin beans",
+            "28,800.00",
+            "36,300.00"
+          ],
+          "absent": [
+            "2,400.00KES"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,369 @@
+{
+  "account": "0112 3456 7890",
+  "holder": "Amani Otieno",
+  "currency": "KES",
+  "opening": 50000,
+  "closing": -44526.33,
+  "transactions": [
+    {
+      "date": "2026-10-01",
+      "description": "Transaction 01",
+      "amount": -8541.22,
+      "balance": 41458.78
+    },
+    {
+      "date": "2026-10-02",
+      "description": "Transaction 02",
+      "amount": -5928.22,
+      "balance": 35530.56
+    },
+    {
+      "date": "2026-10-03",
+      "description": "Transaction 03",
+      "amount": -7427.21,
+      "balance": 28103.35
+    },
+    {
+      "date": "2026-10-04",
+      "description": "Transaction 04",
+      "amount": -3418.06,
+      "balance": 24685.29
+    },
+    {
+      "date": "2026-10-05",
+      "description": "Transaction 05",
+      "amount": -8205.4,
+      "balance": 16479.89
+    },
+    {
+      "date": "2026-10-06",
+      "description": "Transaction 06",
+      "amount": -529.96,
+      "balance": 15949.93
+    },
+    {
+      "date": "2026-10-07",
+      "description": "Transaction 07",
+      "amount": -3879.91,
+      "balance": 12070.02
+    },
+    {
+      "date": "2026-10-08",
+      "description": "Transaction 08",
+      "amount": -998.27,
+      "balance": 11071.75
+    },
+    {
+      "date": "2026-10-09",
+      "description": "Transaction 09",
+      "amount": -720.17,
+      "balance": 10351.58
+    },
+    {
+      "date": "2026-10-10",
+      "description": "Transaction 10",
+      "amount": 1289.46,
+      "balance": 11641.04
+    },
+    {
+      "date": "2026-10-11",
+      "description": "Transaction 11",
+      "amount": -5749.51,
+      "balance": 5891.53
+    },
+    {
+      "date": "2026-10-12",
+      "description": "Transaction 12",
+      "amount": 8539.84,
+      "balance": 14431.37
+    },
+    {
+      "date": "2026-10-13",
+      "description": "Transaction 13",
+      "amount": 5352.76,
+      "balance": 19784.13
+    },
+    {
+      "date": "2026-10-14",
+      "description": "Transaction 14",
+      "amount": -8791.04,
+      "balance": 10993.09
+    },
+    {
+      "date": "2026-10-15",
+      "description": "Transaction 15",
+      "amount": -5098.65,
+      "balance": 5894.44
+    },
+    {
+      "date": "2026-10-16",
+      "description": "Transaction 16",
+      "amount": -2748.56,
+      "balance": 3145.88
+    },
+    {
+      "date": "2026-10-17",
+      "description": "Transaction 17",
+      "amount": -4958.04,
+      "balance": -1812.16
+    },
+    {
+      "date": "2026-10-18",
+      "description": "Transaction 18",
+      "amount": 2914.64,
+      "balance": 1102.48
+    },
+    {
+      "date": "2026-10-19",
+      "description": "Transaction 19",
+      "amount": 1790.39,
+      "balance": 2892.87
+    },
+    {
+      "date": "2026-10-20",
+      "description": "Transaction 20",
+      "amount": 5226.6,
+      "balance": 8119.47
+    },
+    {
+      "date": "2026-10-21",
+      "description": "Transaction 21",
+      "amount": -3477.1,
+      "balance": 4642.37
+    },
+    {
+      "date": "2026-10-22",
+      "description": "Transaction 22",
+      "amount": 6466.57,
+      "balance": 11108.94
+    },
+    {
+      "date": "2026-10-23",
+      "description": "Transaction 23",
+      "amount": 724.49,
+      "balance": 11833.43
+    },
+    {
+      "date": "2026-10-24",
+      "description": "Transaction 24",
+      "amount": -4568.45,
+      "balance": 7264.98
+    },
+    {
+      "date": "2026-10-25",
+      "description": "Transaction 25",
+      "amount": 3962.81,
+      "balance": 11227.79
+    },
+    {
+      "date": "2026-10-26",
+      "description": "Transaction 26",
+      "amount": -4297.3,
+      "balance": 6930.49
+    },
+    {
+      "date": "2026-10-27",
+      "description": "Transaction 27",
+      "amount": -3381.92,
+      "balance": 3548.57
+    },
+    {
+      "date": "2026-10-28",
+      "description": "Transaction 28",
+      "amount": -7190.54,
+      "balance": -3641.97
+    },
+    {
+      "date": "2026-10-01",
+      "description": "Transaction 29",
+      "amount": 7062.5,
+      "balance": 3420.53
+    },
+    {
+      "date": "2026-10-02",
+      "description": "Transaction 30",
+      "amount": -5254.93,
+      "balance": -1834.4
+    },
+    {
+      "date": "2026-10-03",
+      "description": "Transaction 31",
+      "amount": 4557.02,
+      "balance": 2722.62
+    },
+    {
+      "date": "2026-10-04",
+      "description": "Transaction 32",
+      "amount": -6619.12,
+      "balance": -3896.5
+    },
+    {
+      "date": "2026-10-05",
+      "description": "Transaction 33",
+      "amount": -5558.84,
+      "balance": -9455.34
+    },
+    {
+      "date": "2026-10-06",
+      "description": "Transaction 34",
+      "amount": -1238.98,
+      "balance": -10694.32
+    },
+    {
+      "date": "2026-10-07",
+      "description": "Transaction 35",
+      "amount": -1651.67,
+      "balance": -12345.99
+    },
+    {
+      "date": "2026-10-08",
+      "description": "Transaction 36",
+      "amount": -1537.46,
+      "balance": -13883.45
+    },
+    {
+      "date": "2026-10-09",
+      "description": "Transaction 37",
+      "amount": -3910.95,
+      "balance": -17794.4
+    },
+    {
+      "date": "2026-10-10",
+      "description": "Transaction 38",
+      "amount": 883.06,
+      "balance": -16911.34
+    },
+    {
+      "date": "2026-10-11",
+      "description": "Transaction 39",
+      "amount": 5242.63,
+      "balance": -11668.71
+    },
+    {
+      "date": "2026-10-12",
+      "description": "Transaction 40",
+      "amount": -3193.08,
+      "balance": -14861.79
+    },
+    {
+      "date": "2026-10-13",
+      "description": "Transaction 41",
+      "amount": -5430.45,
+      "balance": -20292.24
+    },
+    {
+      "date": "2026-10-14",
+      "description": "Transaction 42",
+      "amount": 7212.65,
+      "balance": -13079.59
+    },
+    {
+      "date": "2026-10-15",
+      "description": "Transaction 43",
+      "amount": -7591.72,
+      "balance": -20671.31
+    },
+    {
+      "date": "2026-10-16",
+      "description": "Transaction 44",
+      "amount": -4372.07,
+      "balance": -25043.38
+    },
+    {
+      "date": "2026-10-17",
+      "description": "Transaction 45",
+      "amount": 772.0,
+      "balance": -24271.38
+    },
+    {
+      "date": "2026-10-18",
+      "description": "Transaction 46",
+      "amount": 6373.13,
+      "balance": -17898.25
+    },
+    {
+      "date": "2026-10-19",
+      "description": "Transaction 47",
+      "amount": 5285.93,
+      "balance": -12612.32
+    },
+    {
+      "date": "2026-10-20",
+      "description": "Transaction 48",
+      "amount": 7432.94,
+      "balance": -5179.38
+    },
+    {
+      "date": "2026-10-21",
+      "description": "Transaction 49",
+      "amount": -6506.32,
+      "balance": -11685.7
+    },
+    {
+      "date": "2026-10-22",
+      "description": "Transaction 50",
+      "amount": 3253.65,
+      "balance": -8432.05
+    },
+    {
+      "date": "2026-10-23",
+      "description": "Transaction 51",
+      "amount": -3328.08,
+      "balance": -11760.13
+    },
+    {
+      "date": "2026-10-24",
+      "description": "Transaction 52",
+      "amount": 1230.44,
+      "balance": -10529.69
+    },
+    {
+      "date": "2026-10-25",
+      "description": "Transaction 53",
+      "amount": -2120.23,
+      "balance": -12649.92
+    },
+    {
+      "date": "2026-10-26",
+      "description": "Transaction 54",
+      "amount": -1338.19,
+      "balance": -13988.11
+    },
+    {
+      "date": "2026-10-27",
+      "description": "Transaction 55",
+      "amount": -3701.5,
+      "balance": -17689.61
+    },
+    {
+      "date": "2026-10-28",
+      "description": "Transaction 56",
+      "amount": -909.12,
+      "balance": -18598.73
+    },
+    {
+      "date": "2026-10-01",
+      "description": "Transaction 57",
+      "amount": -3734.47,
+      "balance": -22333.2
+    },
+    {
+      "date": "2026-10-02",
+      "description": "Transaction 58",
+      "amount": -7973.78,
+      "balance": -30306.98
+    },
+    {
+      "date": "2026-10-03",
+      "description": "Transaction 59",
+      "amount": -7803.06,
+      "balance": -38110.04
+    },
+    {
+      "date": "2026-10-04",
+      "description": "Transaction 60",
+      "amount": -6416.29,
+      "balance": -44526.33
+    }
+  ]
+}

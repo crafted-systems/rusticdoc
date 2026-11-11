@@ -1,0 +1,13 @@
+{
+  "title": "Price list",
+  "items": [
+    {
+      "name": "House blend",
+      "price": 2400
+    },
+    {
+      "name": "Kenya AA",
+      "price": 3100
+    }
+  ]
+}

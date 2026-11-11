@@ -127,6 +127,7 @@ The store is the only thing replicas share. There are no messages, locks or lead
 | `GET /v1/templates`, `GET /v1/templates/{id}` | Lists them a page at a time, or shows one |
 | `GET /v1/templates/{id}/content`, `DELETE /v1/templates/{id}` | Downloads or deletes one |
 | `POST /v1/templates/validate` | Reports template errors against sample data without converting. Takes a file or a `templateId` |
+| `POST /v1/templates/variables`, `POST /v1/templates/preview` | List the data a template file reads, or draw one page of it as a PNG, without storing it. Need no store |
 | `POST /v1/convert` | Converts one or more files. Several come back as a ZIP, or as one PDF with `merge=true` |
 | `POST /v1/pdf/*` | `merge`, `split`, `rotate`, `flatten`, `optimize`, `encrypt`, `convert`, `watermark`, `stamp`, `overlay`, `sign`, `embed`, `factur-x`, `metadata/read`, `metadata/write`, `bookmarks/read`, `bookmarks/write`, `forms/fields`, `forms/fill` |
 | `POST /v1/pdf/sign` with `signature=certificate` | A cryptographic PAdES signature, B-B to B-LTA, approving or certifying, with the deployment's key or a named one. Returns `503` when no key is configured. See [Signing PDFs](#signing-pdfs) |
@@ -231,6 +232,10 @@ Every setting is an environment variable, and all of them are optional:
 | `RUSTICDOC_PDF_DISABLED` | `false` | The `/v1/pdf/*` routes return `404` |
 | `RUSTICDOC_PDF_ENGINES_MERGE`, `_SPLIT`, `_FLATTEN`, `_ROTATE`, `_OPTIMIZE_IMAGES`, `_ENCRYPT`, `_WATERMARK`, `_STAMP`, `_EMBED`, `_EMBED_METADATA`, `_READ_BOOKMARKS`, `_WRITE_BOOKMARKS`, `_READ_METADATA`, `_WRITE_METADATA`, `_FACTUR_X` | `lopdf`, `qpdf`, `pdfcpu` | Engine order per operation, from `lopdf`, `qpdf`, `pdfcpu` and `qpdf-metadata`. An unknown name stops the service from starting |
 | `RUSTICDOC_PDF_ENGINES_ENCRYPT` | `lopdf`, `qpdf`, `pdfcpu` | Naming `pdfcpu` passes passwords as command-line arguments, which this user's other processes can read while it runs, and the service warns at start. A failed encryption never falls through to the next engine |
+
+## Agent skills
+
+[`skills/`](skills/) holds two skills for AI assistants such as Claude Code, Codex, Cursor and Copilot. `rusticdoc-templates` writes, checks and renders templates, and `rusticdoc-api` calls the service and the CLI from code, including webhook receivers that verify signatures. Install them with `npx skills add crafted-systems/rusticdoc`, or unzip the `.skill` files attached to each release into your assistant's skills folder. Their reference files are copied from the docs by `make agent-docs`, and CI fails when they're stale. [test/skills/](test/skills/) has the evals. See [agent skills](site/src/content/docs/docs/ai/skills.md).
 
 ## SDKs
 

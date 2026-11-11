@@ -16,6 +16,7 @@ What isn't done yet, and what's planned.
 
 - Publish the SDK packages for TypeScript, Python and Go.
 - Signing keys in a cloud KMS, and encrypted key files.
+- An MCP server and an agent plugin that bundles it with the skills, so chat apps can render too. [AI integrations](AI-INTEGRATIONS.md) has the plan for the skills that exist.
 
 ## Open issues
 

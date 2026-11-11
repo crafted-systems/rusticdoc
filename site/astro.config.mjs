@@ -61,6 +61,7 @@ export default defineConfig({
         { label: 'Write templates', items: [{ autogenerate: { directory: 'docs/templates' } }] },
         { label: 'Use the API', items: [{ autogenerate: { directory: 'docs/guides' } }] },
         { label: 'Run it', items: [{ autogenerate: { directory: 'docs/operate' } }] },
+        { label: 'Use with AI', items: [{ autogenerate: { directory: 'docs/ai' } }] },
         {
           label: 'Reference',
           items: [

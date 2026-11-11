@@ -1,0 +1,20 @@
+{
+  "company": "Mawingu Coffee Co.",
+  "products": [
+    {
+      "name": "House blend",
+      "price": 2400,
+      "tagline": "Smooth, chocolatey, every day"
+    },
+    {
+      "name": "Kenya AA",
+      "price": 3100,
+      "tagline": "Bright and fruity"
+    },
+    {
+      "name": "Decaf Swiss Water",
+      "price": 2700,
+      "tagline": "All the taste, none of the buzz"
+    }
+  ]
+}
