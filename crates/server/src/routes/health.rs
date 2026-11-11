@@ -30,7 +30,7 @@ pub struct EngineStatus {
 
 #[derive(Serialize, ToSchema)]
 pub struct Version {
-    #[schema(example = "0.1.1")]
+    #[schema(example = "0.1.2")]
     pub version: &'static str,
     /// Paths of the engines in use, or null when absent.
     pub engines: serde_json::Value,

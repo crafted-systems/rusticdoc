@@ -9,6 +9,29 @@ sidebar:
 
 rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults and may add features, without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
+## 0.1.2
+
+Released on 11 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.1.2`, for amd64 and arm64.
+
+This release limits what one caller can make the service spend. The faults it fixes let a caller use memory, CPU or storage that every caller shares. None let a caller past authentication or into another caller's data. It refuses a few things that 0.1.1 accepted:
+
+- `GET /v1/templates/{id}/variables` answers `422` for a template with more than 10,000 variable paths, or a path more than 64 parts deep.
+- A template whose XML is nested more than 256 deep is refused.
+- An overlay image above 25 million pixels is refused.
+- `RUSTICDOC_MAX_JOB_STORAGE`, `5GB` by default, limits the background-job results one caller holds at a time. A job whose result would go past it fails with `quota_exceeded`.
+- `/health` shows where the store is to admins only.
+
+It also changes these:
+
+- A listing of a PDF's form fields stops at 16 MiB, and fields that inherit their options share them.
+- At most four preview pages are drawn at once.
+- Stopping LibreOffice stops its whole process group, so no `soffice.bin` is left behind.
+- LibreOffice's error output is logged a line at a time, as a field of the log line.
+- The service warns at every start about a key shorter than 16 characters.
+- The image leaves out `mount` and the parts of GnuPG beyond `gpg`. Nothing in it runs them.
+- Each release installs Debian's packages as they are that day, and CI scans the image for findings that have a fix. [Check the image you run](/docs/operate/security/#check-the-image-you-run) has the numbers.
+- The Rust dependencies are newer, among them minijinja 3.1.0, resvg 0.49 and zip 9.4.2.
+
 ## 0.1.1
 
 Released on 10 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.1.1`, for amd64 and arm64.

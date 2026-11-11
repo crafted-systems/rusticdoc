@@ -52,7 +52,7 @@ x-request-id: my-id-1
 x-rusticdoc-timestamp: 1793997426
 x-rusticdoc-attempt: 1
 x-rusticdoc-signature: v1=7ced1242...
-user-agent: rusticdoc/0.1.1
+user-agent: rusticdoc/0.1.2
 ```
 
 | Header | Meaning |
@@ -244,7 +244,7 @@ docker run -d --name rd-webhooks -p 127.0.0.1:9028:9027 \
   -e RUSTICDOC_API_KEYS=my-key \
   -e RUSTICDOC_WEBHOOK_SECRET=change-me \
   -e RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true \
-  ghcr.io/crafted-systems/rusticdoc:0.1.1
+  ghcr.io/crafted-systems/rusticdoc:0.1.2
 
 export RUSTICDOC_SIGNING_KEY=$(docker exec rd-webhooks \
   rusticdoc webhook-secret --api-key my-key)
