@@ -17,6 +17,7 @@ The service is the same as in 0.1.3. This release carries the CLI archives and a
 
 - The README, the docs intro and the site's home and about pages point to the known limits and this changelog, in place of statements about readiness.
 - The [skills](/docs/ai/skills/) page says releases carry the `.skill` files from 0.1.4 on.
+- The wordmark sets "doc" in the mark's blue, on the site, in the README logo and in the image link previews show.
 - A link on the site opens on the first click. The site prefetches a page while the pointer rests on its link, and no longer prerenders it.
 
 ## 0.1.3

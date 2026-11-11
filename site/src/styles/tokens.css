@@ -62,6 +62,9 @@
 
 html { background: var(--field); scrollbar-gutter: stable; }
 
+/* The "doc" of the wordmark takes the mark's blue, in both modes. */
+.wordmark-doc { color: var(--blue); }
+
 /* Moving between pages: the browser keeps the old page on screen until the new one
    can paint, then fades between them. The top bar, the brand and the docs sidebar
    are matched across pages, so they hold still while the content changes. */
