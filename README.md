@@ -31,16 +31,13 @@
 
 rusticdoc is a document engine written in Rust. It fills templates with tags like `{{ customer.name }}`, converts the result with LibreOffice or [Fulgur](https://github.com/fulgur-rs/fulgur), and finishes it with PDF operations, all in one multipart request. It handles documents, not live web pages: there's no Chromium, Node or Java in the image, no URL is fetched and no JavaScript runs.
 
-```mermaid
-flowchart LR
-  T["Template<br/>docx · xlsx · pptx · odt · pdf · html · txt"] --> F
-  D["JSON data"] --> F
-  F["Fill<br/>tags · loops · filters"] --> C["Convert<br/>LibreOffice · Fulgur"]
-  C --> P["Finish<br/>merge · PDF/A · watermark · sign …"]
-  P --> R1["Response"]
-  P --> R2["Signed webhook"]
-  P --> R3["Background job"]
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/pipeline-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/pipeline-light.svg">
+    <img alt="A template and JSON data are filled, converted with LibreOffice or Fulgur, and finished with PDF operations, then returned as the response, posted to a signed webhook, or kept as a background job" src=".github/assets/pipeline-light.svg" width="751">
+  </picture>
+</p>
 
 ## ✨ Highlights
 
