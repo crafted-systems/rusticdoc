@@ -7,6 +7,17 @@ updates:
     groups:
       rust:
         patterns: ["*"]
+    ignore:
+      # der 0.8 and x509-cert 0.3 need cms 0.3, which is not released yet.
+      - dependency-name: der
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: x509-cert
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Form shaping uses the Parley and Krilla inside Fulgur: move with Fulgur.
+      - dependency-name: parley
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: krilla
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: npm
     directory: /site
     schedule:
