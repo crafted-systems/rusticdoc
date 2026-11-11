@@ -369,28 +369,6 @@ Total due {{ total | currency(currency) }}
     </ul>
   </section>
 
-  <section class="band">
-    <div class="two wide-right">
-      <header class="section-head left">
-        <h2>What happens when someone attacks it</h2>
-        <p>A document service has to open files from people you can’t trust. Each of these is refused in a container limited to 3 GiB, and the service keeps running.</p>
-        <p class="more"><a href="/docs/project/security-overview/">What it protects, and what’s left to you</a></p>
-      </header>
-      <div class="table-scroll flush" role="region" aria-label="Attack results" tabindex="0">
-        <table class="results">
-          <thead><tr><th scope="col">Attack</th><th scope="col">What happens</th></tr></thead>
-          <tbody>
-            <tr><td>40 doublings of a template variable</td><td><code>413</code> in under a second</td></tr>
-            <tr><td>40 concurrent 60 MB uploads</td><td>Refused, memory peaks at 1.31 GiB</td></tr>
-            <tr><td>840,000 same-named form parts</td><td><code>400</code> in 6 ms</td></tr>
-            <tr><td>Stylesheet link in a converted HTML file</td><td>No request leaves the container</td></tr>
-            <tr><td>Service secrets in <code>/proc/1/environ</code></td><td>Permission denied to LibreOffice</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
   <section id="questions" class="band">
     <div class="two faq-wrap">
       <header class="section-head left">

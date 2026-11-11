@@ -319,16 +319,6 @@ main { padding: 0; }
 .closing .actions { margin-top: 1.5rem; }
 
 /* Tables */
-.table-scroll { overflow-x: auto; margin-top: 2rem; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
-.table-scroll.flush { margin-top: 0; }
-.results { border-collapse: collapse; width: 100%; }
-.results { min-width: 24rem; font-size: 0.97rem; }
-.results th, .results td { text-align: left; vertical-align: top; padding: 0.8rem 1rem; border-bottom: 1px solid var(--line); }
-.results tr:last-child td { border-bottom: 0; }
-.results thead th { background: var(--mist); color: var(--ink-soft); font-weight: 600; font-size: 0.9rem; }
-.results td:last-child { color: var(--green); font-weight: 600; }
-.results td code { background: var(--blue-wash); color: var(--blue-deep); border-radius: var(--r-small); padding: 0.08rem 0.35rem; }
-.results td:last-child code { background: var(--green-wash); color: var(--green); }
 .sources { font-size: 0.95rem; color: var(--ink-soft); margin-top: 1.5rem; max-width: 44rem; }
 .pill { display: inline-block; flex: none; border-radius: var(--r-small); padding: 0.1rem 0.6rem; font-size: 0.84rem; font-weight: 600; line-height: 1.5; }
 .pill.ok { background: var(--green-wash); color: var(--green); }
