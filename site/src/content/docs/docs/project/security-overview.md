@@ -38,4 +38,4 @@ The [security guide](/docs/operate/security/) goes through each of these.
 - Escaping covers text and quoted attributes. It doesn't make a value safe in a `<script>` or `<style>` block, in an unquoted attribute or as a URL, and `.csv` and `.md` templates aren't escaped at all. Check values like those in your application.
 - A file sent to a conversion route is converted as it is. Only rendering takes macros, objects and outside links out.
 - Anyone who can `docker exec` into the container can read its environment.
-- The image has known CVEs in Debian's packages. Trivy reports 691 findings, 1 critical and 108 high, none with a Debian fix at the time of the scan. Scan the image you run.
+- The image has known CVEs in Debian's packages. Grype reports 761 findings, 31 critical and 204 high, none with a Debian fix at the time of the scan. Scan the image you run.

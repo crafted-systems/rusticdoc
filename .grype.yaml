@@ -1,0 +1,31 @@
+# Grype reads this file when it is run from the project root:
+#   grype rusticdoc:local
+#
+# curl comes from trixie-backports, as a dependency of LibreOffice. Grype
+# compares it with Debian 13's own curl, which has no fix for the findings
+# below, and so reports them. Debian's security tracker gives each as fixed in
+# 8.21.0~rc2-1 or 8.21.0~rc3-1, which the backport, 8.21.0-2~bpo13+1, is past.
+#
+# Each rule names that version, so it stops applying when curl moves. Check the
+# list against https://security-tracker.debian.org/tracker/source-package/curl
+# then, and add what the new version fixes.
+ignore:
+  - vulnerability: CVE-2026-8926
+    package: &curl
+      upstream-name: curl
+      version: 8.21.0-2~bpo13+1
+      type: deb
+  - vulnerability: CVE-2026-8932
+    package: *curl
+  - vulnerability: CVE-2026-9079
+    package: *curl
+  - vulnerability: CVE-2026-9080
+    package: *curl
+  - vulnerability: CVE-2026-9545
+    package: *curl
+  - vulnerability: CVE-2026-10536
+    package: *curl
+  - vulnerability: CVE-2026-11856
+    package: *curl
+  - vulnerability: CVE-2026-12064
+    package: *curl

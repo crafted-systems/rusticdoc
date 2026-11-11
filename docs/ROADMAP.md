@@ -23,7 +23,7 @@ What isn't done yet, and what's planned.
 - A PowerPoint loop across two paragraphs gives four paragraphs where docxtemplater gives three.
 - A compromised LibreOffice runs as the service's user. It can't read the service's secrets or memory, but it can see other requests' temporary files.
 - There's no rate limiting, so many clients together can fill the connection and memory budgets for as long as the timeouts allow. A proxy in front has to do it.
-- Trivy reports 691 findings in the image's Debian packages, 1 critical and 108 high, none with a Debian fix at the time of the scan. Rebuild when fixes ship.
+- Grype reports 761 findings in the image's Debian packages, 31 critical and 204 high, none with a Debian fix at the time of the scan. 24 of them, 12 critical, are curl findings that the backported curl already fixes; `.grype.yaml` lists them. CI scans the image and fails when a fix ships that the image lacks.
 
 ## Waiting on other projects
 
