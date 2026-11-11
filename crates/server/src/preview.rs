@@ -146,6 +146,10 @@ fn inherited(doc: &lopdf::Document, mut id: ObjectId, key: &[u8]) -> Option<Obje
     None
 }
 
+/// How many pages are drawn at once, across every caller.
+const MAX_DRAWINGS: usize = 4;
+static DRAWINGS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(MAX_DRAWINGS);
+
 /// Draws page `page` (from 1) of `pdf` as a PNG of `size`.
 pub async fn draw(
     bin: Option<&Path>,
@@ -204,6 +208,15 @@ pub async fn draw(
         (h.round() as u32).max(1).to_string(),
     ]);
     args.extend(["in.pdf".into(), "out".into()]);
+    // One of the few places a drawing may run in, waited for within the
+    // request's time: a caller's requests cost little to send, and each of
+    // these is a process with up to [`PDFTOPPM_MEMORY`] of its own. Dropped
+    // with the request, as the process is.
+    let left = timeout.saturating_sub(started.elapsed());
+    let _place = tokio::time::timeout(left, DRAWINGS.acquire())
+        .await
+        .map_err(|_| Error::Timeout(timeout))?
+        .map_err(|e| Error::from(std::io::Error::other(e)))?;
     let left = timeout.saturating_sub(started.elapsed());
     rusticdoc_core::process::run_limited(
         "pdftoppm",

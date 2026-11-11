@@ -204,9 +204,9 @@ where
                 size: out.bytes.len() as u64,
                 sha256: hex::encode(Sha256::digest(&out.bytes)),
             };
-            match store.put_job_result(&scope, &record.id, out.bytes).await {
+            match keep_result(&state, &store, &scope, &record.id, out.bytes).await {
                 Ok(()) => Ok(result),
-                Err(e) => Err(ApiError::from(e)),
+                Err(e) => Err(e),
             }
         }
         Err(e) => Err(e),
@@ -235,6 +235,34 @@ where
         Err(e) => tracing::error!(job = %record.id, error = %e, "could not record how a job ended"),
     }
     drop(permit);
+}
+
+/// Stores a job's result, unless the caller's results already fill what one
+/// scope may hold: they stay for `RUSTICDOC_JOB_TTL`, in the store every
+/// caller's templates are in. Replicas storing at the same moment can go past
+/// the limit by what is in flight, as with templates.
+async fn keep_result(
+    state: &AppState,
+    store: &Store,
+    scope: &str,
+    id: &str,
+    bytes: bytes::Bytes,
+) -> Result<(), ApiError> {
+    let held = store.job_usage(scope).await?;
+    let limit = state.config.max_job_storage;
+    if held.saturating_add(bytes.len() as u64) > limit {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "quota_exceeded",
+            format!(
+                "this caller's background jobs hold {held} bytes and this result is {} more; the limit is {limit}. Results are removed {:?} after their job ends",
+                bytes.len(),
+                state.config.job_ttl,
+            ),
+        ));
+    }
+    store.put_job_result(scope, id, bytes).await?;
+    Ok(())
 }
 
 fn chrono_now() -> chrono::DateTime<chrono::Utc> {
@@ -290,6 +318,11 @@ pub async fn current(
         .ok_or_else(gone)
 }
 
+/// How long the marker of a deleted alias is kept once nothing else is under
+/// its name: far longer than a record written before the deletion could take
+/// to arrive.
+const ALIAS_MARKER_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// Removes expired jobs now and then, for as long as the service runs. Every
 /// replica does it; they share nothing but the store, and deleting twice is
 /// harmless.
@@ -307,6 +340,11 @@ pub fn spawn_cleanup(state: AppState) {
                 Ok(0) => {}
                 Ok(removed) => tracing::info!(removed, "expired background jobs removed"),
                 Err(e) => tracing::warn!(error = %e, "could not remove expired background jobs"),
+            }
+            match store.sweep_alias_markers(ALIAS_MARKER_AGE).await {
+                Ok(0) => {}
+                Ok(removed) => tracing::info!(removed, "markers of deleted aliases removed"),
+                Err(e) => tracing::warn!(error = %e, "could not remove markers of deleted aliases"),
             }
         }
     });

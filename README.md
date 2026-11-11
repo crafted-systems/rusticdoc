@@ -206,6 +206,7 @@ Every setting is an environment variable, and all of them are optional:
 | `RUSTICDOC_MAX_INFLIGHT_BYTES` | `2GB` | Request bodies held in memory at once. Each request is charged what it declares, or the whole body limit if it streams. Past the budget it waits, and gets `503` with `Retry-After` at the API timeout. One caller (a credential, or an address when none are configured) holds at most half |
 | `RUSTICDOC_MAX_ASYNC_JOBS`, `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `32`, `8` | Webhook and background jobs running at once, in total and per caller |
 | `RUSTICDOC_JOB_TTL` | `1h` | How long a background job and its result are kept after the job ends |
+| `RUSTICDOC_MAX_JOB_STORAGE` | `5GB` | How much one scope's background-job results may hold at a time |
 | `RUSTICDOC_BATCH_TIMEOUT` | `5m` | Overall limit for `/v1/render/batch` and a multi-file `/v1/convert`, synchronous or not |
 | `RUSTICDOC_MAX_FORM_PARTS` | `1000` | File parts one form may hold. Text parts are capped at 2,000 |
 | `RUSTICDOC_LIBREOFFICE_MAX_DISK` | `512MB` | The most one conversion may write to disk. Past it the worker restarts and the request gets `400`. Allow `RUSTICDOC_WORKERS` times this in `/tmp` |

@@ -98,17 +98,46 @@ impl Default for FillLimits {
 pub fn fields(pdf: &[u8]) -> Result<Vec<FieldInfo>> {
     let doc = load(pdf)?;
     let fields = fields::collect(&doc)?;
-    Ok(fields
-        .iter()
-        .map(|field| FieldInfo {
+    let numbers: std::collections::HashMap<lopdf::ObjectId, u32> = doc
+        .get_pages()
+        .into_iter()
+        .map(|(number, id)| (id, number))
+        .collect();
+    // Fields share what they inherit, and the listing writes it out once per
+    // field, so a small file could ask for a very large answer.
+    let mut left = MAX_LISTING_BYTES;
+    let mut spend = |bytes: usize| -> Result<()> {
+        left = left.checked_sub(bytes).ok_or_else(|| {
+            Error::InvalidRequest(format!(
+                "the form's fields, values and options come to more than {} MiB when listed",
+                MAX_LISTING_BYTES >> 20
+            ))
+        })?;
+        Ok(())
+    };
+    let mut listed = Vec::with_capacity(fields.len());
+    for field in &fields {
+        spend(LISTED_ITEM + field.name.len())?;
+        for option in field.options.iter() {
+            spend(LISTED_ITEM + option.len())?;
+        }
+        let value = field.value.as_ref().and_then(|v| object_text(&doc, v));
+        spend(value.as_ref().map_or(0, String::len))?;
+        listed.push(FieldInfo {
             name: field.name.clone(),
             kind: field.kind.as_str().to_string(),
-            page: field.page(&doc),
-            value: field.value.as_ref().and_then(|v| object_text(&doc, v)),
-            options: field.options.clone(),
-        })
-        .collect())
+            page: field.page(&numbers),
+            value,
+            options: field.options.to_vec(),
+        });
+    }
+    Ok(listed)
 }
+
+/// Most a field listing may hold, counting each name, value and option.
+const MAX_LISTING_BYTES: usize = 16 << 20;
+/// What one listed string costs beyond its text.
+const LISTED_ITEM: usize = 32;
 
 /// Fills a form from data. A field named `customer.name` takes that path
 /// from the data; a field whose default value is a `{{ }}` tag is rendered

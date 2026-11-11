@@ -155,6 +155,9 @@ fn cors(config: &rusticdoc_core::Config) -> CorsLayer {
         .expose_headers([header::CONTENT_DISPOSITION, REQUEST_ID])
 }
 
+/// The shortest key that starts without a warning.
+pub const MIN_KEY_LENGTH: usize = 16;
+
 /// What an operator should hear at every start.
 pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
     let mut warnings = Vec::new();
@@ -162,6 +165,17 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
         warnings.push(
             "no authentication is configured, so anyone who can reach this service can use it; set RUSTICDOC_API_KEYS".to_string(),
         );
+    }
+    // A key's digest names its caller in the logs and in the store, so a key
+    // short enough to guess can be confirmed by anyone who reads either.
+    let short = |key: &String| key.len() < MIN_KEY_LENGTH;
+    if config.api_keys.iter().any(short)
+        || config.admin_keys.iter().any(short)
+        || config.tenant_keys.iter().any(|(_, key)| short(key))
+    {
+        warnings.push(format!(
+            "a key in RUSTICDOC_API_KEYS, RUSTICDOC_TENANT_KEYS or RUSTICDOC_ADMIN_KEYS is shorter than {MIN_KEY_LENGTH} characters and could be guessed; use long random keys"
+        ));
     }
     if !config.webhook_disabled && config.webhook_secret.is_none() {
         warnings.push(

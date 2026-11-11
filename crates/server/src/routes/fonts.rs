@@ -165,6 +165,24 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<FontInfo>
     security(("api_key" = []), ("bearer" = []), ("basic" = []))
 )]
 pub async fn reload(State(state): State<AppState>) -> ApiResult<Json<Reloaded>> {
+    // Before any of the work, which any caller may ask for: a listing of the
+    // store and a read of the font directories. The time is taken now, so
+    // requests arriving together do not all get through.
+    {
+        let mut last = state.fonts_reload.lock().await;
+        if let Some((_, at)) = last.as_ref()
+            && at.elapsed() < RELOAD_INTERVAL
+        {
+            return Err(ApiError::new(
+                axum::http::StatusCode::TOO_MANY_REQUESTS,
+                "too_many_requests",
+                "fonts were reloaded moments ago; try again in a few seconds",
+            ));
+        }
+        let known = last.take().map(|(sig, _)| sig);
+        // No signature yet reads as changed below, as a first reload is.
+        *last = Some((known.unwrap_or_default(), Instant::now()));
+    }
     // Stored fonts first, so this picks those up too on this replica.
     if state.store.is_some() {
         crate::fontsync::run_once(&state)
@@ -192,17 +210,9 @@ pub async fn reload(State(state): State<AppState>) -> ApiResult<Json<Reloaded>> 
     })?;
     let changed = {
         let mut last = state.fonts_reload.lock().await;
-        if let Some((_, at)) = last.as_ref()
-            && at.elapsed() < RELOAD_INTERVAL
-        {
-            return Err(ApiError::new(
-                axum::http::StatusCode::TOO_MANY_REQUESTS,
-                "too_many_requests",
-                "fonts were reloaded moments ago; try again in a few seconds",
-            ));
-        }
         let changed = last.as_ref().is_none_or(|(sig, _)| *sig != signature);
-        *last = Some((signature, Instant::now()));
+        let at = last.as_ref().map_or_else(Instant::now, |(_, at)| *at);
+        *last = Some((signature, at));
         changed
     };
     let list = if changed {

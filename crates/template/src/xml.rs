@@ -286,6 +286,10 @@ pub fn root_mut(nodes: &mut [Node]) -> Option<&mut Elem> {
     })
 }
 
+/// How deep elements may nest. Office documents nest a few dozen deep at
+/// most, tables inside tables included.
+pub const MAX_DEPTH: usize = 256;
+
 /// Parses a document into its top-level nodes.
 pub fn parse(src: &str) -> Result<Vec<Node>, String> {
     let mut stack: Vec<Elem> = Vec::new();
@@ -391,6 +395,13 @@ pub fn parse(src: &str) -> Result<Vec<Node>, String> {
             if self_closing {
                 push(&mut stack, &mut top, Node::Elem(elem));
             } else {
+                // Everything that reads the tree walks it by recursion, so its
+                // depth is the stack they need.
+                if stack.len() >= MAX_DEPTH {
+                    return Err(format!(
+                        "elements are nested more than {MAX_DEPTH} deep at byte {i}"
+                    ));
+                }
                 stack.push(elem);
             }
             i += j + 1;

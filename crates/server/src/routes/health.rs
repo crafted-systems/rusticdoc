@@ -43,9 +43,17 @@ pub struct Version {
 #[utoipa::path(get, path = "/health", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
 pub async fn health(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // Pool numbers and engines are for callers the service knows.
-    let open = !state.config.auth_configured() || auth::identify(&state, &headers).await.is_some();
+    // Where the store is, a bucket or a path, is for the operator.
+    let (open, admin) = if state.config.auth_configured() {
+        match auth::identify_caller(&state, &headers).await {
+            Some(caller) => (true, caller.admin),
+            None => (false, false),
+        }
+    } else {
+        (true, true)
+    };
     let mut res = if open {
-        Json(status(&state).await).into_response()
+        Json(status(&state, admin).await).into_response()
     } else {
         Json(serde_json::json!({ "status": "up" })).into_response()
     };
@@ -57,7 +65,7 @@ pub async fn health(State(state): State<AppState>, headers: HeaderMap) -> Respon
     res
 }
 
-async fn status(state: &AppState) -> Health {
+async fn status(state: &AppState, admin: bool) -> Health {
     let pool = match &state.engines.libreoffice {
         Some(lo) => lo.health().await,
         None => serde_json::Value::Null,
@@ -75,9 +83,11 @@ async fn status(state: &AppState) -> Health {
     // Only with a store.
     if let Some(store) = &state.store {
         details["store"] = serde_json::json!({
-            "location": store.description(),
             "fontsSynced": state.fonts_synced.load(Ordering::Acquire),
         });
+        if admin {
+            details["store"]["location"] = store.description().into();
+        }
     }
     Health {
         status: "up",

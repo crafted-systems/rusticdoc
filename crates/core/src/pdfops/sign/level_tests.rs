@@ -772,24 +772,24 @@ fn a_timestamp_signer_needs_the_critical_usage_and_validity() {
     let root = certificate(&pki.text("root.pem"));
     let tsa = certificate(&pki.text("tsa.pem"));
     let now = SystemTime::now();
-    assert!(super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), now, now).is_ok());
+    assert!(super::tsa::signer_path(&tsa, &[], std::slice::from_ref(&root), now, now).is_ok());
     // Outside its validity: the certificates last 30 days.
     let later = now + Duration::from_secs(60 * 86_400);
     let err =
-        super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), later, later).unwrap_err();
+        super::tsa::signer_path(&tsa, &[], std::slice::from_ref(&root), later, later).unwrap_err();
     assert!(err.contains("not valid"), "{err}");
     // Valid at the token's time is not enough: it must be valid now as well.
     let err =
-        super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&root), now, later).unwrap_err();
+        super::tsa::signer_path(&tsa, &[], std::slice::from_ref(&root), now, later).unwrap_err();
     assert!(err.contains("not valid now"), "{err}");
     // A pinned authority certificate that has expired by now is refused too.
     let err =
-        super::tsa::check_signer(&tsa, &[], std::slice::from_ref(&tsa), now, later).unwrap_err();
+        super::tsa::signer_path(&tsa, &[], std::slice::from_ref(&tsa), now, later).unwrap_err();
     assert!(err.contains("not valid now"), "{err}");
     // A signing certificate from the same root has no timestamping usage.
     let signer = certificate(&pki.text("signer.pem"));
     let err =
-        super::tsa::check_signer(&signer, &[], std::slice::from_ref(&root), now, now).unwrap_err();
+        super::tsa::signer_path(&signer, &[], std::slice::from_ref(&root), now, now).unwrap_err();
     assert!(err.contains("not for timestamping"), "{err}");
     // A timestamping usage that is not critical does not count either.
     let ca_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
@@ -806,8 +806,7 @@ fn a_timestamp_signer_needs_the_critical_usage_and_validity() {
         super::verify::extended_key_usage(&leaf),
         Some((false, _))
     ));
-    let err =
-        super::tsa::check_signer(&leaf, &[], &[certificate(&ca.pem())], now, now).unwrap_err();
+    let err = super::tsa::signer_path(&leaf, &[], &[certificate(&ca.pem())], now, now).unwrap_err();
     assert!(err.contains("critical"), "{err}");
 }
 
