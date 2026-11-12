@@ -69,3 +69,40 @@ CT2 = CT.replace('</Types>', '<Override PartName="/word/settings.xml" ContentTyp
 DR2 = f'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId8" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/><Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="{H}/docx-chunk.html" TargetMode="External"/><Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/subDocument" Target="{H}/docx-sub.docx" TargetMode="External"/></Relationships>'
 D2 = '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>MARKER</w:t></w:r></w:p><w:p><w:subDoc r:id="rId6"/></w:p><w:altChunk r:id="rId7"/><w:p><w:r><w:fldSimple w:instr="INCLUDETEXT &quot;' + H + '/docx-includetext.txt&quot;"><w:r><w:t>x</w:t></w:r></w:fldSimple></w:r></w:p></w:body></w:document>'
 z('linked.docx', {'[Content_Types].xml': CT2, '_rels/.rels': R, 'word/document.xml': D2, 'word/_rels/document.xml.rels': DR2, 'word/settings.xml': SETTINGS, 'word/_rels/settings.xml.rels': SETRELS})
+
+# A template whose data carries a picture that names things outside: the image
+# filter draws an SVG, and must fetch and read nothing while it does.
+PICTURE = f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200"><style>@import url("{H}/data-svg-import.css"); rect {{ fill: url("{H}/data-svg-fill.svg#a") }}</style><rect width="10" height="10"/><image href="{H}/data-svg-image.png" width="50" height="50"/><image xlink:href="file:///etc/passwd" x="60" width="50" height="50"/><use xlink:href="{H}/data-svg-use.svg#a"/><text x="0" y="150">MARKER</text></svg>'
+D3 = '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>MARKER</w:t></w:r></w:p><w:p><w:r><w:t>{{ picture | image }}</w:t></w:r></w:p></w:body></w:document>'
+z('picture.docx', {'[Content_Types].xml': CT, '_rels/.rels': R, 'word/document.xml': D3})
+import base64, json
+open('picture.json', 'w').write(json.dumps({'picture': 'data:image/svg+xml;base64,' + base64.b64encode(PICTURE.encode()).decode()}))
+
+# A PDF that names things outside: streams whose bytes are in a file or at a
+# URL, and actions that open a URL or another file.
+def pdf(name, objects):
+    out = b'%PDF-1.7\n'
+    offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b'%d 0 obj\n' % number + body.encode() + b'\nendobj\n'
+    xref = len(out)
+    out += b'xref\n0 %d\n0000000000 65535 f \n' % (len(objects) + 1)
+    for offset in offsets:
+        out += b'%010d 00000 n \n' % offset
+    out += b'trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n' % (len(objects) + 1, xref)
+    open(name, 'wb').write(out)
+DRAW = 'BT /F1 12 Tf 72 720 Td (MARKER) Tj ET q 50 0 0 50 72 600 cm /Im1 Do Q q 50 0 0 50 200 600 cm /Im2 Do Q'
+IMAGE = '/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 0'
+pdf('ext.pdf', [
+    f'<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /URI /URI ({H}/pdf-open) >> >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents [4 0 R 8 0 R] /Resources << /Font << /F1 7 0 R >> /XObject << /Im1 5 0 R /Im2 6 0 R >> >> /Annots [9 0 R 10 0 R] >>',
+    f'<< /Length {len(DRAW)} >>\nstream\n{DRAW}\nendstream',
+    f'<< {IMAGE} /F << /FS /URL /F ({H}/pdf-image.png) >> >>\nstream\n\nendstream',
+    f'<< {IMAGE} /F (/etc/passwd) >>\nstream\n\nendstream',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Length 0 /F (/etc/passwd) >>\nstream\n\nendstream',
+    f'<< /Type /Annot /Subtype /Link /Rect [72 700 200 730] /A << /S /URI /URI ({H}/pdf-link) >> >>',
+    f'<< /Type /Annot /Subtype /Link /Rect [72 660 200 690] /A << /S /GoToR /F << /FS /URL /F ({H}/pdf-gotor.pdf) >> /D [0 /Fit] >> >>',
+])

@@ -44,7 +44,7 @@ make isolation IMAGE=rusticdoc:local
 make disk IMAGE=rusticdoc:local
 ```
 
-- `make outbound` sends crafted documents through the conversion routes: remote images, linked sections, `WEBSERVICE()`, external cell links and `file://` references, in DOCX, PPTX, XLSX, ODP, the flat ODF formats, HTML, XHTML, SVG and RTF. Before that it checks that the container can reach its listener, because otherwise the run would prove nothing. It fails if any document makes a request or leaks a local file.
+- `make outbound` sends crafted documents through the conversion routes: remote images, linked sections, `WEBSERVICE()`, external cell links and `file://` references, in DOCX, PPTX, XLSX, ODP, the flat ODF formats, HTML, XHTML, SVG and RTF. It sends them through both HTML engines, sends them again as templates with and without `keep`, sends a picture that names outside files as a template's data, and sends a PDF that names files and URLs through the PDF routes. Before that it checks that the container can reach its listener and that it can find a leaked line inside a PDF, because otherwise the run would prove nothing. It fails if any document makes a request or leaks a local file.
 - `make disk` converts documents that make LibreOffice write without stopping, and checks that the disk limit stops them, frees the space and leaves other conversions running.
 - `make isolation` checks that the environments of `soffice`, its bridge and a render worker hold no secrets, and that the service's own `/proc/<pid>/environ`, `mem` and `maps` are closed to that user.
 
