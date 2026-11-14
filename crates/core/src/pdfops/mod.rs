@@ -688,8 +688,9 @@ impl MultiEngine {
         lists: &BTreeMap<String, Vec<String>>,
     ) -> Self {
         let lopdf: Arc<dyn PdfEngine> = Arc::new(LopdfEngine::default());
-        let qpdf: Option<Arc<dyn PdfEngine>> = qpdf_bin
-            .map(|bin| Arc::new(QpdfEngine::new(bin).with_memory(engine_memory)) as Arc<dyn PdfEngine>);
+        let qpdf: Option<Arc<dyn PdfEngine>> = qpdf_bin.map(|bin| {
+            Arc::new(QpdfEngine::new(bin).with_memory(engine_memory)) as Arc<dyn PdfEngine>
+        });
         let pdfcpu: Option<Arc<dyn PdfEngine>> = pdfcpu_bin.map(|bin| {
             Arc::new(PdfcpuEngine::new(bin).with_memory(engine_memory)) as Arc<dyn PdfEngine>
         });

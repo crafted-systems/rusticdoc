@@ -1007,7 +1007,10 @@ mod tests {
             256 * 1024 * 1024
         );
         // An unparseable size leaves the default in place.
-        assert_eq!(from(&[("RUSTICDOC_ENGINE_MEMORY", "lots")]).engine_memory, 0);
+        assert_eq!(
+            from(&[("RUSTICDOC_ENGINE_MEMORY", "lots")]).engine_memory,
+            0
+        );
     }
 
     #[test]
