@@ -109,6 +109,12 @@ pub struct Config {
     pub render_worker_bin: Option<PathBuf>,
     /// Address space of one render worker, in bytes.
     pub render_memory: u64,
+    /// Memory cap for one external engine process (qpdf, pdfcpu, LibreOffice),
+    /// in bytes. Native engines get a Linux `RLIMIT_AS`; pdfcpu, being Go, gets
+    /// a `GOMEMLIMIT` soft cap instead. 0 leaves them uncapped, bounded only by
+    /// the container's own memory limit. Off by default, because the cap can
+    /// make a genuinely large conversion fail.
+    pub engine_memory: u64,
     /// Render workers that may run at once.
     pub render_workers: usize,
     /// How long a client may take to send its request headers.
@@ -303,6 +309,7 @@ impl Default for Config {
             render_mode_set: false,
             render_worker_bin: None,
             render_memory: 1024 * 1024 * 1024,
+            engine_memory: 0,
             render_workers: 4,
             header_timeout: Duration::from_secs(10),
             max_connections: 1024,
@@ -625,6 +632,9 @@ impl Config {
         }
         if let Some(v) = get("RENDER_MEMORY").and_then(|v| parse_bytes(&v)) {
             c.render_memory = v as u64;
+        }
+        if let Some(v) = get("ENGINE_MEMORY").and_then(|v| parse_bytes(&v)) {
+            c.engine_memory = v as u64;
         }
         if let Some(v) = get("RENDER_WORKERS").and_then(|v| v.parse().ok()) {
             c.render_workers = v;
@@ -987,6 +997,17 @@ mod tests {
         assert_eq!(parse_duration("2m"), Some(Duration::from_secs(120)));
         assert_eq!(parse_duration("1.5"), Some(Duration::from_secs_f64(1.5)));
         assert_eq!(parse_duration("soon"), None);
+    }
+
+    #[test]
+    fn engine_memory_is_off_by_default_and_parses_sizes() {
+        assert_eq!(from(&[]).engine_memory, 0);
+        assert_eq!(
+            from(&[("RUSTICDOC_ENGINE_MEMORY", "256MB")]).engine_memory,
+            256 * 1024 * 1024
+        );
+        // An unparseable size leaves the default in place.
+        assert_eq!(from(&[("RUSTICDOC_ENGINE_MEMORY", "lots")]).engine_memory, 0);
     }
 
     #[test]

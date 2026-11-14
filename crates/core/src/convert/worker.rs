@@ -20,6 +20,8 @@ pub(super) struct Launch {
     pub soffice: PathBuf,
     /// An initialised profile to copy, or `None` to start from an empty one.
     pub seed_profile: Option<PathBuf>,
+    /// Address space the worker is capped to, in bytes; 0 leaves it uncapped.
+    pub memory: u64,
     /// Directories of fonts added to the worker's fontconfig: the mounted one,
     /// and the copy of the stored fonts.
     pub font_dirs: Vec<PathBuf>,
@@ -166,6 +168,30 @@ impl Worker {
             .stderr(Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
+        // Cap the worker's address space. soffice, launched by the bridge,
+        // inherits it. Linux enforces RLIMIT_AS; macOS accepts but ignores it.
+        #[cfg(target_os = "linux")]
+        if launch.memory > 0 {
+            let memory = launch.memory;
+            // SAFETY: the closure only calls setrlimit, which is
+            // async-signal-safe, and allocates nothing.
+            unsafe {
+                cmd.pre_exec(move || {
+                    let limit = libc::rlimit {
+                        rlim_cur: memory as _,
+                        rlim_max: memory as _,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_AS, &limit) == 0 {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::last_os_error())
+                    }
+                });
+            }
+        }
+        // macOS does not enforce the cap; keep the field read so it is not dead.
+        #[cfg(not(target_os = "linux"))]
+        let _ = launch.memory;
         let mut child = cmd.spawn().map_err(|e| {
             engine(format!(
                 "cannot start the bridge {}: {e}",

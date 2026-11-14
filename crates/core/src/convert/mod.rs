@@ -120,6 +120,9 @@ struct Settings {
     start_timeout: Duration,
     /// Most one conversion may add to its worker's directory.
     max_disk: u64,
+    /// Address space of one worker (python bridge and its soffice), in bytes,
+    /// capped with `RLIMIT_AS` on Linux; 0 leaves it uncapped.
+    memory: u64,
     /// Added to every worker's fontconfig.
     font_dirs: Vec<PathBuf>,
 }
@@ -192,6 +195,7 @@ impl LibreOffice {
             max_jobs,
             start_timeout: DEFAULT_START_TIMEOUT,
             max_disk: crate::limits::DEFAULT_LIBREOFFICE_MAX_DISK,
+            memory: 0,
             font_dirs: Vec::new(),
         })
     }
@@ -234,6 +238,13 @@ impl LibreOffice {
     /// the conversion refused.
     pub fn with_max_disk(self, bytes: u64) -> Self {
         self.rebuild(|s| s.max_disk = bytes.max(1))
+    }
+
+    /// Caps each worker's address space at `bytes` (Linux `RLIMIT_AS`, applied
+    /// to the python bridge and inherited by its soffice); 0 leaves it
+    /// uncapped.
+    pub fn with_memory(self, bytes: u64) -> Self {
+        self.rebuild(|s| s.memory = bytes)
     }
 
     /// Runs `script` as the bridge instead of the embedded one and skips
@@ -570,6 +581,7 @@ impl LibreOffice {
                         script,
                         soffice: settings.bin.clone(),
                         seed_profile,
+                        memory: settings.memory,
                         font_dirs: settings.font_dirs.clone(),
                         extra_fonts: Vec::new(),
                     },
