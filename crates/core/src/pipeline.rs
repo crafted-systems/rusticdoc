@@ -35,6 +35,7 @@ impl Engines {
             libreoffice: config.libreoffice_bin.clone().map(|bin| {
                 let pool = LibreOffice::new(bin, config.workers)
                     .with_max_disk(config.libreoffice_max_disk)
+                    .with_memory(config.engine_memory)
                     .with_fonts_dir(config.fonts_dir.clone());
                 if config.store.is_some() {
                     pool.with_fonts_dir(config.font_cache_dir.clone())
@@ -42,12 +43,17 @@ impl Engines {
                     pool
                 }
             }),
-            pdf: MultiEngine::standard(config.qpdf_bin.clone(), config.pdfcpu_bin.clone())
-                .with_lists(
-                    config.qpdf_bin.clone(),
-                    config.pdfcpu_bin.clone(),
-                    &config.engine_orders,
-                ),
+            pdf: MultiEngine::standard(
+                config.qpdf_bin.clone(),
+                config.pdfcpu_bin.clone(),
+                config.engine_memory,
+            )
+            .with_lists(
+                config.qpdf_bin.clone(),
+                config.pdfcpu_bin.clone(),
+                config.engine_memory,
+                &config.engine_orders,
+            ),
             office_routes_disabled: config.convert_disabled,
             // `Config::check` has refused a key that does not load before a
             // service starts; a library or CLI caller that skipped it gets no

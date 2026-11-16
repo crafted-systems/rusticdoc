@@ -29,11 +29,24 @@ const ENGINE: &str = "pdfcpu";
 #[derive(Debug, Clone)]
 pub struct PdfcpuEngine {
     bin: PathBuf,
+    /// Soft heap cap for the Go child, in bytes; `None` leaves it uncapped.
+    memory: Option<u64>,
 }
 
 impl PdfcpuEngine {
     pub fn new(bin: PathBuf) -> Self {
-        Self { bin }
+        Self { bin, memory: None }
+    }
+
+    /// Caps the child's memory at `bytes`; 0 leaves it uncapped. pdfcpu is a
+    /// Go binary, whose runtime reserves a large virtual address space at
+    /// startup, so a hard `RLIMIT_AS` would abort it; its heap is bounded with
+    /// `GOMEMLIMIT` instead. That is a soft limit the runtime keeps to by
+    /// collecting more often, backed by the request timeout and the
+    /// container's own memory limit.
+    pub fn with_memory(mut self, bytes: u64) -> Self {
+        self.memory = (bytes > 0).then_some(bytes);
+        self
     }
 
     pub fn bin(&self) -> &Path {
@@ -43,7 +56,12 @@ impl PdfcpuEngine {
     async fn run(&self, dir: &Path, args: &[String], timeout: Duration) -> Result<()> {
         let mut full: Vec<String> = vec!["-c".into(), "disable".into()];
         full.extend_from_slice(args);
-        process::run(ENGINE, &self.bin, &full, dir, &[], timeout).await
+        // GOMEMLIMIT takes a byte count; a bare number is unambiguous bytes.
+        let env: Vec<(&str, String)> = match self.memory {
+            Some(bytes) => vec![("GOMEMLIMIT", bytes.to_string())],
+            None => Vec::new(),
+        };
+        process::run(ENGINE, &self.bin, &full, dir, &env, timeout).await
     }
 
     /// Writes the input, runs `args` with `in.pdf out.pdf` appended, and
@@ -474,6 +492,14 @@ impl PdfEngine for PdfcpuEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_cap_is_opt_in() {
+        let engine = PdfcpuEngine::new("pdfcpu".into());
+        assert_eq!(engine.memory, None, "uncapped by default");
+        assert_eq!(engine.clone().with_memory(0).memory, None, "0 means no cap");
+        assert_eq!(engine.with_memory(512).memory, Some(512));
+    }
 
     #[test]
     fn descriptions_follow_pdfcpu_syntax() {

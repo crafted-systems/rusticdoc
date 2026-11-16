@@ -104,6 +104,7 @@ See [sizing](/docs/operate/sizing/) for how these add up.
 | `RUSTICDOC_WORKERS` | `2` | LibreOffice conversions running at the same time |
 | `RUSTICDOC_LIBREOFFICE_MAX_JOBS` | `10` | Jobs a LibreOffice worker does before it restarts |
 | `RUSTICDOC_LIBREOFFICE_MAX_DISK` | `512MB` | The most one conversion can write to disk. If it writes more, the worker restarts and the request gets a `400`. Allow `RUSTICDOC_WORKERS` times this in `/tmp` |
+| `RUSTICDOC_ENGINE_MEMORY` | `0` (off) | Memory cap for one external engine process (qpdf, pdfcpu, LibreOffice). qpdf and LibreOffice get a Linux `RLIMIT_AS`; pdfcpu, being Go, gets a `GOMEMLIMIT` soft cap. `0` leaves them bounded only by the container's own memory limit. A crafted file is contained to this instead of contending for the whole container's memory, but a genuinely large conversion can fail at the cap |
 | `RUSTICDOC_LIBREOFFICE_BIN` | The first of `/usr/lib/libreoffice/program/soffice.bin`, `/usr/bin/soffice`, `/Applications/LibreOffice.app/Contents/MacOS/soffice` | Path to LibreOffice. `none` disables it |
 | `RUSTICDOC_PYTHON` | `python3` | The interpreter that runs the LibreOffice bridge |
 | `RUSTICDOC_QPDF_BIN` | The first of `/usr/bin/qpdf`, `/opt/homebrew/bin/qpdf`, `/usr/local/bin/qpdf` | Path to qpdf. `none` disables it |

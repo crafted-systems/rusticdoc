@@ -684,13 +684,16 @@ impl MultiEngine {
         mut self,
         qpdf_bin: Option<PathBuf>,
         pdfcpu_bin: Option<PathBuf>,
+        engine_memory: u64,
         lists: &BTreeMap<String, Vec<String>>,
     ) -> Self {
         let lopdf: Arc<dyn PdfEngine> = Arc::new(LopdfEngine::default());
-        let qpdf: Option<Arc<dyn PdfEngine>> =
-            qpdf_bin.map(|bin| Arc::new(QpdfEngine::new(bin)) as Arc<dyn PdfEngine>);
-        let pdfcpu: Option<Arc<dyn PdfEngine>> =
-            pdfcpu_bin.map(|bin| Arc::new(PdfcpuEngine::new(bin)) as Arc<dyn PdfEngine>);
+        let qpdf: Option<Arc<dyn PdfEngine>> = qpdf_bin.map(|bin| {
+            Arc::new(QpdfEngine::new(bin).with_memory(engine_memory)) as Arc<dyn PdfEngine>
+        });
+        let pdfcpu: Option<Arc<dyn PdfEngine>> = pdfcpu_bin.map(|bin| {
+            Arc::new(PdfcpuEngine::new(bin).with_memory(engine_memory)) as Arc<dyn PdfEngine>
+        });
         let named = |name: &str| -> Option<Arc<dyn PdfEngine>> {
             match name {
                 "lopdf" | "qpdf-metadata" => Some(lopdf.clone()),
@@ -709,14 +712,19 @@ impl MultiEngine {
     }
 
     /// The standard order: lopdf first, then qpdf and pdfcpu when their
-    /// binaries are configured.
-    pub fn standard(qpdf_bin: Option<PathBuf>, pdfcpu_bin: Option<PathBuf>) -> Self {
+    /// binaries are configured. `engine_memory` caps each child process (0 is
+    /// no cap).
+    pub fn standard(
+        qpdf_bin: Option<PathBuf>,
+        pdfcpu_bin: Option<PathBuf>,
+        engine_memory: u64,
+    ) -> Self {
         let mut engines: Vec<Arc<dyn PdfEngine>> = vec![Arc::new(LopdfEngine::default())];
         if let Some(bin) = qpdf_bin {
-            engines.push(Arc::new(QpdfEngine::new(bin)));
+            engines.push(Arc::new(QpdfEngine::new(bin).with_memory(engine_memory)));
         }
         if let Some(bin) = pdfcpu_bin {
-            engines.push(Arc::new(PdfcpuEngine::new(bin)));
+            engines.push(Arc::new(PdfcpuEngine::new(bin).with_memory(engine_memory)));
         }
         Self::new(engines)
     }

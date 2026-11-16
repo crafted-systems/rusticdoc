@@ -687,7 +687,7 @@ async fn multi_engine_falls_through_unsupported_operations() {
         none.rotate(&input, Rotation::R90, "", T).await.unwrap_err(),
         Error::EngineUnavailable(_)
     ));
-    let only_lopdf = MultiEngine::standard(None, None);
+    let only_lopdf = MultiEngine::standard(None, None, 0);
     assert_eq!(only_lopdf.names(), ["lopdf"]);
     assert!(matches!(
         only_lopdf.optimize(&input, T).await.unwrap_err(),
@@ -702,6 +702,7 @@ async fn multi_engine_falls_through_unsupported_operations() {
     let with_processes = MultiEngine::standard(
         Some("/nonexistent/qpdf".into()),
         Some("/nonexistent/pdfcpu".into()),
+        0,
     );
     assert_eq!(with_processes.names(), ["lopdf", "qpdf", "pdfcpu"]);
     // lopdf serves first; qpdf is reached for encryption and fails to start.
@@ -1099,8 +1100,8 @@ mod encrypt_order {
             "RUSTICDOC_PDF_ENGINES_ENCRYPT".to_string(),
             vec!["qpdf".to_string(), "pdfcpu".to_string()],
         )]);
-        let engines = MultiEngine::standard(Some(qpdf.clone()), Some(pdfcpu.clone()))
-            .with_lists(Some(qpdf), Some(pdfcpu), &lists)
+        let engines = MultiEngine::standard(Some(qpdf.clone()), Some(pdfcpu.clone()), 0)
+            .with_lists(Some(qpdf), Some(pdfcpu), 0, &lists)
             .falling_through();
         let doc = Document::new("a.pdf", fixtures::pages(1));
         let options = EncryptOptions {
@@ -1121,7 +1122,7 @@ mod encrypt_order {
         let dir = tempfile::tempdir().unwrap();
         let called = dir.path().join("called");
         let qpdf = script(dir.path(), "qpdf", &format!("touch {}", called.display()));
-        let engines = MultiEngine::standard(Some(qpdf), None);
+        let engines = MultiEngine::standard(Some(qpdf), None, 0);
         let doc = Document::new("a.pdf", fixtures::pages(1));
         let err = engines
             .encrypt(&doc, "a\nb", "c", Duration::from_secs(5))

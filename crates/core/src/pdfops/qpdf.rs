@@ -22,6 +22,8 @@ const ENGINE: &str = "qpdf";
 pub struct QpdfEngine {
     bin: PathBuf,
     linearize: bool,
+    /// Address-space cap for the child, in bytes; `None` leaves it uncapped.
+    memory: Option<u64>,
 }
 
 impl QpdfEngine {
@@ -29,12 +31,20 @@ impl QpdfEngine {
         Self {
             bin,
             linearize: false,
+            memory: None,
         }
     }
 
     /// Also linearize when optimising (`--linearize`).
     pub fn with_linearize(mut self, linearize: bool) -> Self {
         self.linearize = linearize;
+        self
+    }
+
+    /// Caps the child's address space at `bytes` (Linux `RLIMIT_AS`); 0 leaves
+    /// it uncapped. qpdf is native, so the cap bounds its allocation directly.
+    pub fn with_memory(mut self, bytes: u64) -> Self {
+        self.memory = (bytes > 0).then_some(bytes);
         self
     }
 
@@ -46,7 +56,7 @@ impl QpdfEngine {
     async fn run(&self, dir: &Path, args: &[String], timeout: Duration) -> Result<()> {
         let mut full = vec!["--warning-exit-0".to_string()];
         full.extend_from_slice(args);
-        process::run(ENGINE, &self.bin, &full, dir, &[], timeout).await
+        process::run_limited(ENGINE, &self.bin, &full, dir, &[], timeout, self.memory).await
     }
 
     /// One input, one output, with `flags` between.
