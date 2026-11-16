@@ -212,24 +212,23 @@ async fn a_hostile_page_is_refused_and_the_service_stays_up() {
 #[test]
 fn webhook_secret_prints_the_key_a_receiver_verifies_with() {
     let run = |args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_rusticdoc"))
+        Command::new(env!("CARGO_BIN_EXE_rusticdoc"))
             .arg("webhook-secret")
             .args(args)
             .env_clear()
             .env("RUSTICDOC_WEBHOOK_SECRET", "master")
             .output()
-            .unwrap();
-        assert!(out.status.success());
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
+            .unwrap()
     };
-    let key = rusticdoc_server::webhook::signing_key(
-        "master",
-        &rusticdoc_server::auth::key_principal("tenant-a").0,
+    let out = run(&[]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap().trim(),
+        "6d6173746572",
+        "the secret, in hex"
     );
-    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(run(&["--api-key", "tenant-a"]), hex);
-    assert_ne!(run(&["--api-key", "tenant-b"]), hex);
-    assert_eq!(run(&[]), "6d6173746572", "the master secret, in hex");
+    // The key no longer depends on the API key, so the flag is gone.
+    assert!(!run(&["--api-key", "tenant-a"]).status.success());
 }
 
 #[tokio::test]

@@ -3,7 +3,7 @@
 //   RUSTICDOC_SIGNING_KEY=<hex> PORT=8000 node verify_webhook.ts
 //
 // Node 23.6 or newer runs TypeScript directly; no dependencies. RUSTICDOC_SIGNING_KEY
-// is the hex that `rusticdoc webhook-secret` prints for the calling key, run where
+// is the hex that `rusticdoc webhook-secret` prints, run where
 // RUSTICDOC_WEBHOOK_SECRET is set. A verified result is saved in ./received.
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';

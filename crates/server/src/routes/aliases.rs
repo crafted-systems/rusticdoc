@@ -160,7 +160,7 @@ pub async fn set(
         .await
         .map_err(user_store_error)?;
     tracing::info!(
-        log_type = "audit", action = "alias.set", caller = %principal.short(),
+        log_type = "audit", action = "alias.set", caller = %principal.0,
         alias = %name, template = %id, version = meta.version, "alias set"
     );
     let root = state.config.root_path.trim_end_matches('/');
@@ -255,7 +255,7 @@ pub async fn remove(
         .await
         .map_err(user_store_error)?;
     tracing::info!(
-        log_type = "audit", action = "alias.delete", caller = %principal.short(),
+        log_type = "audit", action = "alias.delete", caller = %principal.0,
         alias = %name, "alias deleted"
     );
     Ok(StatusCode::NO_CONTENT)

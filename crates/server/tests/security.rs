@@ -575,8 +575,8 @@ async fn engine_failures_stay_out_of_v1_responses() {
 // ---------------------------------------------------------------- F9
 
 #[tokio::test]
-async fn each_caller_signs_with_its_own_key() {
-    use rusticdoc_server::{auth, webhook};
+async fn deliveries_are_signed_with_the_secret_whatever_the_api_key() {
+    use rusticdoc_server::webhook;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let receiver = Router::new().fallback(move |request: axum::extract::Request| {
         let tx = tx.clone();
@@ -610,8 +610,6 @@ async fn each_caller_signs_with_its_own_key() {
     let res = service(c).oneshot(request).await.unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
-    let key_a = webhook::signing_key("master", &auth::key_principal("tenant-a").0);
-    let key_b = webhook::signing_key("master", &auth::key_principal("tenant-b").0);
     {
         let (path, headers, body) = tokio::time::timeout(Duration::from_secs(10), rx.recv())
             .await
@@ -624,16 +622,12 @@ async fn each_caller_signs_with_its_own_key() {
         let signature = value(webhook::SIGNATURE);
         assert_eq!(
             signature,
-            webhook::sign(&key_a, timestamp, &event, &id, &body),
+            webhook::sign(b"master", timestamp, &event, &id, &body),
             "{path}"
         );
         assert_ne!(
             signature,
-            webhook::sign(&key_b, timestamp, &event, &id, &body)
-        );
-        assert_ne!(
-            signature,
-            webhook::sign(b"master", timestamp, &event, &id, &body)
+            webhook::sign(b"tenant-a", timestamp, &event, &id, &body)
         );
     }
 }

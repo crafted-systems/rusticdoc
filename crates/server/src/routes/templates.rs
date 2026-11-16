@@ -292,7 +292,7 @@ pub async fn upload(
     }
     let meta = store.put_template(scope, &doc).await?;
     tracing::info!(
-        log_type = "audit", action = "template.upload", caller = %principal.short(),
+        log_type = "audit", action = "template.upload", caller = %principal.0,
         template = %meta.id, size = meta.size, "template stored"
     );
     let root = state.config.root_path.trim_end_matches('/');
@@ -410,7 +410,7 @@ pub async fn remove(
         .await
         .map_err(user_store_error)?;
     tracing::info!(
-        log_type = "audit", action = "template.delete", caller = %principal.short(),
+        log_type = "audit", action = "template.delete", caller = %principal.0,
         template = %id, "template deleted"
     );
     Ok(StatusCode::NO_CONTENT)

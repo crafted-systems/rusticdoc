@@ -25,7 +25,7 @@ Commands:
   pdf             PDF operations: merge, split, rotate, flatten, optimize, encrypt, metadata, bookmarks, embed, watermark, stamp, sign, factur-x, forms
   validate        Check a template against sample data and list every problem
   translate       Create or update `<lang>.json` with the keys templates pass to `t`. Translations already there are kept, new keys get an empty text, and keys no template uses any more are listed, not removed
-  webhook-secret  Print the key a caller's webhook deliveries are signed with, in hex, from RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it
+  webhook-secret  Print the key webhook deliveries are signed with, in hex: the bytes of RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it
   help            Print this message or the help of the given subcommand(s)
 
 Options:
@@ -565,12 +565,11 @@ Options:
 ### rusticdoc webhook-secret
 
 ```text
-Print the key a caller's webhook deliveries are signed with, in hex, from RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it
+Print the key webhook deliveries are signed with, in hex: the bytes of RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it
 
 Usage: rusticdoc webhook-secret [OPTIONS]
 
 Options:
-      --api-key <API_KEY>  The caller's API key. Without it, the key of a service that requires no credentials
-  -v, --verbose...         Log verbosity: -v for debug, -vv for trace
-  -h, --help               Print help
+  -v, --verbose...  Log verbosity: -v for debug, -vv for trace
+  -h, --help        Print help
 ```

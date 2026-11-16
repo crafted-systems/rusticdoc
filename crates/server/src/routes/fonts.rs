@@ -311,7 +311,7 @@ pub async fn upload(
     }
     for meta in &stored {
         tracing::info!(
-            log_type = "audit", action = "font.upload", caller = %principal.short(),
+            log_type = "audit", action = "font.upload", caller = %principal.0,
             font = %meta.id, file = %meta.file, "font stored"
         );
     }
@@ -351,7 +351,7 @@ pub async fn remove(
     let store = store_of(&state)?;
     store.delete_font(&id).await.map_err(user_store_error)?;
     tracing::info!(
-        log_type = "audit", action = "font.delete", caller = %principal.short(),
+        log_type = "audit", action = "font.delete", caller = %principal.0,
         font = %id, "font deleted"
     );
     crate::fontsync::run_once(&state).await?;

@@ -317,7 +317,7 @@ grep -qi "^x-page-count: 1" headers.txt
 
 ## Scope
 
-Templates and aliases are one set for the whole store. Every service on the store reads and deletes the same ones, whatever its [API key](/docs/guides/authentication/), and they stay when you replace the key. Background jobs belong to the key that started them.
+Templates and aliases are one set for the whole store. Every service on the store reads and deletes the same ones, whatever its [API key](/docs/guides/authentication/), and they stay when you replace the key. [Background jobs](/docs/guides/background-jobs/#who-sees-a-job) are one set for the store too.
 
 ### Templates stored by an earlier version
 
@@ -340,7 +340,7 @@ aws s3 mv --recursive s3://bucket/prefix/templates/key-<digest>/ s3://bucket/pre
 aws s3 mv --recursive s3://bucket/prefix/aliases/key-<digest>/ s3://bucket/prefix/aliases/shared/
 ```
 
-A store that never set an alias has no `aliases/` to move. Templates keep their ids, and aliases keep their names and versions.
+A store that never set an alias has no `aliases/` to move. Templates keep their ids, and aliases keep their names and versions. Background jobs under `jobs/<scope>/` aren't worth moving: the service removes them once they expire.
 
 If the store has more than one scope, move what's inside each into `shared`. Template ids never collide. An alias that two scopes both named would end up with the versions of both, so move it from one of them only.
 

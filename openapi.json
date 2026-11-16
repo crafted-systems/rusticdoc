@@ -715,7 +715,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such job, or it expired",
+            "description": "There is no such job, or it expired",
             "content": {
               "application/json": {
                 "schema": {
@@ -786,7 +786,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such job, or it expired",
+            "description": "There is no such job, or it expired",
             "content": {
               "application/json": {
                 "schema": {
@@ -1903,7 +1903,7 @@
           "render"
         ],
         "summary": "Render a template",
-        "description": "Fills a template and runs the steps.\n\nSend a multipart form, or JSON with a `templateId` (see `RenderJson`).\n\nAdd `Prefer: respond-async` to get 202 at once, with the job in the body and\nits address in `Location`, and fetch the result from `/v1/jobs/{id}/result`\nonce it is done. This needs `RUSTICDOC_STORE`.\n\nAdd `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its\nown key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself\nwhen the service requires no credentials; `rusticdoc webhook-secret` prints it.",
+        "description": "Fills a template and runs the steps.\n\nSend a multipart form, or JSON with a `templateId` (see `RenderJson`).\n\nAdd `Prefer: respond-async` to get 202 at once, with the job in the body and\nits address in `Location`, and fetch the result from `/v1/jobs/{id}/result`\nonce it is done. This needs `RUSTICDOC_STORE`.\n\nAdd `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, deliveries are signed:\n`X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is the secret's bytes.",
         "operationId": "render",
         "parameters": [
           {

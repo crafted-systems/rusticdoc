@@ -186,7 +186,7 @@ The service sets the bucket from `RUSTICDOC_STORE`, so `AWS_BUCKET` has no effec
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RUSTICDOC_WEBHOOK_SECRET` | None | The secret that callers' signing keys are derived from. If it's unset, deliveries aren't signed and the service warns at startup |
+| `RUSTICDOC_WEBHOOK_SECRET` | None | The secret that deliveries are signed with. If it's unset, deliveries aren't signed and the service warns at startup |
 | `RUSTICDOC_WEBHOOK_ATTEMPTS` | `3` | Attempts per delivery, including the first |
 | `RUSTICDOC_WEBHOOK_DISABLED` | `false` | Ignores the webhook headers on every route |
 | `RUSTICDOC_WEBHOOK_ALLOW_PRIVATE` | `false` | Allows webhooks to private and loopback addresses |

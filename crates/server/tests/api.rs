@@ -1864,15 +1864,12 @@ async fn fonts_are_listed_behind_auth_and_reload_without_engines() {
 }
 
 #[tokio::test]
-async fn template_reuse_is_scoped_to_the_caller() {
-    // A service has one key, so the other caller is a service of its own. They
-    // share the process, and with it the templates kept for reuse.
-    let service = |key: &str| {
-        let mut c = config();
-        c.api_key = Some(key.into());
-        app(AppState::new(c))
-    };
-    let (router, other) = (service("tenant-a"), service("tenant-b"));
+async fn a_template_sent_with_the_key_is_reused_by_hash_with_the_key_only() {
+    // The templates kept for reuse are the process's. What a request with the
+    // key sent is kept apart from what a service with no credentials is sent.
+    let mut c = config();
+    c.api_key = Some("tenant-a".into());
+    let (router, open) = (app(AppState::new(c)), app(AppState::new(config())));
     let body = format!("Scoped {{{{ who }}}} {:?}", std::thread::current().id());
     let hash = rusticdoc_core::template::template_hash(body.as_bytes());
 
@@ -1904,17 +1901,15 @@ async fn template_reuse_is_scoped_to_the_caller() {
         StatusCode::OK
     );
 
-    let mut req = post_form(
+    let req = post_form(
         "/v1/render",
         &[
             ("templateHash", None, &hash),
             ("data", None, r#"{"who":"b"}"#),
         ],
     );
-    req.headers_mut()
-        .insert("x-api-key", "tenant-b".parse().unwrap());
     assert_eq!(
-        other.oneshot(req).await.unwrap().status(),
+        open.oneshot(req).await.unwrap().status(),
         StatusCode::NOT_FOUND
     );
 }

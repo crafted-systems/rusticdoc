@@ -134,8 +134,10 @@ async fn the_access_log_names_the_peer_and_the_caller() {
         logged.contains(r#""remote_addr":"203.0.113.9:4242""#),
         "{logged}"
     );
-    assert!(logged.contains(r#""caller":"key:"#), "{logged}");
+    assert!(logged.contains(r#""caller":"key""#), "{logged}");
     assert!(!logged.contains(r#""secret""#), "{logged}");
+    // Nor a digest of it: the start of the SHA-256 of "secret".
+    assert!(!logged.contains("2bb80d537b1d"), "{logged}");
 }
 
 #[tokio::test]

@@ -116,19 +116,12 @@ The signature is `v1=` followed by the hex HMAC-SHA256 of this string, over the 
 
 ### The signing key
 
-The signing key is derived from the secret and the API key, so a receiver needs the new one when you replace the API key.
+The signing key is the bytes of `RUSTICDOC_WEBHOOK_SECRET`. It doesn't depend on the API key, so a receiver keeps its key when you replace the API key.
 
-| Service | Principal | Key |
-|---|---|---|
-| With the API key | `key:<hex SHA-256 of the API key>` | `HMAC-SHA256(secret, principal)` |
-| No key | `public` | The secret's bytes |
-
-Don't derive the key by hand. Run the command with the service's secret set, and give the receiver the hex it prints:
+The receivers below read the key as hex. Run the command with the service's secret set, and give the receiver what it prints:
 
 ```bash
 # In a container with RUSTICDOC_WEBHOOK_SECRET set
-rusticdoc webhook-secret --api-key "$KEY"
-# With no key configured on the service
 rusticdoc webhook-secret
 ```
 
@@ -140,7 +133,7 @@ This needs no dependencies and runs with Node 26. Read the raw body, because ver
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-// The hex that `rusticdoc webhook-secret` printed for this caller.
+// The hex that `rusticdoc webhook-secret` printed.
 const key = Buffer.from(process.env.RUSTICDOC_SIGNING_KEY, 'hex');
 const MAX_AGE_SECONDS = 300;
 
@@ -194,7 +187,7 @@ import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# The hex that `rusticdoc webhook-secret` printed for this caller.
+# The hex that `rusticdoc webhook-secret` printed.
 KEY = bytes.fromhex(os.environ["RUSTICDOC_SIGNING_KEY"])
 MAX_AGE_SECONDS = 300
 
@@ -233,7 +226,7 @@ ThreadingHTTPServer(("0.0.0.0", port), Receiver).serve_forever()
 
 ### Try them
 
-Both receivers are tested against real deliveries, signed for an API-key caller and a service with no credentials, for both `render.completed` and `render.failed`. They accept those, and they reject a changed body, a changed event or request id, a stale timestamp and another key. To try it yourself:
+Both receivers are tested against real deliveries, for both `render.completed` and `render.failed`. They accept those, and they reject a changed body, a changed event or request id, a stale timestamp and another key. To try it yourself:
 
 ```bash
 docker run -d --name rd-webhooks -p 127.0.0.1:9028:9027 \
@@ -243,7 +236,7 @@ docker run -d --name rd-webhooks -p 127.0.0.1:9028:9027 \
   ghcr.io/crafted-systems/rusticdoc:0.1.4
 
 export RUSTICDOC_SIGNING_KEY=$(docker exec rd-webhooks \
-  rusticdoc webhook-secret --api-key my-key)
+  rusticdoc webhook-secret)
 PORT=8000 node receiver.mjs &
 
 curl -H "X-Api-Key: my-key" \

@@ -2,17 +2,16 @@
 //! request with `Prefer: respond-async`, get 202 and a `Location`, and ask there
 //! until the job is done or failed.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
 use rusticdoc_core::store::JobStatus;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, ErrorBody};
-use crate::jobs::{current, scope_of};
+use crate::jobs::{SCOPE, current};
 use crate::routes::form::disposition;
 use crate::routes::templates::{store_of, user_store_error};
 use crate::state::AppState;
@@ -70,19 +69,15 @@ pub struct JobSchema {
     params(("id" = String, Path, description = "The job's id, from the 202's body or Location")),
     responses(
         (status = 200, description = "The job", body = JobSchema),
-        (status = 404, description = "This caller has no such job, or it expired", body = ErrorBody),
+        (status = 404, description = "There is no such job, or it expired", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []))
 )]
-pub async fn show(
-    State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
-    Path(id): Path<String>,
-) -> ApiResult<Response> {
+pub async fn show(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Response> {
     let store = store_of(&state)?;
-    let record = current(&state, &store, &scope_of(&principal.0), &id).await?;
+    let record = current(&state, &store, &id).await?;
     let ended = record.status.ended();
     let mut res = Json(record).into_response();
     if !ended {
@@ -100,21 +95,16 @@ pub async fn show(
     params(("id" = String, Path, description = "The job's id")),
     responses(
         (status = 200, description = "The file", content_type = "application/octet-stream", body = crate::error::BinaryFile),
-        (status = 404, description = "This caller has no such job, or it expired", body = ErrorBody),
+        (status = 404, description = "There is no such job, or it expired", body = ErrorBody),
         (status = 409, description = "The job has not finished, or it failed", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
     security(("api_key" = []), ("bearer" = []))
 )]
-pub async fn result(
-    State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
-    Path(id): Path<String>,
-) -> ApiResult<Response> {
+pub async fn result(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Response> {
     let store = store_of(&state)?;
-    let scope = scope_of(&principal.0);
-    let record = current(&state, &store, &scope, &id).await?;
+    let record = current(&state, &store, &id).await?;
     match record.status {
         JobStatus::Done => {}
         JobStatus::Failed => {
@@ -143,7 +133,7 @@ pub async fn result(
         }
     }
     let bytes = store
-        .job_result(&scope, &record)
+        .job_result(SCOPE, &record)
         .await
         .map_err(user_store_error)?;
     let meta = record.result.as_ref();

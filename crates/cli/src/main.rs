@@ -74,14 +74,9 @@ enum Command {
     /// Translations already there are kept, new keys get an empty text, and
     /// keys no template uses any more are listed, not removed.
     Translate(translate::TranslateArgs),
-    /// Print the key a caller's webhook deliveries are signed with, in hex, from
+    /// Print the key webhook deliveries are signed with, in hex: the bytes of
     /// RUSTICDOC_WEBHOOK_SECRET. A receiver decodes it and verifies with it.
-    WebhookSecret {
-        /// The caller's API key. Without it, the key of a service that
-        /// requires no credentials.
-        #[arg(long)]
-        api_key: Option<String>,
-    },
+    WebhookSecret,
     /// Evaluates templates for `serve`, in a process of their own.
     #[command(name = "__render-worker", hide = true)]
     RenderWorker,
@@ -309,16 +304,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
         Command::RenderWorker => unreachable!("handled in main"),
-        Command::WebhookSecret { api_key } => {
-            use rusticdoc_server::auth;
+        Command::WebhookSecret => {
             let Some(secret) = &config.webhook_secret else {
                 bail!("set RUSTICDOC_WEBHOOK_SECRET to the service's secret");
             };
-            let principal = match api_key {
-                Some(key) => auth::key_principal(&key),
-                None => auth::Principal("public".into()),
-            };
-            let key = rusticdoc_server::webhook::signing_key(secret, &principal.0);
+            let key = rusticdoc_server::webhook::signing_key(secret);
             let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
             println!("{hex}");
         }

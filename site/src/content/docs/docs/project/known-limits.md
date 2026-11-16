@@ -55,7 +55,7 @@ Read this list before you depend on rusticdoc. These are the things that don't w
 ## Stored templates
 
 - A stored template can't be changed. Store the new one and point an [alias](/docs/guides/stored-templates/) at it.
-- A service has one API key, and templates and aliases are one set per store. Replacing `RUSTICDOC_API_KEY` leaves its background jobs behind and changes its webhook signing key. See [authentication](/docs/guides/authentication/).
+- A service has one API key, and templates, aliases and background jobs are one set per store. Callers that must stay apart need a store each. See [authentication](/docs/guides/authentication/).
 - Background jobs, aliases, variables and previews need a store. Without `RUSTICDOC_STORE` they return `501`.
 - Replicas storing at the same moment can go past the store's limits by whatever is in flight.
 

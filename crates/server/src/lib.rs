@@ -165,8 +165,7 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
             "no authentication is configured, so anyone who can reach this service can use it; set RUSTICDOC_API_KEY".to_string(),
         );
     }
-    // A key's digest names its caller in the logs and in the store, so a key
-    // short enough to guess can be confirmed by anyone who reads either.
+    // A key short enough to guess is one a caller can find by trying.
     if config
         .api_key
         .as_ref()

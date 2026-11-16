@@ -17,10 +17,11 @@ One API key is the only credential, and it does everything. The service refuses 
 
 - `RUSTICDOC_API_KEY` holds the key, in place of `RUSTICDOC_API_KEYS`. Admin keys, tenant keys, basic authentication and OpenID Connect are removed. See [authentication](/docs/guides/authentication/).
 - The key uploads and deletes fonts, and `/health` shows it where the store is.
-- Templates and aliases are one set for the whole store, and `RUSTICDOC_STORE_SCOPE` is removed. The service doesn't read the ones an earlier version stored until you [move them](/docs/guides/stored-templates/#templates-stored-by-an-earlier-version).
+- Templates, aliases and background jobs are one set for the whole store, and `RUSTICDOC_STORE_SCOPE` is removed. The service doesn't read the templates and aliases an earlier version stored until you [move them](/docs/guides/stored-templates/#templates-stored-by-an-earlier-version). A background job started before the upgrade can't be fetched after it.
 - `RUSTICDOC_MAX_ASYNC_JOBS` is the one limit on webhook and background jobs, and its default is `8`, not `32`. `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` is removed.
 - The key signs with every signing key. `RUSTICDOC_SIGNING_ALLOW`, `RUSTICDOC_SIGNING_ALLOW_<NAME>` and the `signing_key_forbidden` error are removed.
-- A caller that used a tenant key, a password or a token can't fetch the background jobs it started, and its webhook receiver needs the [signing key](/docs/guides/webhooks/#the-signing-key) of the API key.
+- Webhook deliveries are signed with the bytes of `RUSTICDOC_WEBHOOK_SECRET`, whatever the API key. The receiver of a service that has a key needs the [signing key](/docs/guides/webhooks/#the-signing-key) that `rusticdoc webhook-secret` prints now, and the command's `--api-key` option is removed.
+- Nothing derived from the API key is logged or stored. The log's `caller` is `key` for a request with the key, and background jobs are stored under `jobs/shared/`.
 
 It also adds this:
 

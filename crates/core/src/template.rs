@@ -294,8 +294,8 @@ fn recall_cache() -> &'static Mutex<Cache<Document>> {
 }
 
 /// Keeps a template so a later request from the same `scope` can send only
-/// its hash. A scope is the caller's identity, so one tenant cannot recall
-/// another's template by learning its hash.
+/// its hash. A scope is `key` or `public`, so a request with no credentials
+/// cannot recall what one with the key sent.
 pub fn remember(scope: &str, doc: &Document) {
     if doc.bytes.len() > RECALL_MAX_BYTES {
         return;

@@ -16,33 +16,22 @@ use subtle::ConstantTimeEq;
 use crate::error::ApiError;
 use crate::state::AppState;
 
-/// Who a request is, for scoping what it may reuse and for deriving its webhook
-/// signing key: a digest of the key, never the key itself. `public` when the
-/// service requires no credentials.
+/// Who a request is, for the logs and for what it may reuse: `key` when it
+/// presented the API key, `public` when the service requires none. Nothing is
+/// derived from the key, so no trace of it reaches the logs or the store.
 #[derive(Debug, Clone)]
 pub struct Principal(pub String);
 
 impl Principal {
-    /// What the logs say about this caller: its scheme and the start of its
-    /// digest.
-    pub fn short(&self) -> String {
-        match self.0.split_once(':') {
-            Some((scheme, digest)) => format!("{scheme}:{}", &digest[..digest.len().min(12)]),
-            None => self.0.clone(),
-        }
+    /// A request that presented the API key.
+    pub fn key() -> Self {
+        Self("key".into())
     }
-}
 
-fn digest(kind: &str, secret: &str) -> Principal {
-    Principal(format!(
-        "{kind}:{}",
-        hex::encode(Sha256::digest(secret.as_bytes()))
-    ))
-}
-
-/// The principal of an API key, as webhook signing keys are derived from it.
-pub fn key_principal(key: &str) -> Principal {
-    digest("key", key)
+    /// A request to a service that requires no credentials.
+    pub fn public() -> Self {
+        Self("public".into())
+    }
 }
 
 /// The key a request presents, as a bearer token or in `X-Api-Key`.
@@ -62,7 +51,7 @@ fn presented_key(headers: &HeaderMap) -> Option<&str> {
 pub fn identify(state: &AppState, headers: &HeaderMap) -> Option<Principal> {
     let key = state.config.api_key.as_deref()?;
     let presented = presented_key(headers)?;
-    is_the_key(key, presented).then(|| key_principal(presented))
+    is_the_key(key, presented).then(Principal::key)
 }
 
 /// Who a request said it was, for the log: where the key came from and a digest
@@ -95,11 +84,11 @@ pub async fn require(
     next: Next,
 ) -> Response {
     if !state.config.auth_configured() {
-        req.extensions_mut().insert(Principal("public".into()));
+        req.extensions_mut().insert(Principal::public());
         return next.run(req).await;
     }
     if let Some(principal) = identify(&state, req.headers()) {
-        let caller = LoggedCaller(principal.short());
+        let caller = LoggedCaller(principal.0.clone());
         req.extensions_mut().insert(principal);
         let mut res = next.run(req).await;
         res.extensions_mut().insert(caller);
@@ -161,13 +150,5 @@ mod tests {
         assert_eq!(tag(b"first"), tag(b"first"));
         assert_ne!(tag(b"first"), tag(b"second"));
         assert_ne!(tag(b"first"), [0; 32]);
-    }
-
-    #[test]
-    fn principals_show_only_a_prefix_of_their_digest() {
-        let short = key_principal("secret").short();
-        assert!(short.starts_with("key:"), "{short}");
-        assert_eq!(short.len(), "key:".len() + 12);
-        assert_eq!(Principal("public".into()).short(), "public");
     }
 }

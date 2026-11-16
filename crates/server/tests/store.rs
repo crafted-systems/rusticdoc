@@ -1772,19 +1772,24 @@ async fn a_background_job_answers_202_and_any_replica_serves_its_result() {
     );
     assert_eq!(bytes(res).await, b"Hello Ada");
 
-    // Another caller cannot see it, whatever it knows.
+    // Jobs are one set for the store: a service on it with another key reads
+    // the same job, and a request with no key reads nothing.
     let bob = Some("bob-key");
     assert_eq!(
         status(&bobs.router, call("GET", &location, bob)).await,
-        StatusCode::NOT_FOUND
+        StatusCode::OK
     );
+    let res = bobs
+        .router
+        .clone()
+        .oneshot(call("GET", &format!("{location}/result"), bob))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(bytes(res).await, b"Hello Ada");
     assert_eq!(
-        status(
-            &bobs.router,
-            call("GET", &format!("{location}/result"), bob)
-        )
-        .await,
-        StatusCode::NOT_FOUND
+        status(&bobs.router, call("GET", &location, None)).await,
+        StatusCode::UNAUTHORIZED
     );
     for bad in ["not-an-id", "..", "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"] {
         assert_eq!(
@@ -1841,14 +1846,14 @@ async fn a_failed_job_keeps_the_error_its_request_would_have_had() {
 async fn a_job_that_has_not_ended_says_so_and_a_lost_one_fails() {
     let pair = two_replicas(|_| {});
     let store = pair.state_a.store.clone().unwrap();
-    let scope = rusticdoc_core::store::scope_key("public");
+    let scope = rusticdoc_core::store::SHARED_SCOPE;
     let waiting = rusticdoc_core::store::new_job_id();
     let record = rusticdoc_core::store::JobRecord::queued(
         waiting.clone(),
         "-".into(),
         Duration::from_secs(60),
     );
-    store.put_job(&scope, &record).await.unwrap();
+    store.put_job(scope, &record).await.unwrap();
     let res = pair
         .b
         .clone()
@@ -1870,7 +1875,7 @@ async fn a_job_that_has_not_ended_says_so_and_a_lost_one_fails() {
     // A job past its time never ended: the replica running it went away.
     let lost = rusticdoc_core::store::new_job_id();
     let record = rusticdoc_core::store::JobRecord::queued(lost.clone(), "-".into(), Duration::ZERO);
-    store.put_job(&scope, &record).await.unwrap();
+    store.put_job(scope, &record).await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
     let job = json(
         pair.b
@@ -2026,7 +2031,7 @@ async fn json_bodies_carry_the_language_fields() {
 }
 
 #[tokio::test]
-async fn one_callers_job_results_stop_at_its_limit() {
+async fn job_results_stop_at_the_limit_for_the_store() {
     let pair = two_replicas(|c| {
         c.api_key = Some("alice-key".into());
         c.max_job_storage = 6_000;
@@ -2054,13 +2059,14 @@ async fn one_callers_job_results_stop_at_its_limit() {
     };
     let first = run(&pair.a, "alice-key").await;
     assert_eq!(first["status"], "done", "{first}");
-    // The next would take her results past what one caller may hold.
+    // The next would take the results past what the store may hold.
     let second = run(&pair.a, "alice-key").await;
     assert_eq!(second["status"], "failed", "{second}");
     assert_eq!(second["error"]["error"], "quota_exceeded", "{second}");
-    // Another caller's are counted apart.
+    // A service on the store with another key counts the same results.
     let other = run(&bobs.router, "bob-key").await;
-    assert_eq!(other["status"], "done", "{other}");
+    assert_eq!(other["status"], "failed", "{other}");
+    assert_eq!(other["error"]["error"], "quota_exceeded", "{other}");
 }
 
 #[tokio::test]

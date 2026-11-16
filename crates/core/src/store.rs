@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use crate::fonts::{FontFace, ParsedFont};
 use crate::job::Document;
 
-/// Where templates and aliases go: one set for the whole store.
+/// Where templates, aliases and jobs go: one set for the whole store.
 pub const SHARED_SCOPE: &str = "shared";
 
 /// Most bytes of template content kept in memory.
@@ -177,14 +177,6 @@ impl std::fmt::Debug for Store {
             .field("description", &self.description)
             .finish()
     }
-}
-
-/// A scope as a path segment. Principals are a scheme and a digest, or `public`.
-pub fn scope_key(principal: &str) -> String {
-    principal
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
 }
 
 pub fn is_template_id(id: &str) -> bool {

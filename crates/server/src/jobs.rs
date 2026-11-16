@@ -11,8 +11,8 @@
 //! states and its result are objects in the store, each written once, so any
 //! replica can answer `GET /v1/jobs/{id}` and none has to be the one that ran it.
 //! Without a store there is nowhere every replica can see, so the request is
-//! refused rather than kept on one container. Jobs belong to the key that
-//! started them: results hold the caller's data.
+//! refused rather than kept on one container. Jobs are one set for the store,
+//! as templates are.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -95,16 +95,12 @@ pub enum Delivery {
 #[derive(Debug)]
 pub struct JobTicket {
     pub id: String,
-    /// The caller's scope in the store.
-    pub scope: String,
     pub store: Arc<Store>,
     pub permit: JobPermit,
 }
 
-/// Where a caller's jobs live in the store: always its own.
-pub fn scope_of(principal: &str) -> String {
-    store::scope_key(principal)
-}
+/// Where jobs live in the store: one set for the whole store.
+pub const SCOPE: &str = store::SHARED_SCOPE;
 
 /// True when the request prefers an answer before the work is done:
 /// `Prefer: respond-async`, among any other preferences.
@@ -117,9 +113,9 @@ pub fn prefers_async(headers: &HeaderMap) -> bool {
         .any(|p| p.trim().eq_ignore_ascii_case("respond-async"))
 }
 
-/// A place and an id for a job `caller` asked to run in the background, or why
-/// not: no store, or too many jobs running.
-pub fn ticket(state: &AppState, caller: &str) -> Result<JobTicket, ApiError> {
+/// A place and an id for a job to run in the background, or why not: no store,
+/// or too many jobs running.
+pub fn ticket(state: &AppState) -> Result<JobTicket, ApiError> {
     let Some(store) = state.store.clone() else {
         return Err(ApiError::new(
             StatusCode::NOT_IMPLEMENTED,
@@ -130,7 +126,6 @@ pub fn ticket(state: &AppState, caller: &str) -> Result<JobTicket, ApiError> {
     let permit = state.jobs.try_acquire()?;
     Ok(JobTicket {
         id: store::new_job_id(),
-        scope: scope_of(caller),
         store,
         permit,
     })
@@ -148,7 +143,7 @@ where
     F: std::future::Future<Output = Result<Output, ApiError>> + Send + 'static,
 {
     let record = JobRecord::queued(ticket.id.clone(), request_id, limit + STORE_GRACE);
-    ticket.store.put_job(&ticket.scope, &record).await?;
+    ticket.store.put_job(SCOPE, &record).await?;
     tracing::info!(job = %ticket.id, "background job queued");
     let response = accepted(&state, &record);
     let span = tracing::Span::current();
@@ -162,16 +157,11 @@ async fn run<F>(state: AppState, ticket: JobTicket, mut record: JobRecord, job: 
 where
     F: std::future::Future<Output = Result<Output, ApiError>> + Send + 'static,
 {
-    let JobTicket {
-        scope,
-        store,
-        permit,
-        ..
-    } = ticket;
+    let JobTicket { store, permit, .. } = ticket;
     let ttl = state.config.job_ttl;
     record.status = JobStatus::Running;
     record.started_at = Some(store::job_time(chrono_now()));
-    if let Err(e) = store.put_job(&scope, &record).await {
+    if let Err(e) = store.put_job(SCOPE, &record).await {
         tracing::warn!(job = %record.id, error = %e, "could not record the job as running");
     }
     let outcome = match job.await {
@@ -183,7 +173,7 @@ where
                 size: out.bytes.len() as u64,
                 sha256: hex::encode(Sha256::digest(&out.bytes)),
             };
-            match keep_result(&state, &store, &scope, &record.id, out.bytes).await {
+            match keep_result(&state, &store, &record.id, out.bytes).await {
                 Ok(()) => Ok(result),
                 Err(e) => Err(e),
             }
@@ -208,7 +198,7 @@ where
             record.ended(JobStatus::Failed, ttl);
         }
     }
-    match store.put_job(&scope, &record).await {
+    match store.put_job(SCOPE, &record).await {
         Ok(()) => tracing::info!(job = %record.id, status = ?record.status, "background job ended"),
         // It will read as lost once its time is up, which is the truth.
         Err(e) => tracing::error!(job = %record.id, error = %e, "could not record how a job ended"),
@@ -216,31 +206,30 @@ where
     drop(permit);
 }
 
-/// Stores a job's result, unless the caller's results already fill what one
-/// scope may hold: they stay for `RUSTICDOC_JOB_TTL`, in the store every
-/// caller's templates are in. Replicas storing at the same moment can go past
+/// Stores a job's result, unless the results already kept fill what the store
+/// may hold: they stay for `RUSTICDOC_JOB_TTL`, in the store the templates are
+/// in. Replicas storing at the same moment can go past
 /// the limit by what is in flight, as with templates.
 async fn keep_result(
     state: &AppState,
     store: &Store,
-    scope: &str,
     id: &str,
     bytes: bytes::Bytes,
 ) -> Result<(), ApiError> {
-    let held = store.job_usage(scope).await?;
+    let held = store.job_usage(SCOPE).await?;
     let limit = state.config.max_job_storage;
     if held.saturating_add(bytes.len() as u64) > limit {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "quota_exceeded",
             format!(
-                "this caller's background jobs hold {held} bytes and this result is {} more; the limit is {limit}. Results are removed {:?} after their job ends",
+                "the store's background jobs hold {held} bytes and this result is {} more; the limit is {limit}. Results are removed {:?} after their job ends",
                 bytes.len(),
                 state.config.job_ttl,
             ),
         ));
     }
-    store.put_job_result(scope, id, bytes).await?;
+    store.put_job_result(SCOPE, id, bytes).await?;
     Ok(())
 }
 
@@ -273,13 +262,8 @@ fn accepted(state: &AppState, record: &JobRecord) -> Response {
     res
 }
 
-/// A caller's job as it stands now, or 404 when there is none or it expired.
-pub async fn current(
-    state: &AppState,
-    store: &Store,
-    scope: &str,
-    id: &str,
-) -> Result<JobRecord, ApiError> {
+/// A job as it stands now, or 404 when there is none or it expired.
+pub async fn current(state: &AppState, store: &Store, id: &str) -> Result<JobRecord, ApiError> {
     let gone = || {
         ApiError::new(
             StatusCode::NOT_FOUND,
@@ -287,7 +271,7 @@ pub async fn current(
             "there is no such job here, or its result has expired",
         )
     };
-    let record = match store.job(scope, id).await {
+    let record = match store.job(SCOPE, id).await {
         Ok(record) => record,
         Err(store::StoreError::NotFound) => return Err(gone()),
         Err(e) => return Err(e.into()),

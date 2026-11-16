@@ -14,7 +14,7 @@ The service speaks plain HTTP, so terminate TLS in front of it (see [security](/
 RUSTICDOC_API_KEY=a-long-random-key
 ```
 
-The service has one key. Make it long and random, for example with `openssl rand -hex 32`. The service warns at every start about a key shorter than 16 characters and checks nothing else of its strength. It names the caller in the logs and its stored files after a digest of the key, so anyone who can read either could guess a short one.
+The service has one key. Make it long and random, for example with `openssl rand -hex 32`. The service warns at every start about a key shorter than 16 characters and checks nothing else of its strength. Nothing derived from the key is logged or stored.
 
 Callers send the key in either header:
 
@@ -29,7 +29,7 @@ curl -H "Authorization: Bearer $KEY" -F files=@report.docx \
 
 The key can use every route, including uploading and deleting [fonts](/docs/guides/fonts/#who-can-change-fonts).
 
-Stored templates and aliases don't depend on the key, so they stay when you replace it. Background jobs and the webhook signing key belong to the key: replace it and you leave running jobs behind and get a new signing key.
+Nothing else depends on the key. Stored templates, aliases, background jobs and the [webhook signing key](/docs/guides/webhooks/#the-signing-key) all stay as they are when you replace it.
 
 ## Configuration mistakes stop the service
 
