@@ -593,14 +593,17 @@ async fn deliveries_are_signed_with_the_secret_whatever_the_api_key() {
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, receiver).await });
 
+    // Drawn for this run, so the test holds no fixed secret or key.
+    let secret = uuid::Uuid::new_v4().to_string();
+    let api_key = uuid::Uuid::new_v4().to_string();
     let mut c = config();
     c.webhook_allow_private = true;
-    c.webhook_secret = Some("master".into());
-    c.api_key = Some("tenant-a".into());
+    c.webhook_secret = Some(secret.clone());
+    c.api_key = Some(api_key.clone());
     let pdf = fixtures::pages(1);
     let parts: [Part<'_>; 1] = [("files", Some("a.pdf"), &pdf)];
     let request = form("/v1/pdf/flatten", &parts)
-        .header("x-api-key", "tenant-a")
+        .header("x-api-key", &api_key)
         .header(
             "x-rusticdoc-webhook-url",
             format!("http://127.0.0.1:{port}/done"),
@@ -622,12 +625,12 @@ async fn deliveries_are_signed_with_the_secret_whatever_the_api_key() {
         let signature = value(webhook::SIGNATURE);
         assert_eq!(
             signature,
-            webhook::sign(b"master", timestamp, &event, &id, &body),
+            webhook::sign(secret.as_bytes(), timestamp, &event, &id, &body),
             "{path}"
         );
         assert_ne!(
             signature,
-            webhook::sign(b"tenant-a", timestamp, &event, &id, &body)
+            webhook::sign(api_key.as_bytes(), timestamp, &event, &id, &body)
         );
     }
 }
