@@ -375,7 +375,7 @@ impl Parser {
             "b" | "strong" => style.bold = true,
             "i" | "em" => style.italic = true,
             "u" => style.underline = true,
-            "s" => style.strike = true,
+            "s" | "del" | "strike" => style.strike = true,
             "sub" => style.sub = true,
             "sup" => style.sup = true,
             "a" => {
@@ -785,6 +785,24 @@ mod tests {
             ]
         );
         assert_eq!(plain_lines(&parse("<script>a").unwrap()).len(), 0);
+    }
+
+    #[test]
+    fn strikes_through_s_del_and_strike() {
+        let struck = Style {
+            strike: true,
+            ..Style::default()
+        };
+        for tag in ["s", "del", "strike", "DEL"] {
+            assert_eq!(
+                parse(&format!("<{tag}>gone</{tag}>")).unwrap(),
+                [Block::Para(vec![Inline::Text(
+                    "gone".into(),
+                    struck.clone()
+                )])],
+                "{tag}"
+            );
+        }
     }
 
     #[test]

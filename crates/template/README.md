@@ -102,8 +102,8 @@ an error.
 have no runs here, so in XLSX and ODS it colours the whole cell, and the last
 `color` in a cell wins.
 
-**`html`** reads `p`, `br`, `b`/`strong`, `i`/`em`, `u`, `s`, `sub`, `sup`, `ul`,
-`ol`, `li`, `h1`..`h6`, `a`, `span style="color:#hex"`, `table`, `tr`, `td` and
+**`html`** reads `p`, `br`, `b`/`strong`, `i`/`em`, `u`, `s`/`del`/`strike`, `sub`, `sup`,
+`ul`, `ol`, `li`, `h1`..`h6`, `a`, `span style="color:#hex"`, `table`, `tr`, `td` and
 `th`. Other tags are dropped and their text kept; `script` and `style` go whole.
 No attribute is copied except a checked `href` and colour. An `a` with a scheme
 `link` would refuse is an error, while a `span` with any other style just loses
