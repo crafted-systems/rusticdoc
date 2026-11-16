@@ -11,21 +11,22 @@ rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. 
 
 ## 0.2.0
 
-Not released yet.
+Released on 16 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.2.0`, for amd64 and arm64.
 
-One API key is the only credential, and it does everything. The service refuses to start while a [removed setting](/docs/reference/configuration/#removed-settings) is set. This release changes these:
+Authentication is now one API key that can do everything. The service won't start while a [removed setting](/docs/reference/configuration/#removed-settings) is set, so check your configuration before you upgrade.
 
-- `RUSTICDOC_API_KEY` holds the key, in place of `RUSTICDOC_API_KEYS`. Admin keys, tenant keys, basic authentication and OpenID Connect are removed. See [authentication](/docs/guides/authentication/).
-- The key uploads and deletes fonts, and `/health` shows it where the store is.
-- Templates, aliases and background jobs are one set for the whole store, and `RUSTICDOC_STORE_SCOPE` is removed. The service doesn't read the templates and aliases an earlier version stored until you [move them](/docs/guides/stored-templates/#templates-stored-by-an-earlier-version). A background job started before the upgrade can't be fetched after it.
-- `RUSTICDOC_MAX_ASYNC_JOBS` is the one limit on webhook and background jobs, and its default is `8`, not `32`. `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` is removed.
-- The key signs with every signing key. `RUSTICDOC_SIGNING_ALLOW`, `RUSTICDOC_SIGNING_ALLOW_<NAME>` and the `signing_key_forbidden` error are removed.
-- Webhook deliveries are signed with the bytes of `RUSTICDOC_WEBHOOK_SECRET`, whatever the API key. The receiver of a service that has a key needs the [signing key](/docs/guides/webhooks/#the-signing-key) that `rusticdoc webhook-secret` prints now, and the command's `--api-key` option is removed.
-- Nothing derived from the API key is logged or stored. The log's `caller` is `key` for a request with the key, and background jobs are stored under `jobs/shared/`.
+- `RUSTICDOC_API_KEY` replaces `RUSTICDOC_API_KEYS`. The key uploads fonts, signs with any signing key and sees where the store is in `/health`. Admin and tenant keys, basic authentication, OpenID Connect and `RUSTICDOC_SIGNING_ALLOW` are gone. See [authentication](/docs/guides/authentication/).
+- Stored templates, aliases and background jobs are one shared set, and `RUSTICDOC_STORE_SCOPE` is gone. [Move templates stored by an earlier version](/docs/guides/stored-templates/#templates-stored-by-an-earlier-version) to keep using them. Background jobs started before the upgrade can't be fetched after it.
+- Webhooks are signed with `RUSTICDOC_WEBHOOK_SECRET` itself. With an API key set, receivers need the [signing key](/docs/guides/webhooks/#the-signing-key) that `rusticdoc webhook-secret` prints, and its `--api-key` option is gone.
+- `RUSTICDOC_MAX_ASYNC_JOBS` is the only limit on webhook and background jobs, and defaults to `8` instead of `32`.
+- Nothing derived from the key is logged or stored. The log's `caller` reads `key`, and jobs are stored under `jobs/shared/`.
 
-It also adds this:
+It also adds and fixes these:
 
 - `RUSTICDOC_ENGINE_MEMORY` caps the memory of each qpdf, pdfcpu and LibreOffice process. It's off by default.
+- The `html` filter strikes through `del` and `strike`, as it does `s`.
+- Webhooks, `downloadFrom`, timestamp authorities and revocation checks refuse three more IPv6 ranges that aren't global: `2001::/23`, `3fff::/20` and `5f00::/16`.
+- pdfcpu in the image is built with Go 1.27.4, which fixes GO-2026-6859.
 
 ## 0.1.4
 
