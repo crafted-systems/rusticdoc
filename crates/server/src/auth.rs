@@ -2,12 +2,14 @@
 //! until the key is configured; health and the API description stay open.
 
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -120,15 +122,25 @@ pub async fn require(
     res
 }
 
-/// True when `presented` is the key. Their digests are compared, so the time
-/// says nothing about how far a wrong one got.
+/// True when `presented` is the key. Their tags are compared, not the values,
+/// so the time says nothing about the key's length or how far a wrong one got.
 fn is_the_key(key: &str, presented: &str) -> bool {
-    digest_eq(key.as_bytes(), presented.as_bytes()).into()
+    tag(key.as_bytes()).ct_eq(&tag(presented.as_bytes())).into()
 }
 
-/// Compares digests rather than the values, so the lengths do not show.
-fn digest_eq(a: &[u8], b: &[u8]) -> subtle::Choice {
-    Sha256::digest(a).ct_eq(&Sha256::digest(b))
+/// HMAC-SHA256 of a value under a key drawn when the first request is checked.
+/// A tag is compared and dropped, never stored or sent, and no caller can
+/// work one out, since the key never leaves the process.
+fn tag(value: &[u8]) -> [u8; 32] {
+    static KEY: OnceLock<[u8; 32]> = OnceLock::new();
+    let key = KEY.get_or_init(|| {
+        let mut key = [0; 32];
+        getrandom::fill(&mut key).expect("the system has random bytes");
+        key
+    });
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("hmac accepts any key length");
+    mac.update(value);
+    mac.finalize().into_bytes().into()
 }
 
 #[cfg(test)]
@@ -142,6 +154,13 @@ mod tests {
         assert!(!is_the_key("first", ""));
         assert!(!is_the_key("first", "firs"));
         assert!(!is_the_key("first", "first "));
+    }
+
+    #[test]
+    fn a_value_has_one_tag_and_another_value_has_another() {
+        assert_eq!(tag(b"first"), tag(b"first"));
+        assert_ne!(tag(b"first"), tag(b"second"));
+        assert_ne!(tag(b"first"), [0; 32]);
     }
 
     #[test]

@@ -9,6 +9,7 @@ axum = { version = "0.8.9", features = ["multipart", "json", "macros"] }
 bytes = "1.12.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 futures-util = "0.3.34"
+getrandom = "0.4.3"
 hex = "0.4.3"
 hmac = "0.13.0"
 http-body = "1"
