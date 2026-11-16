@@ -24,6 +24,11 @@ services:
       RUSTICDOC_API_TIMEOUT: ${RUSTICDOC_API_TIMEOUT:-60s}
       RUSTICDOC_WORKERS: ${RUSTICDOC_WORKERS:-2}
       RUSTICDOC_API_KEY: ${RUSTICDOC_API_KEY:-}
+      # Removed in 0.2.0, and still passed on so the service refuses to start
+      # with one set. Dropped here, an .env that holds only the old keys would
+      # start a service with no key.
+      RUSTICDOC_API_KEYS: ${RUSTICDOC_API_KEYS:-}
+      RUSTICDOC_ADMIN_KEYS: ${RUSTICDOC_ADMIN_KEYS:-}
       RUSTICDOC_WEBHOOK_SECRET: ${RUSTICDOC_WEBHOOK_SECRET:-}
       RUSTICDOC_LOG_LEVEL: ${RUSTICDOC_LOG_LEVEL:-info}
       RUSTICDOC_RENDER_MEMORY: ${RUSTICDOC_RENDER_MEMORY:-1GB}
