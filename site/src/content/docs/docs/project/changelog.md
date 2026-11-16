@@ -9,6 +9,24 @@ sidebar:
 
 rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults and may add features, without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
+## 0.2.0
+
+Not released yet.
+
+One API key is the only credential, and it does everything. The service refuses to start while a [removed setting](/docs/reference/configuration/#removed-settings) is set. This release changes these:
+
+- `RUSTICDOC_API_KEY` holds the key, in place of `RUSTICDOC_API_KEYS`. Admin keys, tenant keys, basic authentication and OpenID Connect are removed. See [authentication](/docs/guides/authentication/).
+- The key uploads and deletes fonts, and `/health` shows it where the store is.
+- Templates, aliases and background jobs are one set for the whole store, and `RUSTICDOC_STORE_SCOPE` is removed. The service doesn't read the templates and aliases an earlier version stored until you [move them](/docs/guides/stored-templates/#templates-stored-by-an-earlier-version). A background job started before the upgrade can't be fetched after it.
+- `RUSTICDOC_MAX_ASYNC_JOBS` is the one limit on webhook and background jobs, and its default is `8`, not `32`. `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` is removed.
+- The key signs with every signing key. `RUSTICDOC_SIGNING_ALLOW`, `RUSTICDOC_SIGNING_ALLOW_<NAME>` and the `signing_key_forbidden` error are removed.
+- Webhook deliveries are signed with the bytes of `RUSTICDOC_WEBHOOK_SECRET`, whatever the API key. The receiver of a service that has a key needs the [signing key](/docs/guides/webhooks/#the-signing-key) that `rusticdoc webhook-secret` prints now, and the command's `--api-key` option is removed.
+- Nothing derived from the API key is logged or stored. The log's `caller` is `key` for a request with the key, and background jobs are stored under `jobs/shared/`.
+
+It also adds this:
+
+- `RUSTICDOC_ENGINE_MEMORY` caps the memory of each qpdf, pdfcpu and LibreOffice process. It's off by default.
+
 ## 0.1.4
 
 Released on 11 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.1.4`, for amd64 and arm64.

@@ -36,11 +36,11 @@ Do not add `--init`. It puts a process at PID 1 whose environment, including you
 Start from a `rusticdoc.env` like this:
 
 ```bash
-RUSTICDOC_API_KEYS=change-me-one,change-me-two
+RUSTICDOC_API_KEY=change-me
 RUSTICDOC_WEBHOOK_SECRET=change-me
 ```
 
-Without credentials, anyone who can reach the port can use the service, and it warns about that every time it starts. A half-configured setup, like a basic auth user with no password, stops it from starting. [Authentication](/docs/guides/authentication/) covers API keys, basic auth and OpenID Connect.
+Without the API key, anyone who can reach the port can use the service, and it warns about that every time it starts. [Authentication](/docs/guides/authentication/) covers the key.
 
 The service speaks plain HTTP, so put a reverse proxy in front of it for TLS and rate limits, and leave the port on `127.0.0.1` or a private network. [Security](/docs/operate/security/) lists what else you're responsible for.
 
@@ -82,8 +82,7 @@ Compose passes these on to the service, and leaves empty ones unset:
 |---|---|
 | `RUSTICDOC_API_TIMEOUT` | `60s`, where the service's own default is `30s` |
 | `RUSTICDOC_WORKERS` | `2` |
-| `RUSTICDOC_API_KEYS` | Empty |
-| `RUSTICDOC_ADMIN_KEYS` | Empty |
+| `RUSTICDOC_API_KEY` | Empty |
 | `RUSTICDOC_WEBHOOK_SECRET` | Empty |
 | `RUSTICDOC_LOG_LEVEL` | `info` |
 | `RUSTICDOC_RENDER_MEMORY` | `1GB` |

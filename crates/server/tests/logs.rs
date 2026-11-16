@@ -64,7 +64,7 @@ fn config() -> Config {
 
 fn guarded() -> Config {
     let mut c = config();
-    c.api_keys = vec!["secret".into()];
+    c.api_key = Some("secret".into());
     c
 }
 
@@ -97,20 +97,21 @@ async fn failed_authentication_logs_who_and_from_where_without_the_secret() {
 }
 
 #[tokio::test]
-async fn a_basic_password_stays_out_of_the_log() {
+async fn a_credential_of_another_kind_stays_out_of_the_log() {
     let _turn = TURN.lock().await;
     clear();
-    let mut c = config();
-    c.basic_auth = Some(("ada".into(), "right".into()));
     // "ada:wrong-password"
     let request = Request::get("/v1/fonts")
         .header(header::AUTHORIZATION, "Basic YWRhOndyb25nLXBhc3N3b3Jk")
         .body(Body::empty())
         .unwrap();
-    let res = app(AppState::new(c)).oneshot(request).await.unwrap();
+    let res = app(AppState::new(guarded()))
+        .oneshot(request)
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     let logged = logged_since_clear();
-    assert!(logged.contains("basic:"), "{logged}");
+    assert!(logged.contains("authentication failed"), "{logged}");
     assert!(!logged.contains("wrong-password"), "{logged}");
     assert!(!logged.contains("YWRhOndyb25n"), "{logged}");
 }
@@ -133,8 +134,10 @@ async fn the_access_log_names_the_peer_and_the_caller() {
         logged.contains(r#""remote_addr":"203.0.113.9:4242""#),
         "{logged}"
     );
-    assert!(logged.contains(r#""caller":"key:"#), "{logged}");
+    assert!(logged.contains(r#""caller":"key""#), "{logged}");
     assert!(!logged.contains(r#""secret""#), "{logged}");
+    // Nor a digest of it: the start of the SHA-256 of "secret".
+    assert!(!logged.contains("2bb80d537b1d"), "{logged}");
 }
 
 #[tokio::test]

@@ -3,8 +3,8 @@
 
     RUSTICDOC_SIGNING_KEY=<hex> PORT=8000 python3 verify_webhook.py
 
-RUSTICDOC_SIGNING_KEY is the hex that `rusticdoc webhook-secret` prints for
-the calling key, run where RUSTICDOC_WEBHOOK_SECRET is set. Standard library
+RUSTICDOC_SIGNING_KEY is the hex that `rusticdoc webhook-secret` prints, run
+where RUSTICDOC_WEBHOOK_SECRET is set. Standard library
 only. A verified result is saved under its file name in ./received.
 """
 import hashlib

@@ -67,7 +67,7 @@ execFileSync('zip', ['-qj', join(fixtures, 'brand-fonts.zip'), join(fixtures, 'f
 
 const prelude = `set -euo pipefail
 curl() { command curl -sS --fail-with-body "$@"; }
-export KEY=example-key ADMIN_KEY=example-admin-key
+export KEY=example-key
 `;
 
 let passed = 0;

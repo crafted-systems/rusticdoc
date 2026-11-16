@@ -10,7 +10,6 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use rusticdoc_core::Config;
-use rusticdoc_core::config::StoreScope;
 use rusticdoc_server::{AppState, app, fontsync};
 use tower::ServiceExt;
 
@@ -57,6 +56,24 @@ fn two_replicas(configure: impl Fn(&mut Config)) -> Pair {
         state_b,
         store,
         _caches: (cache_a, cache_b),
+    }
+}
+
+/// Another service on the pair's store with a key of its own, so another
+/// caller.
+struct Other {
+    router: Router,
+    _cache: tempfile::TempDir,
+}
+
+fn other_caller(pair: &Pair, key: &str, configure: impl Fn(&mut Config)) -> Other {
+    let cache = tempfile::tempdir().unwrap();
+    let mut config = replica(&pair.store, &cache);
+    configure(&mut config);
+    config.api_key = Some(key.into());
+    Other {
+        router: app(AppState::new(config)),
+        _cache: cache,
     }
 }
 
@@ -361,65 +378,63 @@ async fn a_delete_is_seen_at_once_by_a_replica_that_has_it_cached() {
 }
 
 #[tokio::test]
-async fn one_caller_cannot_touch_anothers_templates() {
-    let pair = two_replicas(|c| c.api_keys = vec!["alice-key".into(), "bob-key".into()]);
-    let id = store_template(&pair.a, Some("alice-key")).await;
-    let bob = Some("bob-key");
-    for (method, path) in [
-        ("GET", format!("/v1/templates/{id}")),
-        ("GET", format!("/v1/templates/{id}/content")),
-        ("DELETE", format!("/v1/templates/{id}")),
+async fn templates_and_aliases_are_one_set_for_the_store() {
+    // Two services on one store, as before and after the key is replaced.
+    let pair = two_replicas(|c| c.api_key = Some("old-key".into()));
+    let other = other_caller(&pair, "new-key", |_| {});
+    let (old, new) = (Some("old-key"), Some("new-key"));
+    let id = store_template(&pair.a, old).await;
+    assert_eq!(
+        set_alias(&pair.a, "invoice", &id, old).await.status(),
+        StatusCode::CREATED
+    );
+
+    for path in [
+        format!("/v1/templates/{id}"),
+        format!("/v1/templates/{id}/content"),
+        "/v1/templates/invoice".to_string(),
+        "/v1/aliases/invoice".to_string(),
     ] {
         assert_eq!(
-            status(&pair.b, call(method, &path, bob)).await,
-            StatusCode::NOT_FOUND,
-            "{method} {path}"
+            status(&other.router, call("GET", &path, new)).await,
+            StatusCode::OK,
+            "{path}"
         );
     }
-    let render: &[Part<'_>] = &[("templateId", None, id.as_bytes())];
     assert_eq!(
-        status(&pair.b, post_as("/v1/render", render, bob)).await,
-        StatusCode::NOT_FOUND
+        render_text(&other.router, "invoice", new).await.0,
+        StatusCode::OK
     );
     let listed = json(
-        pair.b
+        other
+            .router
             .clone()
-            .oneshot(call("GET", "/v1/templates", bob))
+            .oneshot(call("GET", "/v1/templates", new))
             .await
             .unwrap(),
     )
     .await;
-    assert!(listed["templates"].as_array().unwrap().is_empty());
+    assert_eq!(listed["templates"].as_array().unwrap().len(), 1);
 
-    // Still there for its owner, and nothing at all without a credential.
+    // Nothing at all without the key, or with the other service's.
+    for key in [None, old] {
+        assert_eq!(
+            status(&other.router, call("GET", "/v1/templates", key)).await,
+            StatusCode::UNAUTHORIZED,
+            "{key:?}"
+        );
+    }
     assert_eq!(
         status(
-            &pair.a,
-            call("GET", &format!("/v1/templates/{id}"), Some("alice-key"))
+            &other.router,
+            call("DELETE", &format!("/v1/templates/{id}"), new)
         )
         .await,
-        StatusCode::OK
+        StatusCode::NO_CONTENT
     );
     assert_eq!(
-        status(&pair.a, call("GET", "/v1/templates", None)).await,
-        StatusCode::UNAUTHORIZED
-    );
-}
-
-#[tokio::test]
-async fn a_shared_scope_shares() {
-    let pair = two_replicas(|c| {
-        c.api_keys = vec!["old-key".into(), "new-key".into()];
-        c.store_scope = StoreScope::Shared;
-    });
-    let id = store_template(&pair.a, Some("old-key")).await;
-    assert_eq!(
-        status(
-            &pair.b,
-            call("GET", &format!("/v1/templates/{id}"), Some("new-key"))
-        )
-        .await,
-        StatusCode::OK
+        status(&pair.b, call("GET", &format!("/v1/templates/{id}"), old)).await,
+        StatusCode::NOT_FOUND
     );
 }
 
@@ -451,7 +466,7 @@ async fn ids_cannot_reach_outside_the_store() {
 async fn altered_content_is_not_served() {
     let pair = two_replicas(|_| {});
     let id = store_template(&pair.a, None).await;
-    let scope = rusticdoc_core::store::scope_key("public");
+    let scope = rusticdoc_core::store::SHARED_SCOPE;
     let path = pair
         .store
         .path()
@@ -543,11 +558,12 @@ async fn a_chosen_name_never_changes_the_format() {
 }
 
 #[tokio::test]
-async fn quotas_hold_per_caller() {
+async fn quotas_hold_for_the_store() {
     let pair = two_replicas(|c| {
-        c.api_keys = vec!["alice".into(), "bob".into()];
+        c.api_key = Some("alice".into());
         c.max_templates = 1;
     });
+    let bobs = other_caller(&pair, "bob", |c| c.max_templates = 1);
     store_template(&pair.a, Some("alice")).await;
     let parts: &[Part<'_>] = &[("template", Some("b.txt"), b"x")];
     let res = pair
@@ -558,7 +574,11 @@ async fn quotas_hold_per_caller() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     assert_eq!(json(res).await["error"], "quota_exceeded");
-    store_template(&pair.a, Some("bob")).await;
+    // Whichever service asks: the limit is the store's.
+    assert_eq!(
+        status(&bobs.router, post_as("/v1/templates", parts, Some("bob"))).await,
+        StatusCode::FORBIDDEN
+    );
 
     let pair = two_replicas(|c| c.max_template_storage = 20);
     store_template(&pair.a, None).await;
@@ -913,11 +933,9 @@ async fn a_hostile_zip_stores_nothing_and_writes_nowhere_else() {
 }
 
 #[tokio::test]
-async fn fonts_change_only_with_an_admin_key() {
-    let pair = two_replicas(|c| {
-        c.api_keys = vec!["caller".into()];
-        c.admin_keys = vec!["admin".into()];
-    });
+async fn fonts_change_with_any_api_key() {
+    let pair = two_replicas(|c| c.api_key = Some("caller".into()));
+    let other = other_caller(&pair, "other", |_| {});
     let font = minimal_font("Guarded");
     let parts: &[Part<'_>] = &[("file", Some("g.ttf"), &font)];
     assert_eq!(
@@ -925,13 +943,13 @@ async fn fonts_change_only_with_an_admin_key() {
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        status(&pair.a, post_as("/v1/fonts", parts, Some("caller"))).await,
-        StatusCode::FORBIDDEN
+        status(&pair.a, post_as("/v1/fonts", parts, Some("not-a-key"))).await,
+        StatusCode::UNAUTHORIZED
     );
     let res = pair
         .a
         .clone()
-        .oneshot(post_as("/v1/fonts", parts, Some("admin")))
+        .oneshot(post_as("/v1/fonts", parts, Some("caller")))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::CREATED);
@@ -941,42 +959,13 @@ async fn fonts_change_only_with_an_admin_key() {
         .to_string();
     let path = format!("/v1/fonts/{id}");
     assert_eq!(
-        status(&pair.a, call("DELETE", &path, Some("caller"))).await,
-        StatusCode::FORBIDDEN
+        status(&pair.a, call("DELETE", &path, None)).await,
+        StatusCode::UNAUTHORIZED
     );
+    // Fonts are the store's, so a service with another key deletes them too.
     assert_eq!(
-        status(&pair.a, call("GET", "/v1/fonts", Some("caller"))).await,
-        StatusCode::OK
-    );
-    assert_eq!(
-        status(&pair.a, call("DELETE", &path, Some("admin"))).await,
+        status(&other.router, call("DELETE", &path, Some("other"))).await,
         StatusCode::NO_CONTENT
-    );
-
-    // Credentials but no admin keys: nobody, not everybody.
-    let pair = two_replicas(|c| c.api_keys = vec!["caller".into()]);
-    let res = pair
-        .a
-        .clone()
-        .oneshot(post_as("/v1/fonts", parts, Some("caller")))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert!(
-        String::from_utf8(bytes(res).await)
-            .unwrap()
-            .contains("RUSTICDOC_ADMIN_KEYS")
-    );
-
-    // An admin key on an otherwise open service still guards fonts.
-    let pair = two_replicas(|c| c.admin_keys = vec!["admin".into()]);
-    assert_eq!(
-        status(&pair.a, post_as("/v1/fonts", parts, None)).await,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        status(&pair.a, post_as("/v1/fonts", parts, Some("admin"))).await,
-        StatusCode::CREATED
     );
 }
 
@@ -1485,56 +1474,6 @@ async fn alias_names_are_checked_and_cannot_reach_outside_the_store() {
 }
 
 #[tokio::test]
-async fn one_caller_cannot_see_or_use_anothers_aliases() {
-    let pair = two_replicas(|c| c.api_keys = vec!["alice-key".into(), "bob-key".into()]);
-    let (alice, bob) = (Some("alice-key"), Some("bob-key"));
-    let id = store_template(&pair.a, alice).await;
-    assert_eq!(
-        set_alias(&pair.a, "invoice", &id, alice).await.status(),
-        StatusCode::CREATED
-    );
-
-    assert_eq!(
-        render_text(&pair.b, "invoice", bob).await.0,
-        StatusCode::NOT_FOUND
-    );
-    for (method, path) in [
-        ("GET", "/v1/aliases/invoice"),
-        ("DELETE", "/v1/aliases/invoice"),
-        ("GET", "/v1/templates/invoice"),
-        ("GET", "/v1/templates/invoice/variables"),
-    ] {
-        assert_eq!(
-            status(&pair.b, call(method, path, bob)).await,
-            StatusCode::NOT_FOUND,
-            "{method} {path}"
-        );
-    }
-    let listed = json(
-        pair.b
-            .clone()
-            .oneshot(call("GET", "/v1/aliases", bob))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert!(listed["aliases"].as_array().unwrap().is_empty());
-    // Bob cannot point a name of his own at Alice's template either.
-    assert_eq!(
-        set_alias(&pair.b, "mine", &id, bob).await.status(),
-        StatusCode::NOT_FOUND
-    );
-    // Bob's own alias of the same name is his.
-    let bobs = store_text(&pair.b, "b.txt", b"Bob {{ name }}", bob).await;
-    assert_eq!(
-        set_alias(&pair.b, "invoice", &bobs, bob).await.status(),
-        StatusCode::CREATED
-    );
-    assert_eq!(render_text(&pair.a, "invoice", alice).await.1, "Hello Ada");
-    assert_eq!(render_text(&pair.b, "invoice", bob).await.1, "Bob Ada");
-}
-
-#[tokio::test]
 async fn aliases_count_against_the_template_limit() {
     let pair = two_replicas(|c| c.max_templates = 2);
     let id = store_template(&pair.a, None).await;
@@ -1783,7 +1722,8 @@ async fn job_until_ended(router: &Router, location: &str, key: Option<&str>) -> 
 
 #[tokio::test]
 async fn a_background_job_answers_202_and_any_replica_serves_its_result() {
-    let pair = two_replicas(|c| c.api_keys = vec!["alice-key".into(), "bob-key".into()]);
+    let pair = two_replicas(|c| c.api_key = Some("alice-key".into()));
+    let bobs = other_caller(&pair, "bob-key", |_| {});
     let alice = Some("alice-key");
     store_text(&pair.a, "hello.txt", b"Hello {{ name }}", alice).await;
     let id = store_text(&pair.a, "hello.txt", b"Hello {{ name }}", alice).await;
@@ -1832,15 +1772,24 @@ async fn a_background_job_answers_202_and_any_replica_serves_its_result() {
     );
     assert_eq!(bytes(res).await, b"Hello Ada");
 
-    // Another caller cannot see it, whatever it knows.
+    // Jobs are one set for the store: a service on it with another key reads
+    // the same job, and a request with no key reads nothing.
     let bob = Some("bob-key");
     assert_eq!(
-        status(&pair.b, call("GET", &location, bob)).await,
-        StatusCode::NOT_FOUND
+        status(&bobs.router, call("GET", &location, bob)).await,
+        StatusCode::OK
     );
+    let res = bobs
+        .router
+        .clone()
+        .oneshot(call("GET", &format!("{location}/result"), bob))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(bytes(res).await, b"Hello Ada");
     assert_eq!(
-        status(&pair.b, call("GET", &format!("{location}/result"), bob)).await,
-        StatusCode::NOT_FOUND
+        status(&bobs.router, call("GET", &location, None)).await,
+        StatusCode::UNAUTHORIZED
     );
     for bad in ["not-an-id", "..", "01966f3e-7c1a-7d3c-9a44-1d2f5a6b7c8d"] {
         assert_eq!(
@@ -1897,14 +1846,14 @@ async fn a_failed_job_keeps_the_error_its_request_would_have_had() {
 async fn a_job_that_has_not_ended_says_so_and_a_lost_one_fails() {
     let pair = two_replicas(|_| {});
     let store = pair.state_a.store.clone().unwrap();
-    let scope = rusticdoc_core::store::scope_key("public");
+    let scope = rusticdoc_core::store::SHARED_SCOPE;
     let waiting = rusticdoc_core::store::new_job_id();
     let record = rusticdoc_core::store::JobRecord::queued(
         waiting.clone(),
         "-".into(),
         Duration::from_secs(60),
     );
-    store.put_job(&scope, &record).await.unwrap();
+    store.put_job(scope, &record).await.unwrap();
     let res = pair
         .b
         .clone()
@@ -1926,7 +1875,7 @@ async fn a_job_that_has_not_ended_says_so_and_a_lost_one_fails() {
     // A job past its time never ended: the replica running it went away.
     let lost = rusticdoc_core::store::new_job_id();
     let record = rusticdoc_core::store::JobRecord::queued(lost.clone(), "-".into(), Duration::ZERO);
-    store.put_job(&scope, &record).await.unwrap();
+    store.put_job(scope, &record).await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
     let job = json(
         pair.b
@@ -2014,7 +1963,7 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 
 #[tokio::test]
 async fn background_jobs_share_the_webhook_limit_and_exclude_webhooks() {
-    let pair = two_replicas(|c| c.max_async_jobs_per_caller = 0);
+    let pair = two_replicas(|c| c.max_async_jobs = 0);
     let id = store_template(&pair.a, None).await;
     let body = serde_json::json!({ "templateId": id, "data": { "name": "Ada" } });
     assert_eq!(
@@ -2034,69 +1983,6 @@ async fn background_jobs_share_the_webhook_limit_and_exclude_webhooks() {
         String::from_utf8(bytes(res).await)
             .unwrap()
             .contains("not both")
-    );
-}
-
-#[tokio::test]
-async fn a_tenant_keeps_its_templates_aliases_and_jobs_when_its_key_is_replaced() {
-    let pair = two_replicas(|c| {
-        c.api_keys = vec!["solo".into()];
-        c.tenant_keys = vec![
-            ("acme".into(), "old-secret".into()),
-            ("acme".into(), "new-secret".into()),
-        ];
-    });
-    let (old, new) = (Some("old-secret"), Some("new-secret"));
-    let id = store_template(&pair.a, old).await;
-    assert_eq!(
-        set_alias(&pair.a, "hello", &id, old).await.status(),
-        StatusCode::CREATED
-    );
-    let res = pair
-        .a
-        .clone()
-        .oneshot(async_render(
-            serde_json::json!({ "templateId": "hello", "data": { "name": "Ada" } }),
-            old,
-        ))
-        .await
-        .unwrap();
-    let location = res.headers()[header::LOCATION]
-        .to_str()
-        .unwrap()
-        .to_string();
-    job_until_ended(&pair.a, &location, old).await;
-
-    // The new key is the same caller.
-    assert_eq!(render_text(&pair.b, "hello", new).await.1, "Hello Ada");
-    assert_eq!(render_text(&pair.b, &id, new).await.1, "Hello Ada");
-    assert_eq!(
-        status(&pair.b, call("GET", &format!("{location}/result"), new)).await,
-        StatusCode::OK
-    );
-    let listed = json(
-        pair.b
-            .clone()
-            .oneshot(call("GET", "/v1/templates", new))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(listed["templates"].as_array().unwrap().len(), 1);
-
-    // An unnamed key is still a caller of its own.
-    assert_eq!(
-        render_text(&pair.b, "hello", Some("solo")).await.0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        status(&pair.b, call("GET", &location, Some("solo"))).await,
-        StatusCode::NOT_FOUND
-    );
-    // A key that was removed is no credential at all.
-    assert_eq!(
-        status(&pair.b, call("GET", "/v1/templates", Some("older-secret"))).await,
-        StatusCode::UNAUTHORIZED
     );
 }
 
@@ -2145,13 +2031,14 @@ async fn json_bodies_carry_the_language_fields() {
 }
 
 #[tokio::test]
-async fn one_callers_job_results_stop_at_its_limit() {
+async fn job_results_stop_at_the_limit_for_the_store() {
     let pair = two_replicas(|c| {
-        c.api_keys = vec!["alice-key".into(), "bob-key".into()];
+        c.api_key = Some("alice-key".into());
         c.max_job_storage = 6_000;
     });
-    let run = |key: &'static str| {
-        let router = pair.a.clone();
+    let bobs = other_caller(&pair, "bob-key", |c| c.max_job_storage = 6_000);
+    let run = |router: &Router, key: &'static str| {
+        let router = router.clone();
         async move {
             let id = store_text(&router, "hello.txt", b"Hello {{ name }}", Some(key)).await;
             let res = router
@@ -2170,36 +2057,30 @@ async fn one_callers_job_results_stop_at_its_limit() {
             job_until_ended(&router, &location, Some(key)).await
         }
     };
-    let first = run("alice-key").await;
+    let first = run(&pair.a, "alice-key").await;
     assert_eq!(first["status"], "done", "{first}");
-    // The next would take her results past what one caller may hold.
-    let second = run("alice-key").await;
+    // The next would take the results past what the store may hold.
+    let second = run(&pair.a, "alice-key").await;
     assert_eq!(second["status"], "failed", "{second}");
     assert_eq!(second["error"]["error"], "quota_exceeded", "{second}");
-    // Another caller's are counted apart.
-    let other = run("bob-key").await;
-    assert_eq!(other["status"], "done", "{other}");
+    // A service on the store with another key counts the same results.
+    let other = run(&bobs.router, "bob-key").await;
+    assert_eq!(other["status"], "failed", "{other}");
+    assert_eq!(other["error"]["error"], "quota_exceeded", "{other}");
 }
 
 #[tokio::test]
-async fn health_says_where_the_store_is_to_an_admin_only() {
-    let pair = two_replicas(|c| {
-        c.api_keys = vec!["alice-key".into()];
-        c.admin_keys = vec!["admin-key".into()];
-    });
-    let store_of = |key: &'static str| {
+async fn health_says_where_the_store_is_to_a_caller_with_a_key() {
+    let pair = two_replicas(|c| c.api_key = Some("alice-key".into()));
+    let store_of = |key: Option<&'static str>| {
         let router = pair.a.clone();
         async move {
-            let res = router
-                .oneshot(call("GET", "/health", Some(key)))
-                .await
-                .unwrap();
+            let res = router.oneshot(call("GET", "/health", key)).await.unwrap();
             json(res).await["details"]["store"].clone()
         }
     };
-    let seen = store_of("alice-key").await;
+    assert!(store_of(None).await.is_null());
+    let seen = store_of(Some("alice-key")).await;
     assert_eq!(seen["fontsSynced"], false);
-    assert!(seen.get("location").is_none(), "{seen}");
-    let seen = store_of("admin-key").await;
     assert!(seen["location"].as_str().unwrap().starts_with("file://"));
 }

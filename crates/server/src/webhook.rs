@@ -11,10 +11,8 @@
 //! disabled, so neither DNS rebinding nor a redirect can turn a webhook into
 //! a request to something beside the service.
 //!
-//! Each caller signs with its own key, so one tenant cannot send another's
-//! receiver something that verifies: the key is `HMAC-SHA256(secret, principal)`,
-//! or the secret itself when the service requires no credentials and the
-//! principal is `public`. `rusticdoc webhook-secret` prints a caller's key.
+//! Deliveries are signed with the bytes of `RUSTICDOC_WEBHOOK_SECRET`, whatever
+//! the API key is. `rusticdoc webhook-secret` prints them in hex.
 //!
 //! The signature covers the timestamp, the event, the request id and the body:
 //! `X-Rusticdoc-Signature: v1=<hex HMAC-SHA256 of
@@ -36,7 +34,6 @@ use rusticdoc_core::Output;
 use sha2::Sha256;
 use tracing::Instrument;
 
-use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::jobs::{Delivery, JobPermit};
 use crate::metrics::OutcomeLabels;
@@ -172,8 +169,6 @@ pub struct Webhook {
     pub extra_headers: HeaderMap,
     /// This job's place among the running ones, held through its delivery.
     pub permit: Option<Arc<JobPermit>>,
-    /// The caller, whose key signs the delivery.
-    pub principal: String,
 }
 
 /// How a `/v1/*` request's result is to be delivered: in the response, to the
@@ -189,11 +184,6 @@ impl FromRequestParts<AppState> for Hook {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let caller = parts
-            .extensions
-            .get::<Principal>()
-            .map(|p| p.0.as_str())
-            .unwrap_or("public");
         let background = crate::jobs::prefers_async(&parts.headers);
         // `RUSTICDOC_WEBHOOK_DISABLED` means the headers are ignored.
         let webhook_asked =
@@ -211,11 +201,10 @@ impl FromRequestParts<AppState> for Hook {
         };
         match (hook, background) {
             (Some(mut hook), _) => {
-                hook.permit = Some(Arc::new(state.jobs.try_acquire(caller)?));
-                hook.principal = caller.to_string();
+                hook.permit = Some(Arc::new(state.jobs.try_acquire()?));
                 Ok(Self(Delivery::Webhook(Box::new(hook))))
             }
-            (None, true) => Ok(Self(Delivery::Job(crate::jobs::ticket(state, caller)?))),
+            (None, true) => Ok(Self(Delivery::Job(crate::jobs::ticket(state)?))),
             (None, false) => Ok(Self(Delivery::Now)),
         }
     }
@@ -316,7 +305,6 @@ impl Webhook {
             method,
             extra_headers,
             permit: None,
-            principal: "public".to_string(),
         }))
     }
 }
@@ -506,17 +494,9 @@ pub fn redact(url: &str) -> String {
     }
 }
 
-/// The key `principal`'s deliveries are signed with: `HMAC-SHA256(secret,
-/// principal)`, or the secret itself for `public`, where no credentials are
-/// configured and there is one tenant.
-pub fn signing_key(secret: &str, principal: &str) -> Vec<u8> {
-    if principal == "public" {
-        return secret.as_bytes().to_vec();
-    }
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac accepts any key length");
-    mac.update(principal.as_bytes());
-    mac.finalize().into_bytes().to_vec()
+/// The key deliveries are signed with: the secret's bytes.
+pub fn signing_key(secret: &str) -> &[u8] {
+    secret.as_bytes()
 }
 
 /// `v1=<hex hmac>` over `"<timestamp>.<event>.<request id>.<body>"`.
@@ -605,7 +585,7 @@ pub async fn deliver(
         .config
         .webhook_secret
         .as_ref()
-        .map(|secret| signing_key(secret, &hook.principal));
+        .map(|secret| signing_key(secret));
 
     let attempts = state.config.webhook_attempts.max(1);
     for attempt in 1..=attempts {
@@ -887,14 +867,8 @@ mod tests {
     }
 
     #[test]
-    fn each_caller_has_its_own_signing_key() {
-        assert_eq!(
-            hex::encode(signing_key("master", "key:abc")),
-            "fed23b5bf025ca341ad9baafe0fa4f6da51c5db6e789ba6be0377bc09e42f448"
-        );
-        assert_ne!(signing_key("m", "key:a"), signing_key("m", "key:b"));
-        assert_ne!(signing_key("m", "key:a"), b"m".to_vec());
-        assert_eq!(signing_key("m", "public"), b"m".to_vec());
+    fn deliveries_are_signed_with_the_secret() {
+        assert_eq!(signing_key("master"), b"master");
     }
 
     #[tokio::test]

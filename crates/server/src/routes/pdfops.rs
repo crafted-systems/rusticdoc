@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 
+use axum::Json;
 use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::{Extension, Json};
 use rusticdoc_core::pdfops::{
     Attachment, Bookmark, FacturxProfile, Metadata, Overlay, OverlayKind, Position, Rotation,
     SplitMode, require_pdf, sign,
@@ -15,7 +15,6 @@ use rusticdoc_core::pdfops::{
 use rusticdoc_core::{Document, Output};
 use utoipa::ToSchema;
 
-use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::routes::form::{Form, request_id, zip};
 use crate::routes::forms::finish;
@@ -174,7 +173,7 @@ pub struct SignForm {
     /// also annotations. Only the document's first signature can certify.
     pub certify: Option<u8>,
     /// With `signature=certificate`: a named key from `RUSTICDOC_SIGNING_KEYS`
-    /// instead of the default one. A caller not on its allow list gets 403.
+    /// instead of the default one.
     #[schema(rename = "signingKey")]
     pub signing_key: Option<String>,
     #[schema(rename = "outputFilename")]
@@ -233,7 +232,7 @@ fn pdf_output(name: String, doc: Document, stage: &str) -> Output {
     post, path = "/v1/pdf/split", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = SplitForm),
     responses((status = 200, description = "A PDF, or a ZIP of PDFs", content_type = "application/octet-stream", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn split(
     State(state): State<AppState>,
@@ -304,7 +303,7 @@ pub async fn split(
     post, path = "/v1/pdf/flatten", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = PdfForm),
     responses((status = 200, description = "The flattened PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn flatten(
     State(state): State<AppState>,
@@ -333,7 +332,7 @@ pub async fn flatten(
     post, path = "/v1/pdf/rotate", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = RotateForm),
     responses((status = 200, description = "The rotated PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn rotate(
     State(state): State<AppState>,
@@ -367,7 +366,7 @@ pub async fn rotate(
     post, path = "/v1/pdf/optimize", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = PdfForm),
     responses((status = 200, description = "The smaller PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn optimize(
     State(state): State<AppState>,
@@ -396,7 +395,7 @@ pub async fn optimize(
     post, path = "/v1/pdf/metadata/read", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = PdfForm),
     responses((status = 200, description = "Per file name", body = Object), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn metadata_read(
     State(state): State<AppState>,
@@ -426,7 +425,7 @@ pub async fn metadata_read(
     post, path = "/v1/pdf/metadata/write", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = MetadataWriteForm),
     responses((status = 200, description = "The PDF with its metadata changed", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn metadata_write(
     State(state): State<AppState>,
@@ -466,7 +465,7 @@ pub async fn metadata_write(
     post, path = "/v1/pdf/bookmarks/read", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = PdfForm),
     responses((status = 200, description = "Per file name", body = Object), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn bookmarks_read(
     State(state): State<AppState>,
@@ -496,7 +495,7 @@ pub async fn bookmarks_read(
     post, path = "/v1/pdf/bookmarks/write", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = BookmarksWriteForm),
     responses((status = 200, description = "The PDF with its outline replaced", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn bookmarks_write(
     State(state): State<AppState>,
@@ -534,7 +533,7 @@ pub async fn bookmarks_write(
     post, path = "/v1/pdf/embed", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = EmbedForm),
     responses((status = 200, description = "The PDF with attachments", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn embed(
     State(state): State<AppState>,
@@ -653,7 +652,7 @@ fn overlay_from(form: &mut Form) -> ApiResult<Overlay> {
     post, path = "/v1/pdf/watermark", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = MarkForm),
     responses((status = 200, description = "The watermarked PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn watermark(
     State(state): State<AppState>,
@@ -686,7 +685,7 @@ pub async fn watermark(
     post, path = "/v1/pdf/stamp", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = MarkForm),
     responses((status = 200, description = "The stamped PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn stamp(
     State(state): State<AppState>,
@@ -778,15 +777,13 @@ const CERTIFICATE_FIELDS: [&str; 7] = [
         (status = 200, description = "The signed PDF", content_type = "application/pdf", body = BinaryFile),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody),
-        (status = 403, description = "The caller may not use the signing key, or may not renew", body = ErrorBody),
         (status = 502, description = "The timestamp authority or a revocation source failed", body = ErrorBody),
         (status = 503, description = "signature=certificate and no signing key is configured, the level or the renewal needs a timestamp authority that is not configured, or a certificate has expired or been revoked", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn sign(
     State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
@@ -795,8 +792,8 @@ pub async fn sign(
     let doc = one_pdf(&mut form)?;
     match form.field("signature").map(str::trim).unwrap_or("image") {
         "" | "image" => sign_with_images(state, hook, headers, form, doc).await,
-        "certificate" => sign_with_certificate(state, principal, hook, headers, form, doc).await,
-        "renew" => renew_timestamp(state, principal, hook, headers, form, doc).await,
+        "certificate" => sign_with_certificate(state, hook, headers, form, doc).await,
+        "renew" => renew_timestamp(state, hook, headers, form, doc).await,
         other => Err(ApiError::bad_request(format!(
             "'signature' must be image, certificate or renew, not '{other}'"
         ))),
@@ -810,7 +807,6 @@ const PLACEMENT_FIELDS: [&str; 4] = ["page", "x", "y", "width"];
 /// ends with, and a new document timestamp after it. No key is used.
 async fn renew_timestamp(
     state: AppState,
-    principal: Principal,
     hook: crate::jobs::Delivery,
     headers: HeaderMap,
     form: Form,
@@ -833,7 +829,6 @@ async fn renew_timestamp(
         ));
     }
     let signing = &state.engines.signing;
-    crate::signing::authorize_renewal(signing, &principal)?;
     signing.check_renewal()?;
     let name = output_name(&form, &doc, "");
     let st = state.clone();
@@ -928,7 +923,6 @@ async fn sign_with_images(
 /// service's keys. The key never comes from the request.
 async fn sign_with_certificate(
     state: AppState,
-    principal: Principal,
     hook: crate::jobs::Delivery,
     headers: HeaderMap,
     mut form: Form,
@@ -941,7 +935,6 @@ async fn sign_with_certificate(
         signing.key(None)?;
     }
     let mut options = sign::SignOptions::from_fields(&|name| form.field(name).map(String::from))?;
-    crate::signing::authorize(signing, &principal, &options)?;
     let mut images = std::mem::take(&mut form.files);
     if images.len() > 1 {
         return Err(ApiError::bad_request(
@@ -1011,7 +1004,7 @@ pub fn appearance(form: &Form, image: Option<Document>) -> ApiResult<Option<sign
     post, path = "/v1/pdf/factur-x", tag = "pdf",
     request_body(content_type = "multipart/form-data", content = FacturxForm),
     responses((status = 200, description = "The Factur-X PDF", content_type = "application/pdf", body = BinaryFile), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn facturx(
     State(state): State<AppState>,

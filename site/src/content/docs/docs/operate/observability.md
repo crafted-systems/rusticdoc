@@ -61,7 +61,7 @@ Each request logs one line with `log_type` set to `access`. A status of 500 or a
 |---|---|
 | `correlation_id` | The request id |
 | `remote_addr` | The peer's address. Behind a proxy, that's the proxy |
-| `caller` | A short form of the credential, like `key:024a24260d62`. It's `none` when a request was refused for having no credentials, and `-` when the service has none configured. The key itself is never logged |
+| `caller` | `key` for a request with the API key. A refused request shows where its credential came from and the start of its digest, like `key:024a24260d62`, or `none` if it had no credentials. It's `-` when the service has none configured. The key itself is never logged, and neither is a digest of it |
 | `host`, `method`, `path`, `referer`, `user_agent` | Taken from the request |
 | `status` | The HTTP status |
 | `latency`, `latency_human`, `latency_ms` | Time taken, in nanoseconds, as text, and in milliseconds |
@@ -153,7 +153,7 @@ A caller the service knows gets the detail, and so does anyone when no credentia
 | `engines.libreoffice`, `engines.qpdf` | Whether each engine is configured |
 | `details.libreoffice.status` | `up` or `down`, depending on whether it's configured |
 | `details.libreoffice.pool` | `workers`, `busy`, `idle`, `started`, `restarts` and `max_jobs` |
-| `details.store` | Only with a store: `fontsSynced`, and for an admin, or when no credentials are configured, `location` |
+| `details.store` | Only with a store: `fontsSynced` and `location` |
 
 When credentials are configured, a caller without them only sees `{"status":"up"}`.
 

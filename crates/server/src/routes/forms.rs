@@ -75,7 +75,7 @@ pub struct OverlayForm {
     post, path = "/v1/pdf/forms/fields", tag = "pdf-forms",
     request_body(content_type = "multipart/form-data", content = FieldsForm),
     responses((status = 200, description = "The form fields", body = Vec<FieldSchema>), (status = 400, description = "The request is wrong", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn fields(
     State(state): State<AppState>,
@@ -103,7 +103,7 @@ pub async fn fields(
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn fill(
     State(state): State<AppState>,
@@ -170,7 +170,7 @@ pub async fn fill(
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 501, description = "Not supported in this version", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn overlay(
     State(state): State<AppState>,

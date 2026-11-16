@@ -14,8 +14,7 @@ These are the settings that decide capacity, the arithmetic behind the memory li
 | `RUSTICDOC_WORKERS` | `2` | LibreOffice conversions running at the same time. Each worker is a long-lived process |
 | `RUSTICDOC_LIBREOFFICE_MAX_JOBS` | `10` | Jobs a LibreOffice worker does before it restarts |
 | `RUSTICDOC_RENDER_WORKERS` | `4` | Templates being evaluated at the same time. Each worker is a short-lived process |
-| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook jobs running at the same time |
-| `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | The same, for one caller |
+| `RUSTICDOC_MAX_ASYNC_JOBS` | `8` | Webhook and background jobs running at the same time |
 
 A request waits for a free worker, and if it's still waiting at `RUSTICDOC_API_TIMEOUT` it fails with `503`. So if conversions keep timing out under load and the pool is always busy, you need more LibreOffice workers, more replicas or a longer timeout.
 

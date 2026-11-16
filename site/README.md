@@ -39,7 +39,7 @@ npm run build
 | `brand-fonts.zip`, `font.ttf` | A ZIP holding one TrueType font, and that font |
 | `logo.png` | A small PNG |
 
-Blocks run under `bash -euo pipefail`, one block per shell, with `curl` set to fail on an HTTP error, so a block has to make its own state. `KEY` and `ADMIN_KEY` are set; the service ignores them because it has no credentials configured. Add `test=fail` to a block that must fail, to show an error response.
+Blocks run under `bash -euo pipefail`, one block per shell, with `curl` set to fail on an HTTP error, so a block has to make its own state. `KEY` is set; the service ignores it because it has no credentials configured. Add `test=fail` to a block that must fail, to show an error response.
 
 ## Stale code block styles
 

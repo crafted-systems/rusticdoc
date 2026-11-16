@@ -46,7 +46,7 @@ pub struct EncryptForm {
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn merge(
     State(state): State<AppState>,
@@ -85,7 +85,7 @@ pub async fn merge(
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn encrypt(
     State(state): State<AppState>,

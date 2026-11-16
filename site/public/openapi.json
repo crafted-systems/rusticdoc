@@ -78,7 +78,7 @@
           "templates"
         ],
         "summary": "List aliases",
-        "description": "Lists this caller's aliases by name, each with the template it names now.",
+        "description": "Lists the aliases by name, each with the template it names now.",
         "operationId": "listAliases",
         "parameters": [
           {
@@ -145,9 +145,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -183,7 +180,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such alias",
+            "description": "No such alias",
             "content": {
               "application/json": {
                 "schema": {
@@ -219,9 +216,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       },
@@ -300,7 +294,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such template",
+            "description": "No such template",
             "content": {
               "application/json": {
                 "schema": {
@@ -336,9 +330,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       },
@@ -365,7 +356,7 @@
             "description": "Deleted"
           },
           "404": {
-            "description": "This caller has no such alias",
+            "description": "No such alias",
             "content": {
               "application/json": {
                 "schema": {
@@ -401,9 +392,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -467,9 +455,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -503,9 +488,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       },
@@ -514,7 +496,7 @@
           "fonts"
         ],
         "summary": "Upload fonts",
-        "description": "Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,\nor one such file. Takes an admin. They are in use on this replica when this\nreturns, and on the others within `syncIntervalSeconds`.",
+        "description": "Stores fonts for every caller and every replica: a ZIP of TTF, OTF or TTC files,\nor one such file. They are in use on this replica when this\nreturns, and on the others within `syncIntervalSeconds`.",
         "operationId": "uploadFonts",
         "requestBody": {
           "content": {
@@ -548,7 +530,7 @@
             }
           },
           "403": {
-            "description": "Needs an admin, or the store is full",
+            "description": "The store is full",
             "content": {
               "application/json": {
                 "schema": {
@@ -584,9 +566,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -637,9 +616,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -650,7 +626,7 @@
           "fonts"
         ],
         "summary": "Delete a font",
-        "description": "Deletes a stored font. Takes an admin. It leaves this replica when this\nreturns, and the others within the sync interval. Documents that name it fall\nback to another font.",
+        "description": "Deletes a stored font. It leaves this replica when this\nreturns, and the others within the sync interval. Documents that name it fall\nback to another font.",
         "operationId": "deleteFont",
         "parameters": [
           {
@@ -666,16 +642,6 @@
         "responses": {
           "204": {
             "description": "Deleted"
-          },
-          "403": {
-            "description": "Needs an admin",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
           },
           "404": {
             "description": "No such stored font",
@@ -714,9 +680,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -752,7 +715,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such job, or it expired",
+            "description": "There is no such job, or it expired",
             "content": {
               "application/json": {
                 "schema": {
@@ -788,9 +751,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -826,7 +786,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such job, or it expired",
+            "description": "There is no such job, or it expired",
             "content": {
               "application/json": {
                 "schema": {
@@ -872,9 +832,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -925,9 +882,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -978,9 +932,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1044,9 +995,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1097,9 +1045,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1163,9 +1108,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1216,9 +1158,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1269,9 +1208,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1335,9 +1271,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1411,9 +1344,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1477,9 +1407,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1530,9 +1457,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1583,9 +1507,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1636,9 +1557,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1702,9 +1620,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1755,9 +1670,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1804,16 +1716,6 @@
               }
             }
           },
-          "403": {
-            "description": "The caller may not use the signing key, or may not renew",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
           "502": {
             "description": "The timestamp authority or a revocation source failed",
             "content": {
@@ -1841,9 +1743,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1894,9 +1793,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -1947,9 +1843,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2000,9 +1893,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2013,7 +1903,7 @@
           "render"
         ],
         "summary": "Render a template",
-        "description": "Fills a template and runs the steps.\n\nSend a multipart form, or JSON with a `templateId` (see `RenderJson`).\n\nAdd `Prefer: respond-async` to get 202 at once, with the job in the body and\nits address in `Location`, and fetch the result from `/v1/jobs/{id}/result`\nonce it is done. This needs `RUSTICDOC_STORE`.\n\nAdd `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its\nown key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself\nwhen the service requires no credentials; `rusticdoc webhook-secret` prints it.",
+        "description": "Fills a template and runs the steps.\n\nSend a multipart form, or JSON with a `templateId` (see `RenderJson`).\n\nAdd `Prefer: respond-async` to get 202 at once, with the job in the body and\nits address in `Location`, and fetch the result from `/v1/jobs/{id}/result`\nonce it is done. This needs `RUSTICDOC_STORE`.\n\nAdd `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.\nWith `RUSTICDOC_WEBHOOK_SECRET` set, deliveries are signed:\n`X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of\n`<timestamp>.<event>.<request id>.<body>`, with the timestamp in\n`X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in\n`X-Request-Id`. The key is the secret's bytes.",
         "operationId": "render",
         "parameters": [
           {
@@ -2149,9 +2039,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2256,9 +2143,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2269,7 +2153,7 @@
           "templates"
         ],
         "summary": "List templates",
-        "description": "Lists this caller's templates, oldest first.",
+        "description": "Lists the stored templates, oldest first.",
         "operationId": "listTemplates",
         "parameters": [
           {
@@ -2336,9 +2220,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       },
@@ -2381,7 +2262,7 @@
             }
           },
           "403": {
-            "description": "This caller's quota is used up",
+            "description": "The store's quota is used up",
             "content": {
               "application/json": {
                 "schema": {
@@ -2437,9 +2318,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2520,9 +2398,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2578,9 +2453,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2641,9 +2513,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2679,7 +2548,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such template",
+            "description": "No such template",
             "content": {
               "application/json": {
                 "schema": {
@@ -2715,9 +2584,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       },
@@ -2744,7 +2610,7 @@
             "description": "Deleted"
           },
           "404": {
-            "description": "This caller has no such template",
+            "description": "No such template",
             "content": {
               "application/json": {
                 "schema": {
@@ -2780,9 +2646,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2818,7 +2681,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such template",
+            "description": "No such template",
             "content": {
               "application/json": {
                 "schema": {
@@ -2854,9 +2717,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -2927,7 +2787,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such template",
+            "description": "No such template",
             "content": {
               "application/json": {
                 "schema": {
@@ -2973,9 +2833,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -3011,7 +2868,7 @@
             }
           },
           "404": {
-            "description": "This caller has no such template",
+            "description": "No such template",
             "content": {
               "application/json": {
                 "schema": {
@@ -3057,9 +2914,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -3090,9 +2944,6 @@
           },
           {
             "bearer": []
-          },
-          {
-            "basic": []
           }
         ]
       }
@@ -4818,7 +4669,7 @@
               "string",
               "null"
             ],
-            "description": "With `signature=certificate`: a named key from `RUSTICDOC_SIGNING_KEYS`\ninstead of the default one. A caller not on its allow list gets 403."
+            "description": "With `signature=certificate`: a named key from `RUSTICDOC_SIGNING_KEYS`\ninstead of the default one."
           },
           "width": {
             "type": [
@@ -5145,10 +4996,6 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-api-key"
-      },
-      "basic": {
-        "type": "http",
-        "scheme": "basic"
       },
       "bearer": {
         "type": "http",

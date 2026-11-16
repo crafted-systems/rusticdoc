@@ -21,8 +21,6 @@ pub struct AppState {
     pub jobs: crate::jobs::JobLimiter,
     /// Room for request bodies held in memory.
     pub admission: crate::admission::Admission,
-    /// Verifies bearer tokens when OpenID Connect is on.
-    pub oidc: Option<Arc<crate::oidc::Verifier>>,
     /// The loaded fonts, scanned on first use and on reload.
     pub fonts: Arc<tokio::sync::RwLock<Option<Arc<Vec<rusticdoc_core::fonts::FontInfo>>>>>,
     /// The fonts directory's signature and when a reload last ran.
@@ -76,19 +74,11 @@ impl AppState {
         let pipeline = Pipeline::new(engines.clone(), config.api_timeout)
             .with_max_output(config.max_render_bytes)
             .with_renderer(renderer);
-        let oidc = config
-            .oidc
-            .clone()
-            .map(|oidc| Arc::new(crate::oidc::Verifier::new(oidc)));
         Self {
             url_policies: crate::webhook::UrlPolicies::from_config(&config)
                 .expect("patterns are checked before the service starts"),
-            jobs: crate::jobs::JobLimiter::new(
-                config.max_async_jobs,
-                config.max_async_jobs_per_caller,
-            ),
+            jobs: crate::jobs::JobLimiter::new(config.max_async_jobs),
             admission: crate::admission::Admission::new(config.max_inflight_bytes),
-            oidc,
             store: config.store.as_deref().map(|url| {
                 Arc::new(
                     rusticdoc_core::store::Store::open(url)

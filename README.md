@@ -120,7 +120,7 @@ curl -F files=@report.docx http://localhost:9027/v1/convert -o report.pdf
 ```
 
 > [!WARNING]
-> With no credentials configured, anyone who can reach the service can use it. Set `RUSTICDOC_API_KEYS` before you expose it, and read [security](https://rusticdoc.com/docs/operate/security/) for the rest.
+> With no credentials configured, anyone who can reach the service can use it. Set `RUSTICDOC_API_KEY` before you expose it, and read [security](https://rusticdoc.com/docs/operate/security/) for the rest.
 
 [Install](https://rusticdoc.com/docs/start/install/) covers Compose, building from source and the CLI downloads for Linux and macOS.
 

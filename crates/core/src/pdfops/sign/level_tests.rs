@@ -653,22 +653,14 @@ fn text_appearances_name_the_signer_the_date_and_the_reason() {
 #[test]
 fn named_keys_and_levels_are_checked_before_any_work() {
     let key = super::tests::self_signed(&rcgen::PKCS_ECDSA_P256_SHA256);
-    let signing = Signing::with_default(super::tests::signer(&key)).with_named(
-        "acme",
-        super::tests::signer(&key),
-        vec!["tenant:acme".into()],
-    );
+    let signing = Signing::with_default(super::tests::signer(&key))
+        .with_named("acme", super::tests::signer(&key));
     assert!(signing.check(&SignOptions::default()).is_ok());
     let named = SignOptions {
         key: Some("acme".into()),
         ..SignOptions::default()
     };
     assert!(signing.check(&named).is_ok());
-    assert_eq!(
-        signing.allow_list(Some("acme")).unwrap(),
-        Some(&["tenant:acme".to_string()][..])
-    );
-    assert_eq!(signing.allow_list(None).unwrap(), None);
     let unknown = SignOptions {
         key: Some("globex".into()),
         ..SignOptions::default()

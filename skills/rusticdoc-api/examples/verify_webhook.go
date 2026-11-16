@@ -3,8 +3,7 @@
 //	RUSTICDOC_SIGNING_KEY=<hex> PORT=8000 go run verify_webhook.go
 //
 // Standard library only. RUSTICDOC_SIGNING_KEY is the hex that `rusticdoc
-// webhook-secret` prints for the calling key, run where RUSTICDOC_WEBHOOK_SECRET
-// is set. A verified result is saved in ./received.
+// webhook-secret` prints, run where RUSTICDOC_WEBHOOK_SECRET is set. A verified result is saved in ./received.
 package main
 
 import (

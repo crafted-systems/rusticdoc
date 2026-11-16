@@ -14,17 +14,11 @@ rusticdoc is a self-hosted document service: one container, usually on port 9027
 
 Run `bash scripts/detect.sh`. It reports whether `RUSTICDOC_URL` answers and which version it runs, whether a key is needed, and whether the CLI or Docker is there. `bash scripts/call.sh /v1/<path> [curl -F arguments]` calls the service with the URL and key from the environment and prints the status on stderr.
 
-**Authentication.** With no credentials configured, anyone who can reach the service may call it, and it warns at start. Otherwise send one of:
-
-| Credential | Header |
-|---|---|
-| API key or tenant key | `X-Api-Key: <key>`, or `Authorization: Bearer <key>` (with a capital B) |
-| OpenID Connect token | `Authorization: Bearer <jwt>` |
-| Basic auth | `Authorization: Basic …` (`curl -u user:pass`) |
+**Authentication.** With no key configured, anyone who can reach the service may call it, and it warns at start. Otherwise send the service's API key as `X-Api-Key: <key>`, or as `Authorization: Bearer <key>` (with a capital B). The key is the only credential.
 
 Read the key from the environment, for example `RUSTICDOC_API_KEY`. Never hard-code it, log it, or print it. `/health`, `/ready` and `/openapi.json` are open. Everything under `/v1` needs credentials when they're configured.
 
-**Each caller has its own stored templates, aliases, jobs and webhook signing key.** Another caller's id answers `404`.
+**Stored templates, aliases and background jobs are one set for the whole store.** None of them, nor the webhook signing key, depends on the API key.
 
 ## 2. Endpoints
 
@@ -124,7 +118,7 @@ bash $S /v1/pdf/forms/fill -F files=@form.pdf -F data=@data.json -F flatten=true
 
 You can't ask for both in one request. A mistake in the form still answers `400` at once and starts nothing. Jobs don't survive a restart and results expire after `RUSTICDOC_JOB_TTL` (one hour by default), so treat a missing result as a failure and send the request again.
 
-**Verifying a webhook.** With `RUSTICDOC_WEBHOOK_SECRET` set, each delivery has `X-Rusticdoc-Timestamp`, `X-Rusticdoc-Event` (`render.completed` or `render.failed`), `X-Request-Id` and `X-Rusticdoc-Signature: v1=<hex>`. The signature is the HMAC-SHA256 of `<timestamp>.<event>.<request id>.<raw body bytes>`, with the caller's own signing key. The operator prints that key with `rusticdoc webhook-secret --api-key <key>` (or `--tenant`, `--basic-user`, `--oidc-subject`), and the receiver decodes the hex. Verify over the raw body, compare in constant time, and reject a timestamp older than about five minutes. Deliveries can repeat, so deduplicate on `X-Request-Id`. `examples/verify_webhook.py`, `examples/verify_webhook.ts` and `examples/verify_webhook.go` are working receivers.
+**Verifying a webhook.** With `RUSTICDOC_WEBHOOK_SECRET` set, each delivery has `X-Rusticdoc-Timestamp`, `X-Rusticdoc-Event` (`render.completed` or `render.failed`), `X-Request-Id` and `X-Rusticdoc-Signature: v1=<hex>`. The signature is the HMAC-SHA256 of `<timestamp>.<event>.<request id>.<raw body bytes>`, with the signing key, which is the bytes of `RUSTICDOC_WEBHOOK_SECRET`. The operator prints it as hex with `rusticdoc webhook-secret`, and the receiver decodes the hex. Verify over the raw body, compare in constant time, and reject a timestamp older than about five minutes. Deliveries can repeat, so deduplicate on `X-Request-Id`. `examples/verify_webhook.py`, `examples/verify_webhook.ts` and `examples/verify_webhook.go` are working receivers.
 
 ## 6. Errors
 
@@ -134,8 +128,8 @@ Errors are JSON: `{"error": "<code>", "message": "…"}`. Match on `error`, neve
 |---|---|---|
 | `400` | `invalid_request` | A missing file, an unknown step, bad JSON, a step that needs a PDF, a form over the body limit. The message names the field |
 | `401` | `unauthorized` | No key, or the wrong one |
-| `403` | `quota_exceeded`, `url_not_allowed`, `admin_required` | Store quota, the webhook or `downloadFrom` lists, font routes |
-| `404` | `not_found` | No such template, alias or job for this caller |
+| `403` | `quota_exceeded`, `url_not_allowed` | Store quota, the webhook or `downloadFrom` lists |
+| `404` | `not_found` | No such template, alias or job |
 | `409` | `job_not_done`, `job_failed` | Results asked for too early, or a job that failed |
 | `413` | `template_too_large`, `payload_too_large`, `reported` | Size limits, or a render that needed too much memory |
 | `422` | `template_error` | A syntax error, a missing value or an unknown filter. Validate to see every problem |
@@ -182,7 +176,7 @@ In code: set a client timeout longer than the service's (`RUSTICDOC_API_TIMEOUT`
 | `references/stored-templates.md` | Storing, aliases and versions, JSON bodies, variables, previews, scope, limits |
 | `references/background-jobs.md` | Jobs in detail |
 | `references/webhooks.md` | Webhook headers, retries, URL rules, signatures |
-| `references/authentication.md` | Keys, tenant keys, basic auth, OpenID Connect, admins |
+| `references/authentication.md` | Keys, which routes stay open |
 | `references/fonts.md` | Fonts per request, stored fonts, finding missing ones |
 | `references/errors.md` | Every error code |
 | `references/cli.md` | Every CLI command and option |

@@ -150,7 +150,7 @@ The service signs with the key and certificate in `RUSTICDOC_SIGNING_KEY` and `R
 | `page`, `x`, `y`, `width` | No | Where the signature is shown. If you sent an image, it goes there, as above. Otherwise a box of text goes there with who signed (`signerName`, or the certificate's common name), the date and time, and the reason and location if given, and `width` defaults to 200 points. `page` defaults to 1. Leave all four out for an invisible signature |
 | `level` | No | `b-b`, `b-t`, `b-lt` or `b-lta` (see [levels](#levels)). Defaults to `RUSTICDOC_SIGNING_LEVEL`, which is `b-b` unless you set it |
 | `certify` | No | Certifies the document instead of approving it, with a DocMDP permission: `1` for no changes at all, `2` for filling forms and signing, `3` for those plus annotations. Only a document's first signature can certify |
-| `signingKey` | No | A named key from `RUSTICDOC_SIGNING_KEYS` instead of the default one. A caller who isn't on its allow list gets a `403` |
+| `signingKey` | No | A named key from `RUSTICDOC_SIGNING_KEYS` instead of the default one |
 | `reason` | No | Why the document was signed |
 | `location` | No | Where it was signed |
 | `contactInfo` | No | How to reach the signer |
@@ -190,7 +190,7 @@ If any of these fails, the request fails with a `502` that names it, and you nev
 Every level validates in poppler's `pdfsig` and in pyHanko 0.38, which reports `VALID`. `pdfsig` reports the signature as valid over the total document for B-B and B-T, and over its revision for B-LT and B-LTA, because it doesn't check their later updates. With the timestamp authority and revocation servers stopped, pyHanko still validates the B-LT and B-LTA files with revocation checking on, from what they hold, the B-LTA document timestamp included. `make sign-check` repeats these checks against a local timestamp authority, OCSP responder and CRL.
 
 :::note[Limits]
-- Keys are RSA (PKCS#1 v1.5, SHA-256) or ECDSA P-256, from PEM files or a PKCS#11 token. Anyone who can call this route signs with the default key unless `RUSTICDOC_SIGNING_ALLOW` restricts it, so put the route behind [authentication](/docs/guides/authentication/).
+- Keys are RSA (PKCS#1 v1.5, SHA-256) or ECDSA P-256, from PEM files or a PKCS#11 token. Anyone who can call this route signs with every key the service holds, so put the route behind [authentication](/docs/guides/authentication/).
 - Each request adds one signature. To sign again, send the signed file back.
 - With a self-signed certificate the signature validates as intact, but the signer is reported as untrusted and there's nothing to put in a DSS.
 - Text appearances use Helvetica, so characters outside Windows-1252 show as `?`.
@@ -215,7 +215,6 @@ It uses no signing key, only `RUSTICDOC_SIGNING_TSA_URL` and `RUSTICDOC_SIGNING_
 | Status | When |
 |---|---|
 | `400` | The file isn't signed at B-LTA, or it doesn't end in a document timestamp that the service trusts and that covers the file unchanged |
-| `403` | Signing keys are configured and the caller is on no key's allow list. With no key configured, any caller of the API can renew |
 | `502` | The timestamp authority or a revocation source failed. You never get a file that's only partly renewed |
 | `503` | No timestamp authority is configured |
 

@@ -2,7 +2,8 @@
 //! renders `invoice`; storing a new template and pointing `invoice` at it is a
 //! new version, and every earlier one stays listed and renderable as
 //! `invoice@2`. Nothing in the store is changed: each version is a record of its
-//! own, and the newest is the alias. Aliases are scoped as templates are.
+//! own, and the newest is the alias. Aliases are one set for the store, as
+//! templates are.
 
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{StatusCode, header};
@@ -15,7 +16,7 @@ use utoipa::ToSchema;
 use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::routes::form::Form;
-use crate::routes::templates::{ListParams, resolve_id, scope, store_of, user_store_error};
+use crate::routes::templates::{ListParams, SCOPE, resolve_id, store_of, user_store_error};
 use crate::state::AppState;
 
 /// The most aliases one page lists.
@@ -106,11 +107,11 @@ fn bad_name(name: &str) -> ApiError {
         (status = 201, description = "A new alias", body = AliasSchema),
         (status = 400, description = "Not a usable name, or no template named", body = ErrorBody),
         (status = 403, description = "Too many aliases, or versions of this one", body = ErrorBody),
-        (status = 404, description = "This caller has no such template", body = ErrorBody),
+        (status = 404, description = "No such template", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn set(
     State(state): State<AppState>,
@@ -129,9 +130,9 @@ pub async fn set(
         .filter(|r| !r.is_empty())
         .ok_or_else(|| ApiError::bad_request("send the 'templateId' the alias is to name"))?
         .to_string();
-    let scope = scope(&state, &principal);
-    let id = resolve_id(&store, &scope, &reference).await?;
-    let versions = store.alias_versions(&scope, &name).await?;
+    let scope = SCOPE;
+    let id = resolve_id(&store, scope, &reference).await?;
+    let versions = store.alias_versions(scope, &name).await?;
     if versions >= MAX_ALIAS_VERSIONS {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
@@ -142,24 +143,24 @@ pub async fn set(
         ));
     }
     if versions == 0 {
-        let count = store.alias_count(&scope).await?;
+        let count = store.alias_count(scope).await?;
         if count >= state.config.max_templates {
             return Err(ApiError::new(
                 StatusCode::FORBIDDEN,
                 "quota_exceeded",
                 format!(
-                    "this caller holds {count} aliases; the limit is {}, as for templates",
+                    "the store holds {count} aliases; the limit is {}, as for templates",
                     state.config.max_templates
                 ),
             ));
         }
     }
     let meta: AliasMeta = store
-        .set_alias(&scope, &name, &id)
+        .set_alias(scope, &name, &id)
         .await
         .map_err(user_store_error)?;
     tracing::info!(
-        log_type = "audit", action = "alias.set", caller = %principal.short(),
+        log_type = "audit", action = "alias.set", caller = %principal.0,
         alias = %name, template = %id, version = meta.version, "alias set"
     );
     let root = state.config.root_path.trim_end_matches('/');
@@ -185,20 +186,19 @@ pub async fn set(
     params(("name" = String, Path, description = "The alias")),
     responses(
         (status = 200, description = "The alias and its versions", body = AliasHistorySchema),
-        (status = 404, description = "This caller has no such alias", body = ErrorBody),
+        (status = 404, description = "No such alias", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn show(
     State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<AliasHistory>> {
     let store = store_of(&state)?;
     let history = store
-        .alias_history(&scope(&state, &principal), &name)
+        .alias_history(SCOPE, &name)
         .await
         .map_err(user_store_error)?;
     Ok(Json(history))
@@ -206,7 +206,7 @@ pub async fn show(
 
 /// List aliases
 ///
-/// Lists this caller's aliases by name, each with the template it names now.
+/// Lists the aliases by name, each with the template it names now.
 #[utoipa::path(
     get, path = "/v1/aliases", tag = "templates", operation_id = "listAliases",
     params(ListParams),
@@ -215,17 +215,16 @@ pub async fn show(
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<Json<AliasPage>> {
     let store = store_of(&state)?;
     let limit = params.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
     let page = store
-        .list_aliases(&scope(&state, &principal), limit, params.cursor.as_deref())
+        .list_aliases(SCOPE, limit, params.cursor.as_deref())
         .await?;
     Ok(Json(page))
 }
@@ -239,11 +238,11 @@ pub async fn list(
     params(("name" = String, Path, description = "The alias")),
     responses(
         (status = 204, description = "Deleted"),
-        (status = 404, description = "This caller has no such alias", body = ErrorBody),
+        (status = 404, description = "No such alias", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn remove(
     State(state): State<AppState>,
@@ -252,11 +251,11 @@ pub async fn remove(
 ) -> ApiResult<StatusCode> {
     let store = store_of(&state)?;
     store
-        .delete_alias(&scope(&state, &principal), &name)
+        .delete_alias(SCOPE, &name)
         .await
         .map_err(user_store_error)?;
     tracing::info!(
-        log_type = "audit", action = "alias.delete", caller = %principal.short(),
+        log_type = "audit", action = "alias.delete", caller = %principal.0,
         alias = %name, "alias deleted"
     );
     Ok(StatusCode::NO_CONTENT)

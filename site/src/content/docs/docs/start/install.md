@@ -37,7 +37,7 @@ docker run -d --name rusticdoc \
 
 Don't add `--init`. The service runs as PID 1 so that it can close its `/proc/1/environ` to the user LibreOffice runs as. With `--init`, PID 1 is `docker-init` instead, and its environment, which holds your keys, can be read from inside the container.
 
-With no credentials set, the service accepts requests from anyone and logs a warning every time it starts. Set `RUSTICDOC_API_KEYS` before you publish the port more widely. [Docker](/docs/operate/docker/) goes further, including limits on memory and processes.
+With no credentials set, the service accepts requests from anyone and logs a warning every time it starts. Set `RUSTICDOC_API_KEY` before you publish the port more widely. [Docker](/docs/operate/docker/) goes further, including limits on memory and processes.
 
 ## Compose
 

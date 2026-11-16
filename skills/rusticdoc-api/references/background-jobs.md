@@ -110,17 +110,17 @@ As on a synchronous response, an engine failure is reported by the name of its s
 | `200` | The job is done |
 | `409 job_not_done` | It's still queued or running. Check the job first |
 | `409 job_failed` | It failed, so there's no file. The error is on the job |
-| `404 not_found` | No such job for this caller, or it expired |
+| `404 not_found` | No such job, or it expired |
 
 ## How long a job is kept
 
-A job and its result are kept for `RUSTICDOC_JOB_TTL` (default `1h`) after the job ends. One caller's results may hold `RUSTICDOC_MAX_JOB_STORAGE` (default `5GB`) at a time; a job whose result would go past that fails with `quota_exceeded`. After that, both routes return `404` immediately. Each replica clears expired jobs out of the store every quarter of the TTL, at least 10 seconds and at most 10 minutes apart.
+A job and its result are kept for `RUSTICDOC_JOB_TTL` (default `1h`) after the job ends. The results in a store may hold `RUSTICDOC_MAX_JOB_STORAGE` (default `5GB`) at a time; a job whose result would go past that fails with `quota_exceeded`. After that, both routes return `404` immediately. Each replica clears expired jobs out of the store every quarter of the TTL, at least 10 seconds and at most 10 minutes apart.
 
 A job runs on the replica that accepted it, so if that replica stops before the job ends, nothing finishes it. Once `runsUntil` passes, the job shows as `failed` with `job_lost` and a `503` status, and it's removed a TTL later. Send the request again.
 
 ## Who sees a job
 
-Jobs always belong to the caller that started them, whatever `RUSTICDOC_STORE_SCOPE` says, because results hold the caller's data. Another caller's job id gets a `404`. Every key of a [tenant](authentication.md#tenant-keys) is the same caller, so a job started with one key can be fetched with another.
+Jobs are one set for the whole store, as [templates](stored-templates.md#scope) are. Any service on the store answers for a job, whatever its API key, and a job stays when you replace the key.
 
 ## Limits
 
@@ -128,9 +128,8 @@ Background jobs and webhook jobs share the same slots:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Total webhook and background jobs running at the same time |
-| `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | The same, for one caller |
+| `RUSTICDOC_MAX_ASYNC_JOBS` | `8` | Webhook and background jobs running at the same time |
 
-Past either limit, a request gets `429 too_many_jobs` before its body is read. A job holds its slot until its result is stored, and it has the same time limit the request would have synchronously: `RUSTICDOC_API_TIMEOUT`, or `RUSTICDOC_BATCH_TIMEOUT` for a batch or a multi-file conversion.
+Past the limit, a request gets `429 too_many_jobs` before its body is read. A job holds its slot until its result is stored, and it has the same time limit the request would have synchronously: `RUSTICDOC_API_TIMEOUT`, or `RUSTICDOC_BATCH_TIMEOUT` for a batch or a multi-file conversion.
 
 Results don't count towards any other limit, so what the store holds in jobs is whatever callers made within one TTL. If the store can't be reached when a request arrives, the request gets `503 store_unavailable` and no job starts.

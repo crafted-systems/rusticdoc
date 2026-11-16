@@ -12,7 +12,7 @@ async fn secrets_do_not_reach_child_processes() {
     // SAFETY: this is the only test in this binary, and it has not started threads
     // that read the environment yet.
     unsafe {
-        std::env::set_var("RUSTICDOC_API_KEYS", "the-api-key");
+        std::env::set_var("RUSTICDOC_API_KEY", "the-api-key");
         std::env::set_var("RUSTICDOC_WEBHOOK_SECRET", "the-secret");
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "another");
     }

@@ -64,7 +64,7 @@ pub struct ConvertForm {
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn convert(
     State(state): State<AppState>,
@@ -157,7 +157,7 @@ pub async fn convert(
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn convert_pdf(
     State(state): State<AppState>,

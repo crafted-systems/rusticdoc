@@ -14,7 +14,7 @@ const BASE = 'http://localhost:9027';
 
 const OVERVIEW = `
 
-Requests are multipart forms unless a route says otherwise. Send credentials with \`X-Api-Key\` or \`Authorization: Bearer\`, or use basic auth, as [Authentication](/docs/guides/authentication/) explains. Failures are JSON, as [Errors](/docs/reference/errors/) describes.
+Requests are multipart forms unless a route says otherwise. Send an API key with \`X-Api-Key\` or \`Authorization: Bearer\`, as [Authentication](/docs/guides/authentication/) explains. Failures are JSON, as [Errors](/docs/reference/errors/) describes.
 
 The examples call a service on \`localhost:9027\` and send an API key in \`$KEY\`. In curl that is a shell variable; the Node.js, Python and Go examples read an environment variable of the same name. Leave the header out if yours has no credentials configured.
 
@@ -123,9 +123,9 @@ const SAMPLES = {
   getJobResult: [{ params: { id: '$JOB' }, out: 'invoice.pdf' }],
 
   list: [{}],
-  uploadFonts: [{ key: '$ADMIN_KEY', form: ['file=@brand-fonts.zip'] }],
+  uploadFonts: [{ form: ['file=@brand-fonts.zip'] }],
   reload: [{ method: 'POST' }],
-  deleteFont: [{ key: '$ADMIN_KEY', method: 'DELETE', params: { id: '$FONT' } }],
+  deleteFont: [{ method: 'DELETE', params: { id: '$FONT' } }],
 
   merge: [{ form: ['files=@a.pdf', 'files=@b.pdf', 'outputFilename=both'], out: 'both.pdf' }],
   split: [{ form: ['files=@report.pdf', 'splitMode=intervals', 'splitSpan=1'], out: 'pages.zip' }],

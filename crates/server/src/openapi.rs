@@ -138,9 +138,5 @@ impl Modify for Security {
             "bearer",
             SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).build()),
         );
-        components.add_security_scheme(
-            "basic",
-            SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Basic).build()),
-        );
     }
 }

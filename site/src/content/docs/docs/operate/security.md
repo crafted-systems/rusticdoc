@@ -9,7 +9,7 @@ rusticdoc contains what a hostile document tries to do, and the [security overvi
 
 ## Before anyone else can reach it
 
-- Set credentials with `RUSTICDOC_API_KEYS`, basic auth or OpenID Connect, and set `RUSTICDOC_WEBHOOK_SECRET`. With none, anyone can use the service and it warns at every start. A half-configured setup stops it from starting. See [authentication](/docs/guides/authentication/).
+- Set `RUSTICDOC_API_KEY` and `RUSTICDOC_WEBHOOK_SECRET`. With no key, anyone can use the service and it warns at every start. See [authentication](/docs/guides/authentication/).
 - Rate limit at a reverse proxy. The per-caller and connection limits bound what one client can hold, but many clients together can still fill them for as long as the timeouts allow.
 - Terminate TLS in front of it, because the service speaks plain HTTP.
 - Rebuild the image regularly, because fixes from Debian only arrive when you rebuild. `make docker` uses the digests pinned in the `Dockerfile`.
@@ -23,8 +23,8 @@ rusticdoc contains what a hostile document tries to do, and the [security overvi
 
 - Run one container per tenant. The container is the boundary between them: a compromised LibreOffice runs as the service's user, and it can see other requests' temporary files while they exist.
 - Prefer a bucket with keys in the environment. A compromised LibreOffice can read anything else the service's user can, like a `file://` store or a web identity token mounted for a pod's S3 role.
-- Give each tenant its own key. A caller reaches only its own stored templates, aliases and jobs, and webhooks are signed per caller. See [authentication](/docs/guides/authentication/).
-- Keep the admin key to yourself. Fonts are one set for the whole deployment, and a font decides what the digits look like in everyone's documents.
+- Give each tenant's container its own key. A service has one key, and webhooks are signed per key. See [authentication](/docs/guides/authentication/).
+- Give each tenant its own store or prefix. Templates, aliases and fonts are one set per store, and anyone with a key to a service on it can read and delete them.
 
 ## Templates and files
 

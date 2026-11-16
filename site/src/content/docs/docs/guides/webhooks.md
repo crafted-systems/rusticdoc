@@ -89,10 +89,9 @@ A delivery can arrive twice if your receiver processed it but its response was l
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Total webhook and background jobs running at the same time |
-| `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | The same, for one caller |
+| `RUSTICDOC_MAX_ASYNC_JOBS` | `8` | Webhook and background jobs running at the same time |
 
-Past either limit, a request gets `429 too_many_jobs` before its body is read. A job holds its slot through its delivery attempts, so a slow or failing receiver uses up slots.
+Past the limit, a request gets `429 too_many_jobs` before its body is read. A job holds its slot through its delivery attempts, so a slow or failing receiver uses up slots.
 
 A job has the same time limit as a synchronous request. Nothing is queued on disk, so a job doesn't survive a restart of the service. If you need a result, treat a missing callback as a failure and send the request again.
 
@@ -117,22 +116,12 @@ The signature is `v1=` followed by the hex HMAC-SHA256 of this string, over the 
 
 ### The signing key
 
-Each caller signs with its own key, so one tenant can't send another's receiver something that verifies. Every key of a tenant in `RUSTICDOC_TENANT_KEYS` signs with the tenant's key, so receivers don't need to change when you replace a key.
+The signing key is the bytes of `RUSTICDOC_WEBHOOK_SECRET`. It doesn't depend on the API key, so a receiver keeps its key when you replace the API key.
 
-| Service | Principal | Key |
-|---|---|---|
-| With credentials | `key:<hex SHA-256 of the API key>`, `tenant:<name>` for a [tenant key](/docs/guides/authentication/#tenant-keys), `basic:<hex SHA-256 of the user>` or `oidc:<hex SHA-256 of the token's subject>` | `HMAC-SHA256(secret, principal)` |
-| No credentials | `public` | The secret's bytes |
-
-Don't derive the key by hand. Run the command with the service's secret set, and give the receiver the hex it prints:
+The receivers below read the key as hex. Run the command with the service's secret set, and give the receiver what it prints:
 
 ```bash
 # In a container with RUSTICDOC_WEBHOOK_SECRET set
-rusticdoc webhook-secret --api-key "$KEY"
-rusticdoc webhook-secret --tenant acme
-rusticdoc webhook-secret --basic-user ada
-rusticdoc webhook-secret --oidc-subject "user-123"
-# With no credentials configured on the service
 rusticdoc webhook-secret
 ```
 
@@ -144,7 +133,7 @@ This needs no dependencies and runs with Node 26. Read the raw body, because ver
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-// The hex that `rusticdoc webhook-secret` printed for this caller.
+// The hex that `rusticdoc webhook-secret` printed.
 const key = Buffer.from(process.env.RUSTICDOC_SIGNING_KEY, 'hex');
 const MAX_AGE_SECONDS = 300;
 
@@ -198,7 +187,7 @@ import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# The hex that `rusticdoc webhook-secret` printed for this caller.
+# The hex that `rusticdoc webhook-secret` printed.
 KEY = bytes.fromhex(os.environ["RUSTICDOC_SIGNING_KEY"])
 MAX_AGE_SECONDS = 300
 
@@ -237,17 +226,17 @@ ThreadingHTTPServer(("0.0.0.0", port), Receiver).serve_forever()
 
 ### Try them
 
-Both receivers are tested against real deliveries, signed for an API-key caller, a basic-auth user and a service with no credentials, for both `render.completed` and `render.failed`. They accept those, and they reject a changed body, a changed event or request id, a stale timestamp and another caller's key. To try it yourself:
+Both receivers are tested against real deliveries, for both `render.completed` and `render.failed`. They accept those, and they reject a changed body, a changed event or request id, a stale timestamp and another key. To try it yourself:
 
 ```bash
 docker run -d --name rd-webhooks -p 127.0.0.1:9028:9027 \
-  -e RUSTICDOC_API_KEYS=my-key \
+  -e RUSTICDOC_API_KEY=my-key \
   -e RUSTICDOC_WEBHOOK_SECRET=change-me \
   -e RUSTICDOC_WEBHOOK_ALLOW_PRIVATE=true \
   ghcr.io/crafted-systems/rusticdoc:0.1.4
 
 export RUSTICDOC_SIGNING_KEY=$(docker exec rd-webhooks \
-  rusticdoc webhook-secret --api-key my-key)
+  rusticdoc webhook-secret)
 PORT=8000 node receiver.mjs &
 
 curl -H "X-Api-Key: my-key" \

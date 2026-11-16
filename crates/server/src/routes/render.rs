@@ -321,12 +321,11 @@ pub struct RenderJson {
 /// once it is done. This needs `RUSTICDOC_STORE`.
 ///
 /// Add `X-Rusticdoc-Webhook-Url` to get 204 at once and the result by webhook.
-/// With `RUSTICDOC_WEBHOOK_SECRET` set, each caller's deliveries are signed with its
-/// own key: `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of
+/// With `RUSTICDOC_WEBHOOK_SECRET` set, deliveries are signed:
+/// `X-Rusticdoc-Signature` is `v1=` and the hex HMAC-SHA256 of
 /// `<timestamp>.<event>.<request id>.<body>`, with the timestamp in
 /// `X-Rusticdoc-Timestamp`, the event in `X-Rusticdoc-Event` and the request id in
-/// `X-Request-Id`. The key is `HMAC-SHA256(secret, principal)`, or the secret itself
-/// when the service requires no credentials; `rusticdoc webhook-secret` prints it.
+/// `X-Request-Id`. The key is the secret's bytes.
 #[utoipa::path(
     post, path = "/v1/render", tag = "render",
     request_body(content(
@@ -345,7 +344,7 @@ pub struct RenderJson {
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 401, description = "Credentials required", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
         (status = 501, description = "Not supported in this version", body = ErrorBody), (status = 503, description = "An engine is unavailable or the request timed out", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn render(
     State(state): State<AppState>,
@@ -359,7 +358,7 @@ pub async fn render(
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
     let render_choices = render_options(&mut form, &state)?;
-    let stored = templates::named_in(&mut form, &state, &principal).await?;
+    let stored = templates::named_in(&mut form, &state).await?;
     let from_store = stored.is_some();
     let template = match stored {
         Some(template) => template,
@@ -407,7 +406,6 @@ pub async fn render(
     req.convert_options = options;
     req.steps = named_steps(&mut form)?;
     sign_appearance(&mut form, &mut req.steps)?;
-    crate::signing::authorize_steps(&state.engines.signing, &principal, &req.steps)?;
     // Here, so a webhook request hears about a bad step list at once.
     state.engines.check_steps(&req.steps)?;
     req.output_name = form.output_name();
@@ -629,11 +627,10 @@ pub async fn run(
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn batch(
     State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
     req: Request,
@@ -645,7 +642,7 @@ pub async fn batch(
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
     let render_choices = render_options(&mut form, &state)?;
-    let stored = templates::named_in(&mut form, &state, &principal).await?;
+    let stored = templates::named_in(&mut form, &state).await?;
     let template = match stored {
         Some(template) => template,
         None => match form
@@ -663,7 +660,6 @@ pub async fn batch(
     };
     let mut steps = parse_steps(form.field("steps").unwrap_or(""), &form.fields)?;
     sign_appearance(&mut form, &mut steps)?;
-    crate::signing::authorize_steps(&state.engines.signing, &principal, &steps)?;
     state.engines.check_steps(&steps)?;
     let split_by = form
         .field("splitBy")
@@ -861,19 +857,15 @@ pub struct Validation {
         (RenderJson = "application/json"),
     )),
     responses((status = 200, description = "The validation result", body = Validation), (status = 400, description = "The request is wrong", body = ErrorBody)),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
-pub async fn validate(
-    State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
-    req: Request,
-) -> ApiResult<Json<Validation>> {
+pub async fn validate(State(state): State<AppState>, req: Request) -> ApiResult<Json<Validation>> {
     let mut form = Form::from_request(req, &state).await?;
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
     let render_choices = render_options(&mut form, &state)?;
-    let template = match templates::named_in(&mut form, &state, &principal).await? {
+    let template = match templates::named_in(&mut form, &state).await? {
         Some(template) => template,
         None => form.require_file("a template file, or a 'templateId',")?,
     };
