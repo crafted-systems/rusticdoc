@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOBIN=/out go install -ldflags "-s -w -X 'main.version=$PDFCPU
 # ----------------------------------------------
 # Build
 # ----------------------------------------------
-FROM rust:1.99.1-slim-trixie@sha256:7eab7ce19273ce785e0ca7578bdf7bc1fcbae621775a8197379a04c9f6e03cd5 AS build
+FROM rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS build
 WORKDIR /src
 # Servo's style engine, under Fulgur, generates code with Python at build time.
 RUN apt-get update -qq \
