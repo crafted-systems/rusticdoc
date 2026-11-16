@@ -10,7 +10,6 @@ pub mod error;
 pub mod fontsync;
 pub mod jobs;
 pub mod metrics;
-pub mod oidc;
 pub mod openapi;
 pub mod preview;
 pub mod routes;
@@ -163,18 +162,18 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
     let mut warnings = Vec::new();
     if !config.auth_configured() {
         warnings.push(
-            "no authentication is configured, so anyone who can reach this service can use it; set RUSTICDOC_API_KEYS".to_string(),
+            "no authentication is configured, so anyone who can reach this service can use it; set RUSTICDOC_API_KEY".to_string(),
         );
     }
     // A key's digest names its caller in the logs and in the store, so a key
     // short enough to guess can be confirmed by anyone who reads either.
-    let short = |key: &String| key.len() < MIN_KEY_LENGTH;
-    if config.api_keys.iter().any(short)
-        || config.admin_keys.iter().any(short)
-        || config.tenant_keys.iter().any(|(_, key)| short(key))
+    if config
+        .api_key
+        .as_ref()
+        .is_some_and(|key| key.len() < MIN_KEY_LENGTH)
     {
         warnings.push(format!(
-            "a key in RUSTICDOC_API_KEYS, RUSTICDOC_TENANT_KEYS or RUSTICDOC_ADMIN_KEYS is shorter than {MIN_KEY_LENGTH} characters and could be guessed; use long random keys"
+            "the key in RUSTICDOC_API_KEY is shorter than {MIN_KEY_LENGTH} characters and could be guessed; use a long random key"
         ));
     }
     if !config.webhook_disabled && config.webhook_secret.is_none() {

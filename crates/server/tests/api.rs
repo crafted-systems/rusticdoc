@@ -431,9 +431,9 @@ async fn a_file_previews_with_no_store() {
 }
 
 #[tokio::test]
-async fn api_keys_gate_the_api_but_not_health() {
+async fn the_api_key_gates_the_api_but_not_health() {
     let mut c = config();
-    c.api_keys = vec!["k1".into(), "k2".into()];
+    c.api_key = Some("k1".into());
     let router = app(AppState::new(c));
 
     let res = router
@@ -452,6 +452,11 @@ async fn api_keys_gate_the_api_but_not_health() {
 
     let mut req = post_form("/v1/render", &[("template", Some("a.txt"), "x")]);
     req.headers_mut().insert("x-api-key", "k2".parse().unwrap());
+    let res = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    let mut req = post_form("/v1/render", &[("template", Some("a.txt"), "x")]);
+    req.headers_mut().insert("x-api-key", "k1".parse().unwrap());
     let res = router.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
@@ -1648,66 +1653,49 @@ async fn visible_signatures_show_an_image_or_text_on_both_routes() {
 }
 
 #[tokio::test]
-async fn named_signing_keys_are_for_the_callers_on_their_allow_list() {
+async fn a_request_signs_with_the_named_key_it_asks_for() {
     use rusticdoc_core::pdfops::fixtures;
     use rusticdoc_core::pdfops::sign::NamedKey;
     let dir = tempfile::tempdir().unwrap();
     let mut config = signing_config(dir.path());
-    config.api_keys = vec!["alpha".into(), "beta".into()];
     config.signing.named = vec![NamedKey {
         name: "acme".into(),
         key: dir.path().join("key.pem").to_string_lossy().into_owned(),
         cert: dir.path().join("cert.pem"),
-        allow: vec![rusticdoc_server::auth::key_principal("alpha").0],
     }];
     config.check().expect("the named key loads");
     let router = app(AppState::new(config));
-    let request = |caller: &str, key: &str| {
-        let mut req = post_binary(
+    let request = |key: &str| {
+        post_binary(
             "/v1/pdf/sign",
             &[
                 ("files", Some("in.pdf"), fixtures::pages(1)),
                 ("signature", None, b"certificate".to_vec()),
                 ("signingKey", None, key.as_bytes().to_vec()),
             ],
-        );
-        req.headers_mut()
-            .insert("x-api-key", caller.parse().unwrap());
-        req
+        )
     };
-    let res = router
-        .clone()
-        .oneshot(request("alpha", "acme"))
-        .await
-        .unwrap();
+    let res = router.clone().oneshot(request("acme")).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
-    let res = router
-        .clone()
-        .oneshot(request("beta", "acme"))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert!(text(res).await.contains("acme"));
-    let res = router
-        .clone()
-        .oneshot(request("beta", "globex"))
-        .await
-        .unwrap();
+    let res = router.clone().oneshot(request("globex")).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(text(res).await.contains("globex"));
 
-    // The same check on the sign step of a render.
-    let mut req = post_binary(
-        "/v1/render",
-        &[
-            ("template", Some("in.pdf"), fixtures::pages(1)),
-            ("steps", None, b"sign".to_vec()),
-            ("signingKey", None, b"acme".to_vec()),
-        ],
-    );
-    req.headers_mut()
-        .insert("x-api-key", "beta".parse().unwrap());
-    let res = router.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    // The same on the sign step of a render.
+    let render = |key: &str| {
+        post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), fixtures::pages(1)),
+                ("steps", None, b"sign".to_vec()),
+                ("signingKey", None, key.as_bytes().to_vec()),
+            ],
+        )
+    };
+    let res = router.clone().oneshot(render("acme")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    let res = router.oneshot(render("globex")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -1844,24 +1832,6 @@ async fn renewals_take_a_file_signed_at_b_lta_and_no_signature_fields() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     assert!(text(res).await.contains("image, certificate or renew"));
-
-    // Where every key has an allow list, a caller on none of them may not
-    // renew either.
-    let mut listed = with_tsa;
-    listed.api_keys = vec!["alpha".into(), "beta".into()];
-    listed.signing.default_allow = Some(vec![rusticdoc_server::auth::key_principal("alpha").0]);
-    let router = app(AppState::new(listed));
-    let as_caller = |caller: &str| {
-        let mut req = renew(None);
-        req.headers_mut()
-            .insert("x-api-key", caller.parse().unwrap());
-        req
-    };
-    let res = router.clone().oneshot(as_caller("beta")).await.unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert!(text(res).await.contains("signing_key_forbidden"));
-    let res = router.oneshot(as_caller("alpha")).await.unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -1884,7 +1854,7 @@ async fn fonts_are_listed_behind_auth_and_reload_without_engines() {
     assert_eq!(res.status(), StatusCode::OK);
 
     let mut c = config();
-    c.api_keys = vec!["k".into()];
+    c.api_key = Some("k".into());
     let router = app(AppState::new(c));
     let res = router
         .oneshot(Request::get("/fonts").body(Body::empty()).unwrap())
@@ -1895,9 +1865,14 @@ async fn fonts_are_listed_behind_auth_and_reload_without_engines() {
 
 #[tokio::test]
 async fn template_reuse_is_scoped_to_the_caller() {
-    let mut c = config();
-    c.api_keys = vec!["tenant-a".into(), "tenant-b".into()];
-    let router = app(AppState::new(c));
+    // A service has one key, so the other caller is a service of its own. They
+    // share the process, and with it the templates kept for reuse.
+    let service = |key: &str| {
+        let mut c = config();
+        c.api_key = Some(key.into());
+        app(AppState::new(c))
+    };
+    let (router, other) = (service("tenant-a"), service("tenant-b"));
     let body = format!("Scoped {{{{ who }}}} {:?}", std::thread::current().id());
     let hash = rusticdoc_core::template::template_hash(body.as_bytes());
 
@@ -1939,7 +1914,7 @@ async fn template_reuse_is_scoped_to_the_caller() {
     req.headers_mut()
         .insert("x-api-key", "tenant-b".parse().unwrap());
     assert_eq!(
-        router.oneshot(req).await.unwrap().status(),
+        other.oneshot(req).await.unwrap().status(),
         StatusCode::NOT_FOUND
     );
 }

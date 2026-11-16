@@ -229,18 +229,6 @@ fn webhook_secret_prints_the_key_a_receiver_verifies_with() {
     let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(run(&["--api-key", "tenant-a"]), hex);
     assert_ne!(run(&["--api-key", "tenant-b"]), hex);
-    let key = rusticdoc_server::webhook::signing_key(
-        "master",
-        &rusticdoc_server::auth::basic_principal("ada").0,
-    );
-    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(run(&["--basic-user", "ada"]), hex);
-    let key = rusticdoc_server::webhook::signing_key(
-        "master",
-        &rusticdoc_server::auth::tenant_principal("acme").0,
-    );
-    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(run(&["--tenant", "acme"]), hex);
     assert_eq!(run(&[]), "6d6173746572", "the master secret, in hex");
 }
 

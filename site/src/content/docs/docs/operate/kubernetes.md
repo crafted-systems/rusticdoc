@@ -15,7 +15,7 @@ Create the secret:
 
 ```bash
 kubectl create secret generic rusticdoc \
-  --from-literal=api-keys=... --from-literal=admin-keys=... \
+  --from-literal=api-key=... \
   --from-literal=webhook-secret=... \
   --from-literal=s3-access-key=... --from-literal=s3-secret-key=...
 ```
@@ -57,7 +57,7 @@ The container's own context adds `allowPrivilegeEscalation: false` and `readOnly
 
 ### Environment
 
-`RUSTICDOC_STORE`, `AWS_REGION` and `RUSTICDOC_FONT_CACHE_DIR` are plain values. The credentials come from the secret: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `RUSTICDOC_API_KEYS`, `RUSTICDOC_ADMIN_KEYS` and `RUSTICDOC_WEBHOOK_SECRET`.
+`RUSTICDOC_STORE`, `AWS_REGION` and `RUSTICDOC_FONT_CACHE_DIR` are plain values. The credentials come from the secret: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `RUSTICDOC_API_KEY` and `RUSTICDOC_WEBHOOK_SECRET`.
 
 ### Probes
 
@@ -114,5 +114,5 @@ This is a plain `ClusterIP` Service on port 9027, with no Ingress. The service s
 
 - `kubectl get pods` should show three ready pods.
 - Store a template through the Service and render it several times, so that more than one pod handles it. See [stored templates](/docs/guides/stored-templates/).
-- Upload a font with an admin key, wait for `RUSTICDOC_STORE_SYNC_INTERVAL`, and list `/v1/fonts`.
+- Upload a font, wait for `RUSTICDOC_STORE_SYNC_INTERVAL`, and list `/v1/fonts`.
 - Watch memory while it handles your own documents, using [`/metrics`](/docs/operate/observability/) and your cluster's tools.

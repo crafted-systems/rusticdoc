@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use crate::fonts::{FontFace, ParsedFont};
 use crate::job::Document;
 
-/// Where one caller's templates go when every caller shares them.
+/// Where templates and aliases go: one set for the whole store.
 pub const SHARED_SCOPE: &str = "shared";
 
 /// Most bytes of template content kept in memory.
@@ -1423,6 +1423,39 @@ mod tests {
         // The name can be used again.
         store.set_alias("s", "gone", &template.id).await.unwrap();
         assert_eq!(store.alias_count("s").await.unwrap(), 2);
+    }
+
+    /// The upgrade the changelog describes: what an earlier version stored
+    /// under a caller's scope is read once its directories are renamed.
+    #[tokio::test]
+    async fn templates_moved_to_the_shared_scope_are_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("file://{}", dir.path().display());
+        let old = "key-0f3a";
+        let stored = {
+            let store = Store::open(&url).unwrap();
+            let doc = Document::new("t.txt", b"{{ a }}".to_vec());
+            let template = store.put_template(old, &doc).await.unwrap();
+            store.set_alias(old, "letter", &template.id).await.unwrap();
+            template
+        };
+
+        let store = Store::open(&url).unwrap();
+        let missing = store.template_meta(SHARED_SCOPE, &stored.id).await;
+        assert!(matches!(missing, Err(StoreError::NotFound)));
+
+        for kind in ["templates", "aliases"] {
+            let kind = dir.path().join(kind);
+            std::fs::rename(kind.join(old), kind.join(SHARED_SCOPE)).unwrap();
+        }
+        let content = store
+            .template_content(SHARED_SCOPE, &stored.id)
+            .await
+            .unwrap();
+        assert_eq!(&content.bytes[..], b"{{ a }}");
+        let named = store.resolve_alias(SHARED_SCOPE, "letter", None).await;
+        assert_eq!(named.unwrap(), stored.id);
+        assert_eq!(store.template_usage(SHARED_SCOPE).await.unwrap().count, 1);
     }
 
     #[test]

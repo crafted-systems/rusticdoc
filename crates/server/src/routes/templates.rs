@@ -1,5 +1,5 @@
-//! Stored templates: upload once, then render by id from any replica. A caller
-//! sees only its own unless `RUSTICDOC_STORE_SCOPE=shared`.
+//! Stored templates: upload once, then render by id from any replica. They
+//! are one set for the whole store.
 
 use std::sync::Arc;
 
@@ -7,7 +7,6 @@ use axum::extract::{Multipart, Path, Query, Request, State};
 use axum::http::{HeaderName, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
-use rusticdoc_core::config::StoreScope;
 use rusticdoc_core::store::{self, Store, StoreError, TemplateMeta, TemplatePage};
 use rusticdoc_core::{Document, template};
 use serde::{Deserialize, Serialize};
@@ -46,21 +45,12 @@ pub fn user_store_error(e: StoreError) -> ApiError {
     }
 }
 
-/// Whose templates this caller works with.
-pub fn scope(state: &AppState, principal: &Principal) -> String {
-    match state.config.store_scope {
-        StoreScope::Caller => store::scope_key(&principal.0),
-        StoreScope::Shared => store::SHARED_SCOPE.to_string(),
-    }
-}
+/// Where templates and aliases live: one set for the whole store.
+pub const SCOPE: &str = store::SHARED_SCOPE;
 
 /// The stored template a form's `templateId` names, if it names one. A form that
 /// also has a `template` file is asking for two different things.
-pub async fn named_in(
-    form: &mut Form,
-    state: &AppState,
-    principal: &Principal,
-) -> ApiResult<Option<Document>> {
+pub async fn named_in(form: &mut Form, state: &AppState) -> ApiResult<Option<Document>> {
     let Some(id) = form
         .field("templateId")
         .map(str::trim)
@@ -74,7 +64,7 @@ pub async fn named_in(
         ));
     }
     let store = store_of(state)?;
-    let (_, document) = resolve(&store, &scope(state, principal), id).await?;
+    let (_, document) = resolve(&store, SCOPE, id).await?;
     Ok(Some(document))
 }
 
@@ -236,13 +226,13 @@ async fn check(state: &AppState, doc: &Document) -> ApiResult<()> {
     responses(
         (status = 201, description = "Stored", body = TemplateSchema),
         (status = 400, description = "Not a template format", body = ErrorBody),
-        (status = 403, description = "This caller's quota is used up", body = ErrorBody),
+        (status = 403, description = "The store's quota is used up", body = ErrorBody),
         (status = 413, description = "Too large", body = ErrorBody),
         (status = 422, description = "The template has syntax errors", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn upload(
     State(state): State<AppState>,
@@ -283,8 +273,8 @@ pub async fn upload(
     };
     check(&state, &doc).await?;
 
-    let scope = scope(&state, &principal);
-    let usage = store.template_usage(&scope).await?;
+    let scope = SCOPE;
+    let usage = store.template_usage(scope).await?;
     if usage.count >= state.config.max_templates
         || usage.bytes + doc.bytes.len() as u64 > state.config.max_template_storage
     {
@@ -292,7 +282,7 @@ pub async fn upload(
             StatusCode::FORBIDDEN,
             "quota_exceeded",
             format!(
-                "this caller holds {} templates of {} bytes; the limits are {} and {}",
+                "the store holds {} templates of {} bytes; the limits are {} and {}",
                 usage.count,
                 usage.bytes,
                 state.config.max_templates,
@@ -300,7 +290,7 @@ pub async fn upload(
             ),
         ));
     }
-    let meta = store.put_template(&scope, &doc).await?;
+    let meta = store.put_template(scope, &doc).await?;
     tracing::info!(
         log_type = "audit", action = "template.upload", caller = %principal.short(),
         template = %meta.id, size = meta.size, "template stored"
@@ -316,7 +306,7 @@ pub async fn upload(
 
 /// List templates
 ///
-/// Lists this caller's templates, oldest first.
+/// Lists the stored templates, oldest first.
 #[utoipa::path(
     get, path = "/v1/templates", tag = "templates", operation_id = "listTemplates",
     params(ListParams),
@@ -325,17 +315,16 @@ pub async fn upload(
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<Json<TemplatePage>> {
     let store = store_of(&state)?;
     let limit = params.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
     let page = store
-        .list_templates(&scope(&state, &principal), limit, params.cursor.as_deref())
+        .list_templates(SCOPE, limit, params.cursor.as_deref())
         .await?;
     Ok(Json(page))
 }
@@ -348,22 +337,21 @@ pub async fn list(
     params(("id" = String, Path, description = "The template's id, or an alias as `name` or `name@version`")),
     responses(
         (status = 200, description = "The template", body = TemplateSchema),
-        (status = 404, description = "This caller has no such template", body = ErrorBody),
+        (status = 404, description = "No such template", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn show(
     State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<TemplateMeta>> {
     let store = store_of(&state)?;
-    let scope = scope(&state, &principal);
-    let id = resolve_id(&store, &scope, &id).await?;
+    let scope = SCOPE;
+    let id = resolve_id(&store, scope, &id).await?;
     let meta = store
-        .template_meta(&scope, &id)
+        .template_meta(scope, &id)
         .await
         .map_err(user_store_error)?;
     Ok(Json(meta))
@@ -377,19 +365,15 @@ pub async fn show(
     params(("id" = String, Path, description = "The template's id, or an alias as `name` or `name@version`")),
     responses(
         (status = 200, description = "The file", content_type = "application/octet-stream", body = crate::error::BinaryFile),
-        (status = 404, description = "This caller has no such template", body = ErrorBody),
+        (status = 404, description = "No such template", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
-pub async fn content(
-    State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
-    Path(id): Path<String>,
-) -> ApiResult<Response> {
+pub async fn content(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Response> {
     let store = store_of(&state)?;
-    let (_, doc) = resolve(&store, &scope(&state, &principal), &id).await?;
+    let (_, doc) = resolve(&store, SCOPE, &id).await?;
     // Always a download: a stored HTML template must not run on this origin.
     Ok((
         [
@@ -409,11 +393,11 @@ pub async fn content(
     params(("id" = String, Path, description = "The template's id")),
     responses(
         (status = 204, description = "Deleted"),
-        (status = 404, description = "This caller has no such template", body = ErrorBody),
+        (status = 404, description = "No such template", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn remove(
     State(state): State<AppState>,
@@ -422,7 +406,7 @@ pub async fn remove(
 ) -> ApiResult<StatusCode> {
     let store = store_of(&state)?;
     store
-        .delete_template(&scope(&state, &principal), &id)
+        .delete_template(SCOPE, &id)
         .await
         .map_err(user_store_error)?;
     tracing::info!(
@@ -460,20 +444,19 @@ pub struct TemplateVariables {
     params(("id" = String, Path, description = "The template's id, or an alias as `name` or `name@version`")),
     responses(
         (status = 200, description = "What the template reads", body = TemplateVariables),
-        (status = 404, description = "This caller has no such template", body = ErrorBody),
+        (status = 404, description = "No such template", body = ErrorBody),
         (status = 422, description = "The template has syntax errors", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn variables(
     State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<TemplateVariables>> {
     let store = store_of(&state)?;
-    let (id, doc) = resolve(&store, &scope(&state, &principal), &id).await?;
+    let (id, doc) = resolve(&store, SCOPE, &id).await?;
     let found = read_variables(&state, &doc).await?;
     Ok(Json(TemplateVariables {
         template_id: id,
@@ -518,7 +501,7 @@ pub struct DraftVariablesForm {
         (status = 400, description = "The request has no template file", body = ErrorBody),
         (status = 422, description = "The template has syntax errors", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn draft_variables(
     State(state): State<AppState>,
@@ -619,22 +602,21 @@ pub struct PreviewForm {
         (status = 200, description = "The page as a PNG", content_type = "image/png", body = crate::error::BinaryFile,
             headers(("X-Page-Count" = u32, description = "How many pages the rendered document has"))),
         (status = 400, description = "The request is wrong, or the page does not exist", body = ErrorBody),
-        (status = 404, description = "This caller has no such template", body = ErrorBody),
+        (status = 404, description = "No such template", body = ErrorBody),
         (status = 422, description = "The template failed to render", body = ErrorBody),
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "pdftoppm or LibreOffice is unavailable, or the request timed out", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn preview(
     State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
     req: Request,
 ) -> ApiResult<Response> {
     let store = store_of(&state)?;
     let ask = PreviewAsk::read(&state, req).await?;
-    let (_, template) = resolve(&store, &scope(&state, &principal), &id).await?;
+    let (_, template) = resolve(&store, SCOPE, &id).await?;
     ask.draw(&state, template).await
 }
 
@@ -679,7 +661,7 @@ pub struct DraftPreviewForm {
         (status = 422, description = "The template failed to render", body = ErrorBody),
         (status = 503, description = "pdftoppm or LibreOffice is unavailable, or the request timed out", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn draft_preview(State(state): State<AppState>, req: Request) -> ApiResult<Response> {
     let mut ask = PreviewAsk::read(&state, req).await?;

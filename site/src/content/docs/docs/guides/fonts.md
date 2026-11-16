@@ -8,7 +8,7 @@ When a document names a font the service doesn't have, it comes out in a fallbac
 
 | Way | Needs | Applies to | Survives a restart |
 |---|---|---|---|
-| Upload to the store | `RUSTICDOC_STORE` and an admin | Every caller and replica | Yes |
+| Upload to the store | `RUSTICDOC_STORE` | Every caller and replica | Yes |
 | Mount at `/fonts` | A volume, then a reload | This replica, for every caller | As long as the mount does |
 | Send with a request | Nothing | That request | No |
 
@@ -17,10 +17,10 @@ When a document names a font the service doesn't have, it comes out in a fallbac
 `POST /v1/fonts` takes one file in the `file` field, either a ZIP of TTF, OTF or TTC files or one such file, and returns `201`.
 
 ```bash test
-curl -H "X-Api-Key: $ADMIN_KEY" -F file=@brand-fonts.zip \
+curl -H "X-Api-Key: $KEY" -F file=@brand-fonts.zip \
   http://localhost:9027/v1/fonts -o uploaded.json
 jq -e '.fonts[0].file == "font.ttf" and (.skipped | length) == 0' uploaded.json
-curl -H "X-Api-Key: $ADMIN_KEY" -X DELETE \
+curl -H "X-Api-Key: $KEY" -X DELETE \
   "http://localhost:9027/v1/fonts/$(jq -r '.fonts[0].id' uploaded.json)"
 ```
 
@@ -75,7 +75,7 @@ curl -X POST -H "X-Api-Key: $KEY" http://localhost:9027/v1/fonts/reload
 
 `changed` is `false` when the directories haven't changed, and then no LibreOffice worker restarts. Otherwise idle workers restart on the new set, and busy ones finish their current job first.
 
-The route acts at most once every 10 seconds. A second call inside that gets `429 too_many_requests`, so retry after a few seconds. It takes any valid credential, so you don't need an admin key. With a store, it also syncs stored fonts on this replica.
+The route acts at most once every 10 seconds. A second call inside that gets `429 too_many_requests`, so retry after a few seconds. With a store, it also syncs stored fonts on this replica.
 
 ## Fonts for one request
 
@@ -107,23 +107,13 @@ jq -e 'map(.family) | index("Caladea") != null' fonts.json
 
 ## Delete
 
-`DELETE /v1/fonts/{id}` removes a stored font and returns `204`, or `404` for an unknown id. Only an admin can call it. Documents that name the font then fall back to another one, with no error.
+`DELETE /v1/fonts/{id}` removes a stored font and returns `204`, or `404` for an unknown id. Documents that name the font then fall back to another one, with no error.
 
 A font from the image or a mount has no `id`, so you can't delete it this way.
 
-## Admin keys
+## Who can change fonts
 
-Every caller shares the same fonts, and a font decides what the digits look like in everyone's documents, so changing them takes an admin.
-
-| Service is configured with | Who can upload and delete fonts |
-|---|---|
-| `RUSTICDOC_ADMIN_KEYS` | Those keys, in `X-Api-Key` or `Authorization: Bearer` |
-| `RUSTICDOC_BASIC_AUTH_ADMIN=true` | The basic-auth user |
-| `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM` | The OpenID Connect users they name |
-| Other credentials but none of these | Nobody. The request gets `403 admin_required` |
-| No credentials at all | Anyone who can reach the service, unless admin keys are set |
-
-Any other API key, tenant key, basic-auth user or token is refused. See [admins](/docs/guides/authentication/#admins) for these settings.
+Anyone with the [API key](/docs/guides/authentication/) can upload and delete fonts. With no key configured, anyone who can reach the service can. A font decides what the digits look like in every document, and every service on the same store uses the same fonts.
 
 ## Chinese, Japanese and Korean fonts
 

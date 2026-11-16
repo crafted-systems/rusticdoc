@@ -569,10 +569,7 @@ Print the key a caller's webhook deliveries are signed with, in hex, from RUSTIC
 Usage: rusticdoc webhook-secret [OPTIONS]
 
 Options:
-      --api-key <API_KEY>            The caller's API key
-  -v, --verbose...                   Log verbosity: -v for debug, -vv for trace
-      --basic-user <BASIC_USER>      The caller's basic-auth user
-      --oidc-subject <OIDC_SUBJECT>  The subject of the caller's OpenID Connect tokens
-      --tenant <TENANT>              The caller's tenant, from RUSTICDOC_TENANT_KEYS: every key of a tenant signs with the same key
-  -h, --help                         Print help
+      --api-key <API_KEY>  The caller's API key. Without it, the key of a service that requires no credentials
+  -v, --verbose...         Log verbosity: -v for debug, -vv for trace
+  -h, --help               Print help
 ```

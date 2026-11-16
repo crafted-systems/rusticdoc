@@ -1,9 +1,8 @@
 //! The signing settings beyond the default key, read from the environment.
 //!
 //! Named keys: `RUSTICDOC_SIGNING_KEYS=acme,globex` lists them, and each name
-//! has `RUSTICDOC_SIGNING_KEY_<NAME>`, `RUSTICDOC_SIGNING_CERT_<NAME>` and
-//! `RUSTICDOC_SIGNING_ALLOW_<NAME>`, where `<NAME>` is the name in capitals
-//! with `-` as `_`. A key variable holds a PEM file's path, or `pkcs11:` and
+//! has `RUSTICDOC_SIGNING_KEY_<NAME>` and `RUSTICDOC_SIGNING_CERT_<NAME>`,
+//! where `<NAME>` is the name in capitals with `-` as `_`. A key variable holds a PEM file's path, or `pkcs11:` and
 //! the label of a key on the token `RUSTICDOC_PKCS11_*` describes.
 
 use std::path::{Path, PathBuf};
@@ -23,17 +22,12 @@ pub struct NamedKey {
     /// A PEM file's path, or `pkcs11:...`.
     pub key: String,
     pub cert: PathBuf,
-    /// Principals that may use it: exact, `prefix*`, or `*` for every caller.
-    pub allow: Vec<String>,
 }
 
 /// Everything about signing but the default key's two paths, which
 /// [`crate::Config`] keeps as `signing_key` and `signing_cert`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Settings {
-    /// `RUSTICDOC_SIGNING_ALLOW`: who may use the default key. Every caller
-    /// when unset.
-    pub default_allow: Option<Vec<String>>,
     pub named: Vec<NamedKey>,
     pub pkcs11: Pkcs11Settings,
     pub tsa: Option<Tsa>,
@@ -95,13 +89,15 @@ impl Settings {
         let get = |name: &str| vars(name).filter(|v| !v.trim().is_empty());
         let mut s = Settings::default();
 
-        if let Some(v) = get("RUSTICDOC_SIGNING_ALLOW") {
-            let allow = list(Some(v));
-            if allow.is_empty() {
-                problems.push("RUSTICDOC_SIGNING_ALLOW is set but names no caller".into());
+        // A list that kept a caller from a key no longer does.
+        let no_allow_list = |variable: &str, problems: &mut Vec<String>| {
+            if get(variable).is_some() {
+                problems.push(format!(
+                    "{variable} is no longer supported; whoever has the API key may sign with every key"
+                ));
             }
-            s.default_allow = Some(allow);
-        }
+        };
+        no_allow_list("RUSTICDOC_SIGNING_ALLOW", problems);
         let mut suffixes = Vec::new();
         for name in list(get("RUSTICDOC_SIGNING_KEYS")) {
             if !valid_key_name(&name) {
@@ -120,26 +116,15 @@ impl Settings {
             suffixes.push(suffix.clone());
             let key = get(&format!("RUSTICDOC_SIGNING_KEY_{suffix}"));
             let cert = get(&format!("RUSTICDOC_SIGNING_CERT_{suffix}"));
-            let allow = get(&format!("RUSTICDOC_SIGNING_ALLOW_{suffix}"));
-            match (key, cert, allow) {
-                (Some(key), Some(cert), Some(allow)) => {
-                    let allow = list(Some(allow));
-                    if allow.is_empty() {
-                        problems.push(format!(
-                            "RUSTICDOC_SIGNING_ALLOW_{suffix} names no caller"
-                        ));
-                    }
-                    s.named.push(NamedKey {
-                        name,
-                        key,
-                        cert: PathBuf::from(cert),
-                        allow,
-                    });
-                }
-                // A named key nobody may use is a mistake, and one everybody
-                // may use has to say so with `*`.
+            no_allow_list(&format!("RUSTICDOC_SIGNING_ALLOW_{suffix}"), problems);
+            match (key, cert) {
+                (Some(key), Some(cert)) => s.named.push(NamedKey {
+                    name,
+                    key,
+                    cert: PathBuf::from(cert),
+                }),
                 _ => problems.push(format!(
-                    "signing key '{name}' needs RUSTICDOC_SIGNING_KEY_{suffix}, RUSTICDOC_SIGNING_CERT_{suffix} and RUSTICDOC_SIGNING_ALLOW_{suffix}"
+                    "signing key '{name}' needs RUSTICDOC_SIGNING_KEY_{suffix} and RUSTICDOC_SIGNING_CERT_{suffix}"
                 )),
             }
         }
@@ -298,24 +283,39 @@ mod tests {
     }
 
     #[test]
-    fn named_keys_need_a_key_a_certificate_and_an_allow_list() {
+    fn named_keys_need_a_key_and_a_certificate() {
         // Built, so the configuration check does not take them for settings.
         let var = |kind: &str, name: &str| ["RUSTICDOC_SIGNING_", kind, "_", name].concat();
         let vars = [
             ("RUSTICDOC_SIGNING_KEYS".to_string(), "acme, globex-eu"),
             (var("KEY", "ACME"), "/k/acme.pem"),
             (var("CERT", "ACME"), "/k/acme.crt"),
-            (var("ALLOW", "ACME"), "tenant:acme, key:abc"),
             (var("KEY", "GLOBEX_EU"), "pkcs11:globex"),
-            (var("CERT", "GLOBEX_EU"), "/k/globex.crt"),
         ];
         let vars: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), *v)).collect();
         let (s, problems) = read(&vars);
         assert_eq!(s.named.len(), 1);
         assert_eq!(s.named[0].name, "acme");
-        assert_eq!(s.named[0].allow, ["tenant:acme", "key:abc"]);
         assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(problems[0].contains(&var("ALLOW", "GLOBEX_EU")));
+        assert!(problems[0].contains(&var("CERT", "GLOBEX_EU")));
+
+        // A list of who may use a key is gone, and says so rather than
+        // letting a caller it kept out sign.
+        for allow in ["RUSTICDOC_SIGNING_ALLOW".to_string(), var("ALLOW", "ACME")] {
+            let vars = [
+                ("RUSTICDOC_SIGNING_KEYS".to_string(), "acme"),
+                (var("KEY", "ACME"), "/k/acme.pem"),
+                (var("CERT", "ACME"), "/k/acme.crt"),
+                (allow.clone(), "key:abc"),
+            ];
+            let vars: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+            let (_, problems) = read(&vars);
+            assert_eq!(problems.len(), 1, "{problems:?}");
+            assert!(
+                problems[0].contains(&format!("{allow} is no longer supported")),
+                "{problems:?}"
+            );
+        }
 
         let (_, problems) = read(&[("RUSTICDOC_SIGNING_KEYS", "bad name")]);
         assert!(problems[0].contains("letters, digits"), "{problems:?}");

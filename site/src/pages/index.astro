@@ -119,7 +119,7 @@ curl http://localhost:9027/v1/convert \\
     line: 'Response or webhook',
     title: 'Get it in the response or by webhook',
     text: 'Normally the document comes back in the response. If you add a webhook header, the service replies straight away and posts the document to your URL when it’s ready.',
-    points: ['Signed with a key per caller', 'Carries the request id from your logs', 'Private addresses are refused by default'],
+    points: ['Signed with a key of your own', 'Carries the request id from your logs', 'Private addresses are refused by default'],
     code: `curl http://localhost:9027/v1/render \\
   -H "X-Rusticdoc-Webhook-Url: https://receiver.example.com/documents" \\
   -H "X-Rusticdoc-Webhook-Error-Url: https://receiver.example.com/failures" \\
@@ -132,11 +132,11 @@ curl http://localhost:9027/v1/convert \\
 
 const stack = [
   { icon: 'code', title: 'Any HTTP client', text: 'You send a multipart form and get a file back. Every route is in the OpenAPI description.', href: '/docs/reference/api/' },
-  { icon: 'send', title: 'Signed webhooks', text: 'Each caller verifies its deliveries with its own key.', href: '/docs/guides/webhooks/' },
+  { icon: 'send', title: 'Signed webhooks', text: 'Verify each delivery with your signing key.', href: '/docs/guides/webhooks/' },
   { icon: 'bucket', title: 'S3 or a shared volume', text: 'Every replica reads the same stored templates and fonts.', href: '/docs/operate/many-containers/' },
   { icon: 'chart', title: 'Prometheus metrics', text: '/metrics reports requests, stage timings and webhook outcomes.', href: '/docs/operate/observability/' },
   { icon: 'list', title: 'JSON logs', text: 'Access and audit lines, each with the request id.', href: '/docs/operate/observability/' },
-  { icon: 'key', title: 'Your sign-in', text: 'API keys, basic auth or tokens from OpenID Connect.', href: '/docs/guides/authentication/' },
+  { icon: 'key', title: 'Your sign-in', text: 'One API key, in a header or as a bearer token.', href: '/docs/guides/authentication/' },
   { icon: 'pulse', title: 'Kubernetes probes', text: '/ready waits until a new replica has its fonts.', href: '/docs/operate/kubernetes/' },
   { icon: 'swap', title: 'Your egress proxy', text: 'Webhooks and downloads can leave through RUSTICDOC_OUTBOUND_PROXY.', href: '/docs/reference/configuration/' },
 ] as const;

@@ -18,10 +18,8 @@ An empty variable counts as unset.
 
 A bad value doesn't always stop the service. These do stop it from starting, with a message that names the problem:
 
-- A bad value in `RUSTICDOC_STORE`, `RUSTICDOC_STORE_SCOPE`, `RUSTICDOC_ADMIN_KEYS`, `RUSTICDOC_API_KEYS`, `RUSTICDOC_TENANT_KEYS`, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_JOB_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE` or `RUSTICDOC_STORE_SYNC_INTERVAL`.
-- `RUSTICDOC_BASIC_AUTH_USERNAME` and `RUSTICDOC_BASIC_AUTH_PASSWORD` when only one is set, or `RUSTICDOC_BASIC_AUTH_ADMIN` without basic auth.
-- `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM` without OpenID Connect, or in the wrong form.
-- OpenID Connect with only one of the issuer and audience set, or with an issuer or JWKS URL that is neither `https` nor `http` on a loopback host.
+- A bad value in `RUSTICDOC_STORE`, `RUSTICDOC_API_KEY`, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_JOB_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE` or `RUSTICDOC_STORE_SYNC_INTERVAL`.
+- A [removed setting](#removed-settings).
 - A `RUSTICDOC_PDF_ENGINES_*` list that names an unknown engine.
 - An invalid regular expression in an allow or deny list.
 
@@ -54,19 +52,22 @@ The image sets `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN`, `RUSTICDOC_PDF
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RUSTICDOC_API_KEYS` | None | Comma-separated keys for `X-Api-Key` or `Authorization: Bearer`. A value with no key in it, like `,`, stops the service from starting |
-| `RUSTICDOC_TENANT_KEYS` | None | Comma-separated `tenant:key` entries. All of a tenant's keys are the same caller, so replacing a key keeps the tenant's templates, aliases, jobs and webhook signing key. A tenant is 1 to 64 lowercase letters, digits and hyphens |
-| `RUSTICDOC_BASIC_AUTH_USERNAME` | None | Basic auth user. Set it together with `RUSTICDOC_BASIC_AUTH_PASSWORD` |
-| `RUSTICDOC_BASIC_AUTH_PASSWORD` | None | Basic auth password. Set it together with `RUSTICDOC_BASIC_AUTH_USERNAME` |
-| `RUSTICDOC_BASIC_AUTH_ADMIN` | `false` | Makes the basic auth user an admin, who can upload and delete fonts |
-| `RUSTICDOC_ADMIN_KEYS` | None | Comma-separated keys that can upload and delete fonts. If credentials are configured and there's no admin of any kind, nobody can |
-| `RUSTICDOC_OIDC_ISSUER` | None | Accepts bearer tokens from this OpenID Connect provider on the protected routes. Must be `https`, or `http` on a loopback host |
-| `RUSTICDOC_OIDC_AUDIENCE` | None | The audience that tokens must carry. Required with the issuer |
-| `RUSTICDOC_OIDC_JWKS_URL` | Discovered from the issuer | Where the signing keys live. It follows the same rule as the issuer |
-| `RUSTICDOC_OIDC_ADMIN_SUBJECTS` | None | Comma-separated token subjects that are admins |
-| `RUSTICDOC_OIDC_ADMIN_CLAIM` | None | `claim=value`. Tokens whose claim equals the value, or is a list that holds it, are admins. The claim can be a dotted path, like `realm_access.roles` |
+| `RUSTICDOC_API_KEY` | None | The one key callers send in `X-Api-Key` or `Authorization: Bearer`. It can use every route. A value with no key in it, or with a comma, stops the service from starting |
 
-Setting `RUSTICDOC_OIDC_ISSUER` turns OpenID Connect on. Set the issuer and the audience together, because one without the other stops the service from starting. See [authentication](/docs/guides/authentication/).
+See [authentication](/docs/guides/authentication/).
+
+### Removed settings
+
+The service refuses to start if one of these is set, so nothing changes without a word:
+
+| Setting | What holds instead |
+|---|---|
+| `RUSTICDOC_API_KEYS`, `RUSTICDOC_ADMIN_KEYS`, `RUSTICDOC_TENANT_KEYS` | The one key in `RUSTICDOC_API_KEY` |
+| `RUSTICDOC_BASIC_AUTH_USERNAME`, `RUSTICDOC_BASIC_AUTH_PASSWORD`, `RUSTICDOC_BASIC_AUTH_ADMIN` | The same |
+| `RUSTICDOC_OIDC_ISSUER`, `RUSTICDOC_OIDC_AUDIENCE`, `RUSTICDOC_OIDC_JWKS_URL`, `RUSTICDOC_OIDC_ADMIN_SUBJECTS`, `RUSTICDOC_OIDC_ADMIN_CLAIM` | The same |
+| `RUSTICDOC_STORE_SCOPE` | Templates and aliases are one set for the whole store. [Move the ones an earlier version stored](/docs/guides/stored-templates/#templates-stored-by-an-earlier-version) |
+| `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `RUSTICDOC_MAX_ASYNC_JOBS` is the one limit |
+| `RUSTICDOC_SIGNING_ALLOW`, `RUSTICDOC_SIGNING_ALLOW_<NAME>` | Whoever has the API key can sign with every key |
 
 ## Requests and connections
 
@@ -141,7 +142,6 @@ Each of these takes a comma-separated list from `lopdf`, `qpdf`, `pdfcpu` and `q
 | Variable | Default | Purpose |
 |---|---|---|
 | `RUSTICDOC_STORE` | None | Where stored templates and uploaded fonts live, as `s3://bucket/prefix` or `file:///path`. Without one, those routes return `501`. See [many containers](/docs/operate/many-containers/) |
-| `RUSTICDOC_STORE_SCOPE` | `caller` | With `caller`, each credential sees only its own templates and aliases, so replacing a key leaves them behind unless it's a tenant key. With `shared`, every credential reads and deletes the same ones. Background jobs are always private to their caller |
 | `RUSTICDOC_MAX_TEMPLATE_BYTES` | `50MB` | Largest template that can be stored |
 | `RUSTICDOC_MAX_TEMPLATES` | `10000` | Maximum number of templates in one scope. Aliases have the same limit, counted separately. Replicas that store at the same moment can go over it by whatever is in flight |
 | `RUSTICDOC_MAX_TEMPLATE_STORAGE` | `5GB` | Maximum bytes of templates in one scope, with the same caveat |
@@ -194,8 +194,7 @@ The service sets the bucket from `RUSTICDOC_STORE`, so `AWS_BUCKET` has no effec
 | `RUSTICDOC_WEBHOOK_DENY_LIST` | None | Regular expressions that no webhook URL can match |
 | `RUSTICDOC_WEBHOOK_ERROR_ALLOW_LIST` | `RUSTICDOC_WEBHOOK_ALLOW_LIST` | The allow list for error URLs |
 | `RUSTICDOC_WEBHOOK_ERROR_DENY_LIST` | None | A further deny list for error URLs |
-| `RUSTICDOC_MAX_ASYNC_JOBS` | `32` | Webhook and background jobs running at the same time, across the service. Beyond that, a request gets a `429` before its body is read |
-| `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER` | `8` | Webhook and background jobs running at the same time for one caller |
+| `RUSTICDOC_MAX_ASYNC_JOBS` | `8` | Webhook and background jobs running at the same time. Beyond that, a request gets a `429` before its body is read |
 | `RUSTICDOC_DOWNLOAD_FROM_DISABLED` | `false` | Refuses the `downloadFrom` form field entirely |
 | `RUSTICDOC_DOWNLOAD_FROM_MAX_ENTRIES` | `10` | Maximum number of URLs one request can fetch through `downloadFrom` |
 | `RUSTICDOC_DOWNLOAD_FROM_ALLOW_PRIVATE` | `false` | Allows `downloadFrom` to fetch from private and loopback addresses |
@@ -213,7 +212,6 @@ These are the keys and services behind [cryptographic signatures](/docs/guides/p
 |---|---|---|
 | `RUSTICDOC_SIGNING_KEY` | None | The default key, as a path to an unencrypted PEM private key: PKCS#8 (`PRIVATE KEY`), PKCS#1 (`RSA PRIVATE KEY`) or SEC1 (`EC PRIVATE KEY`). It has to be RSA of 2,048 to 8,192 bits, or ECDSA P-256. For a key on a PKCS#11 token, use `pkcs11:<label>`, described below |
 | `RUSTICDOC_SIGNING_CERT` | None | Path to a PEM file with the certificate for that key, followed by any chain certificates to include in signatures, in order |
-| `RUSTICDOC_SIGNING_ALLOW` | Every caller | Who can sign with the default key, as comma-separated [principals](#who-may-use-a-key) |
 | `RUSTICDOC_SIGNING_LEVEL` | `b-b` | The PAdES level a request gets when it doesn't name one: `b-b`, `b-t`, `b-lt` or `b-lta`. From `b-t` up it needs a timestamp authority |
 
 Set both the key and the certificate, or neither. The service reads every key when it starts, and refuses to start if only one of a pair is set, a file can't be read, a key is encrypted or doesn't match its first certificate, or that certificate is outside its validity period. It starts with a warning if a certificate allows neither digitalSignature nor nonRepudiation, is self-signed or has its chain out of order, or if a key file can be read by other users. The log names each certificate's subject, algorithm and expiry, and never anything about a key. With no key, cryptographic signing returns `503` and image signing works as before.
@@ -229,11 +227,8 @@ As well as the default key, a deployment can hold named keys, which a request ch
 | `RUSTICDOC_SIGNING_KEYS` | None | Comma-separated key names, made of letters, digits, `-` and `_`, up to 64 characters |
 | `RUSTICDOC_SIGNING_KEY_<NAME>` | None | The key for `<name>`, in the same form as `RUSTICDOC_SIGNING_KEY`. `<NAME>` is the name in capitals with `-` turned into `_`, so `acme-eu` becomes `ACME_EU` |
 | `RUSTICDOC_SIGNING_CERT_<NAME>` | None | Its certificate chain, in the same form as `RUSTICDOC_SIGNING_CERT` |
-| `RUSTICDOC_SIGNING_ALLOW_<NAME>` | None | Who can sign with it. Required, so a named key that every caller can use has to say so with `*` |
 
-#### Who may use a key
-
-An allow list holds comma-separated entries matched against the caller's principal. An entry matches exactly (`key:<sha256 of the API key>`, `basic:<sha256 of the user>`, `oidc:<sha256 of the subject>`, or `public` when no credentials are configured), by prefix with a trailing `*` (`tenant:*`), or is `*` for every caller. You can see a caller's principal with `rusticdoc webhook-secret` and in the logs. A caller who isn't on the list gets a `403`, and a key name that isn't configured gets a `400`.
+Whoever has the API key can sign with every key the deployment holds.
 
 ### Keys in an HSM
 

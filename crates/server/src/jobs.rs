@@ -1,8 +1,8 @@
-//! Background work: how many jobs may run at once, in all and per caller, and
-//! jobs whose results wait in the store for the caller to fetch.
+//! Background work: how many jobs may run at once, and jobs whose results wait
+//! in the store for the caller to fetch.
 //!
 //! A webhook request answers 204 at once, and an asynchronous one 202, so
-//! nothing but these permits stops one caller from queuing work without end. A
+//! nothing but these permits stops a caller from queuing work without end. A
 //! permit lives as long as the job, through its delivery or until its result is
 //! stored, because that is how long the job holds memory. Webhooks and
 //! asynchronous requests share the one limit.
@@ -11,11 +11,11 @@
 //! states and its result are objects in the store, each written once, so any
 //! replica can answer `GET /v1/jobs/{id}` and none has to be the one that ran it.
 //! Without a store there is nowhere every replica can see, so the request is
-//! refused rather than kept on one container. Jobs are always the caller's own,
-//! whatever `RUSTICDOC_STORE_SCOPE` says: results hold the caller's data.
+//! refused rather than kept on one container. Jobs belong to the key that
+//! started them: results hold the caller's data.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -33,71 +33,50 @@ use crate::webhook::Webhook;
 /// not ended counts as lost.
 const STORE_GRACE: Duration = Duration::from_secs(60);
 
-#[derive(Debug, Default)]
-struct Running {
-    total: usize,
-    by_caller: HashMap<String, usize>,
-}
-
-/// The limits and what is running against them. Cheap to clone.
+/// The limit and what is running against it. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct JobLimiter {
-    running: Arc<Mutex<Running>>,
-    max_total: usize,
-    max_per_caller: usize,
+    running: Arc<AtomicUsize>,
+    max: usize,
 }
 
 /// One running job's place. Dropping it frees the place.
 #[derive(Debug)]
 pub struct JobPermit {
-    running: Arc<Mutex<Running>>,
-    caller: String,
+    running: Arc<AtomicUsize>,
 }
 
 impl JobLimiter {
-    pub fn new(max_total: usize, max_per_caller: usize) -> Self {
+    pub fn new(max: usize) -> Self {
         Self {
             running: Arc::default(),
-            max_total,
-            max_per_caller,
+            max,
         }
     }
 
-    /// A place for `caller`'s job, or a 429.
-    pub fn try_acquire(&self, caller: &str) -> Result<JobPermit, ApiError> {
-        let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        let busy =
-            |message: &str| ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too_many_jobs", message);
-        if running.total >= self.max_total {
-            return Err(busy(
+    /// A place for a job, or a 429.
+    pub fn try_acquire(&self) -> Result<JobPermit, ApiError> {
+        let taken = self
+            .running
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |running| {
+                (running < self.max).then_some(running + 1)
+            });
+        if taken.is_err() {
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_jobs",
                 "the service is running as many webhook and background jobs as it may; try again later",
             ));
         }
-        let mine = running.by_caller.entry(caller.to_string()).or_insert(0);
-        if *mine >= self.max_per_caller {
-            return Err(busy(
-                "this caller is running as many webhook and background jobs as it may; try again later",
-            ));
-        }
-        *mine += 1;
-        running.total += 1;
         Ok(JobPermit {
             running: self.running.clone(),
-            caller: caller.to_string(),
         })
     }
 }
 
 impl Drop for JobPermit {
     fn drop(&mut self) {
-        let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        running.total = running.total.saturating_sub(1);
-        if let Some(mine) = running.by_caller.get_mut(&self.caller) {
-            *mine = mine.saturating_sub(1);
-            if *mine == 0 {
-                running.by_caller.remove(&self.caller);
-            }
-        }
+        self.running.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -148,7 +127,7 @@ pub fn ticket(state: &AppState, caller: &str) -> Result<JobTicket, ApiError> {
             "background jobs keep their results in the store, and RUSTICDOC_STORE is not set; leave out 'Prefer: respond-async', or set RUSTICDOC_STORE (a directory will do for one container)",
         ));
     };
-    let permit = state.jobs.try_acquire(caller)?;
+    let permit = state.jobs.try_acquire()?;
     Ok(JobTicket {
         id: store::new_job_id(),
         scope: scope_of(caller),
@@ -355,16 +334,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn places_are_limited_in_all_and_per_caller() {
-        let limiter = JobLimiter::new(3, 2);
-        let a1 = limiter.try_acquire("a").unwrap();
-        let _a2 = limiter.try_acquire("a").unwrap();
-        let refused = limiter.try_acquire("a").unwrap_err();
+    fn places_are_limited() {
+        let limiter = JobLimiter::new(2);
+        let first = limiter.try_acquire().unwrap();
+        let _second = limiter.try_acquire().unwrap();
+        let refused = limiter.try_acquire().unwrap_err();
         assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
-        let _b1 = limiter.try_acquire("b").unwrap();
-        assert!(limiter.try_acquire("c").is_err(), "three in all");
-        drop(a1);
-        assert!(limiter.try_acquire("a").is_ok(), "the place came back");
+        drop(first);
+        assert!(limiter.try_acquire().is_ok(), "the place came back");
     }
 
     #[test]

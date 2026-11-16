@@ -58,10 +58,10 @@ Back up the bucket and turn on its encryption yourself. It's the only copy, and 
 
 | | Stored as | Reaches other replicas |
 |---|---|---|
-| Templates | `templates/<caller>/`. The content is cached in memory and the metadata is read on every request | Immediately, and so does a delete |
+| Templates | `templates/shared/`. The content is cached in memory and the metadata is read on every request | Immediately, and so does a delete |
 | Fonts | `fonts/`, named by their hash, and copied to each replica's `RUSTICDOC_FONT_CACHE_DIR` because LibreOffice needs files | The uploading replica immediately, the others within `RUSTICDOC_STORE_SYNC_INTERVAL` (30 seconds by default) |
-| Aliases | `aliases/<caller>/<name>/`, one object per version, read on every request | Immediately, and so does a delete |
-| Background jobs | `jobs/<caller>/<id>/`, one object per state and one for the result | Immediately. Every replica removes expired jobs now and then |
+| Aliases | `aliases/shared/<name>/`, one object per version, read on every request | Immediately, and so does a delete |
+| Background jobs | `jobs/<key>/<id>/`, under a digest of the API key, one object per state and one for the result | Immediately. Every replica removes expired jobs now and then |
 
 There are no messages, locks or leader between replicas. They don't need any coordination, because everything written to the store is immutable. That also means you can't change a stored template, so store the new one and point an [alias](/docs/guides/stored-templates/#aliases-and-versions) at it. A background job runs on the replica that accepted it, but any replica can serve requests about it.
 
@@ -84,15 +84,8 @@ Once a replica has synced, it stays ready. If a later sync fails, it keeps the f
 
 A font that fails its hash is left out and logged, so one bad object doesn't keep every new replica out of service.
 
-## Whose templates a caller sees
+## What the containers share
 
-This is set by `RUSTICDOC_STORE_SCOPE`.
+Templates and aliases are one set for the whole store, so every container on it reads and deletes the same ones, and they stay when you replace the API key. Background jobs belong to the key that started them.
 
-| Value | Behaviour |
-|---|---|
-| `caller`, the default | Each credential sees only its own templates and aliases, and another caller's id returns `404`. If you replace a key, whatever the old key stored is left behind, unless it's a [tenant key](/docs/guides/authentication/#tenant-keys) |
-| `shared` | Every credential reads and deletes the same templates and aliases |
-
-Background jobs always belong to the caller that submitted them. With no credentials configured, every caller is the same caller.
-
-Fonts are one set per deployment, not per caller. Changing them takes an [admin](/docs/guides/authentication/#admins) and any other credential gets a `403`, because a font decides what the digits look like in everyone's documents.
+Fonts are one set per store too. Anyone with the API key can [change them](/docs/guides/fonts/#who-can-change-fonts), and a font decides what the digits look like in every document.

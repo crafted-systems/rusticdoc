@@ -74,7 +74,7 @@ pub struct JobSchema {
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn show(
     State(state): State<AppState>,
@@ -105,7 +105,7 @@ pub async fn show(
         (status = 501, description = "RUSTICDOC_STORE is not set", body = ErrorBody),
         (status = 503, description = "The store cannot be reached", body = ErrorBody),
     ),
-    security(("api_key" = []), ("bearer" = []), ("basic" = []))
+    security(("api_key" = []), ("bearer" = []))
 )]
 pub async fn result(
     State(state): State<AppState>,

@@ -48,13 +48,12 @@ You also get this code when a step that needs a PDF runs on something else, with
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `unauthorized` | No valid credentials | Send a key or token. See [authentication](authentication.md). The message is always `Unauthorized`, whatever was wrong, and the log has what was presented as a digest prefix |
+| `unauthorized` | No valid key | Send a key. See [authentication](authentication.md). The message is always `Unauthorized`, whatever was wrong, and the log has what was presented as a digest prefix |
 
 ### 403
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `admin_required` | This route changes fonts, and the caller isn't an admin | Send one of `RUSTICDOC_ADMIN_KEYS`, or make the caller an admin with `RUSTICDOC_BASIC_AUTH_ADMIN`, `RUSTICDOC_OIDC_ADMIN_SUBJECTS` or `RUSTICDOC_OIDC_ADMIN_CLAIM`. See [authentication](authentication.md) |
 | `quota_exceeded` | Stored templates, fonts or background-job results are at a limit | Delete some, or raise `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS` or `RUSTICDOC_MAX_FONT_STORAGE`. For job results, wait for earlier ones to expire or raise `RUSTICDOC_MAX_JOB_STORAGE` |
 | `url_not_allowed` | A webhook or `downloadFrom` URL fails an allow or deny list | Change the URL, or the lists in `RUSTICDOC_WEBHOOK_ALLOW_LIST`, `RUSTICDOC_WEBHOOK_DENY_LIST`, `RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST` or `RUSTICDOC_DOWNLOAD_FROM_DENY_LIST` |
 
@@ -64,7 +63,7 @@ A private address gets a `400`, not a `403`.
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `not_found` | No stored template, alias, font or job with that id or name for this caller, including another caller's, and a job whose result has expired | Check the id and the credential. See [scope](stored-templates.md#scope) |
+| `not_found` | No stored template, alias, font or job with that id or name, including a job another key started and a job whose result has expired | Check the id. See [scope](stored-templates.md#scope) |
 | `template_not_cached` | `templateHash` isn't in this replica's memory | Send the file. See [sending a hash](pipeline.md#sending-a-hash) |
 
 ```bash
@@ -103,7 +102,7 @@ curl -F template=@letter.txt -F 'data={"customer":{}}' \
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `too_many_jobs` | Too many background or webhook jobs are running, in total or for this caller | Retry later, or raise `RUSTICDOC_MAX_ASYNC_JOBS` or `RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER`. See [webhooks](webhooks.md#limits) |
+| `too_many_jobs` | Too many background or webhook jobs are running | Retry later, or raise `RUSTICDOC_MAX_ASYNC_JOBS`. See [webhooks](webhooks.md#limits) |
 | `too_many_requests` | Fonts were reloaded in the last 10 seconds | Retry in a few seconds |
 
 ### 500

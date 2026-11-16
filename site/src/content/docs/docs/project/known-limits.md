@@ -50,12 +50,12 @@ Read this list before you depend on rusticdoc. These are the things that don't w
 ## Fonts
 
 - The missing-font report reads a document's text, styles and theme. It doesn't see fonts used only in an embedded object or a chart. See [find fonts a template needs](/docs/guides/fonts/#find-fonts-a-template-needs).
-- Fonts are one set per deployment, not per caller.
+- Fonts are one set per store.
 
 ## Stored templates
 
 - A stored template can't be changed. Store the new one and point an [alias](/docs/guides/stored-templates/) at it.
-- Replacing a key in `RUSTICDOC_API_KEYS` leaves its templates behind under the default `RUSTICDOC_STORE_SCOPE=caller`. A key in `RUSTICDOC_TENANT_KEYS` belongs to its tenant, which keeps them. See [authentication](/docs/guides/authentication/).
+- A service has one API key, and templates and aliases are one set per store. Replacing `RUSTICDOC_API_KEY` leaves its background jobs behind and changes its webhook signing key. See [authentication](/docs/guides/authentication/).
 - Background jobs, aliases, variables and previews need a store. Without `RUSTICDOC_STORE` they return `501`.
 - Replicas storing at the same moment can go past the store's limits by whatever is in flight.
 

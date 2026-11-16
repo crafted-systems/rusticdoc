@@ -18,7 +18,6 @@ The site has no status page: `/status` and `/docs/project/status` redirect to kn
 | Published SDKs | The clients are generated and tested, but no package is published |
 | Cloud key stores | Signing keys in a cloud KMS aren't supported. Keys are PEM files or live in a PKCS#11 token, tested with SoftHSM |
 | Outside review | Nobody outside the project has audited the service or run a penetration test against it |
-| OpenID Connect | Token checks and admin rules were tested with a local key server and RS256 tokens, not against a real identity provider |
 | Macros and OLE objects | Taking them out was tested on stand-ins, not on working macros made in Office |
 | Hardware key modules | Signing with a key in a PKCS#11 token was tested with SoftHSM, not with a hardware module |
 | Render memory limit on macOS | The limit relies on Linux and hasn't been shown to hold on macOS |

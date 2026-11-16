@@ -2,7 +2,7 @@
 # only thing they share. Create the secret first, set the image, then apply:
 #
 #   kubectl create secret generic rusticdoc \
-#     --from-literal=api-keys=... --from-literal=admin-keys=... \
+#     --from-literal=api-key=... \
 #     --from-literal=webhook-secret=... \
 #     --from-literal=s3-access-key=... --from-literal=s3-secret-key=...
 #   kubectl apply -f deploy/kubernetes.yaml
@@ -44,10 +44,8 @@ spec:
               valueFrom: { secretKeyRef: { name: rusticdoc, key: s3-access-key } }
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom: { secretKeyRef: { name: rusticdoc, key: s3-secret-key } }
-            - name: RUSTICDOC_API_KEYS
-              valueFrom: { secretKeyRef: { name: rusticdoc, key: api-keys } }
-            - name: RUSTICDOC_ADMIN_KEYS
-              valueFrom: { secretKeyRef: { name: rusticdoc, key: admin-keys } }
+            - name: RUSTICDOC_API_KEY
+              valueFrom: { secretKeyRef: { name: rusticdoc, key: api-key } }
             - name: RUSTICDOC_WEBHOOK_SECRET
               valueFrom: { secretKeyRef: { name: rusticdoc, key: webhook-secret } }
           # Open without credentials, showing only the status. /ready waits for this

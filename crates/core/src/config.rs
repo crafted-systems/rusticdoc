@@ -31,10 +31,6 @@ pub struct Config {
     /// Where uploaded templates and fonts live: `file:///path` or
     /// `s3://bucket/prefix`. Without it those routes answer 501.
     pub store: Option<String>,
-    /// Whose templates a caller sees.
-    pub store_scope: StoreScope,
-    /// Keys that may change the stored fonts, which every caller then renders with.
-    pub admin_keys: Vec<String>,
     /// Largest template that can be stored.
     pub max_template_bytes: usize,
     /// Most templates one scope may hold.
@@ -51,21 +47,9 @@ pub struct Config {
     pub font_cache_dir: PathBuf,
     /// How often a replica looks for fonts added or deleted elsewhere.
     pub store_sync_interval: Duration,
-    /// Accepted API keys for `Authorization: Bearer` or `X-Api-Key`. Empty
-    /// means no key is required.
-    pub api_keys: Vec<String>,
-    /// Keys that carry a tenant's name, as `(tenant, key)`. Every key of one
-    /// tenant is the same caller, so replacing a key keeps what it stored.
-    pub tenant_keys: Vec<(String, String)>,
-    /// Basic auth credentials, when set.
-    pub basic_auth: Option<(String, String)>,
-    /// The basic-auth user may change what every caller renders with.
-    pub basic_auth_admin: bool,
-    /// OpenID Connect subjects that are admins.
-    pub oidc_admin_subjects: Vec<String>,
-    /// A claim, as a dotted path, and the value that makes a token's holder an
-    /// admin: the claim equals it, or is a list holding it.
-    pub oidc_admin_claim: Option<(String, String)>,
+    /// The API key, for `Authorization: Bearer` or `X-Api-Key`. `None` means
+    /// no key is required.
+    pub api_key: Option<String>,
     /// How long a background job and its result are kept once it ends.
     pub job_ttl: Duration,
     /// Path to poppler's `pdftoppm`, which draws template previews. `None`
@@ -95,10 +79,8 @@ pub struct Config {
     pub libreoffice_max_disk: u64,
     /// Most file parts one form may hold.
     pub max_form_parts: usize,
-    /// Webhook jobs that may run at once across the service.
+    /// Webhook and background jobs that may run at once.
     pub max_async_jobs: usize,
-    /// Webhook jobs that may run at once for one caller.
-    pub max_async_jobs_per_caller: usize,
     /// Time limit for a batch render or a multi-file conversion.
     pub batch_timeout: Duration,
     /// Where template code runs. `serve` chooses `Isolated` unless told otherwise.
@@ -151,8 +133,6 @@ pub struct Config {
     pub pdf_disabled: bool,
     /// Webhook headers are ignored on every route.
     pub webhook_disabled: bool,
-    /// Bearer tokens from an OpenID Connect provider, when set.
-    pub oidc: Option<OidcConfig>,
     /// Engine lists by variable name, as set. Unset lists use the default order.
     pub engine_orders: BTreeMap<String, Vec<String>>,
     /// Regular expressions a webhook URL must match one of. Empty allows all,
@@ -182,6 +162,30 @@ pub enum RenderMode {
 }
 
 /// One operation's engine list, from a `RUSTICDOC_PDF_ENGINES_*` variable.
+/// Settings that are gone, without their prefix, and what holds instead.
+const REMOVED_VARIABLES: &[(&str, &str)] = &[
+    ("API_KEYS", ONE_KEY),
+    ("ADMIN_KEYS", ONE_KEY),
+    ("TENANT_KEYS", ONE_KEY),
+    ("BASIC_AUTH_USERNAME", ONE_KEY),
+    ("BASIC_AUTH_PASSWORD", ONE_KEY),
+    ("BASIC_AUTH_ADMIN", ONE_KEY),
+    ("OIDC_ISSUER", ONE_KEY),
+    ("OIDC_AUDIENCE", ONE_KEY),
+    ("OIDC_JWKS_URL", ONE_KEY),
+    ("OIDC_ADMIN_SUBJECTS", ONE_KEY),
+    ("OIDC_ADMIN_CLAIM", ONE_KEY),
+    (
+        "STORE_SCOPE",
+        "templates and aliases are one set for the whole store",
+    ),
+    (
+        "MAX_ASYNC_JOBS_PER_CALLER",
+        "RUSTICDOC_MAX_ASYNC_JOBS is the one limit",
+    ),
+];
+const ONE_KEY: &str = "callers authenticate with the key in RUSTICDOC_API_KEY";
+
 pub const ENGINE_VARIABLES: &[&str] = &[
     "RUSTICDOC_PDF_ENGINES_MERGE",
     "RUSTICDOC_PDF_ENGINES_SPLIT",
@@ -203,39 +207,14 @@ pub const ENGINE_VARIABLES: &[&str] = &[
 /// The port the service listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 9027;
 
-/// Whose templates a caller sees.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StoreScope {
-    /// Its own: one credential cannot read or delete another's. Replacing a key
-    /// leaves what the old key stored behind.
-    #[default]
-    Caller,
-    /// Everyone's: every credential reads and deletes the same templates.
-    Shared,
-}
-
-/// Bearer tokens accepted on the protected routes.
-#[derive(Debug, Clone, Default)]
-pub struct OidcConfig {
-    pub issuer: String,
-    pub audience: String,
-    /// Where the signing keys live. Discovered from the issuer when empty.
-    pub jwks_url: String,
-}
-
-/// Not derived: the settings hold every key, the basic-auth password and the
-/// webhook secret, and one `{:?}` in a log line would print them. This says
+/// Not derived: the settings hold every key and the webhook secret, and one `{:?}` in a log line would print them. This says
 /// what is configured and nothing of what it is.
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
             .field("bind", &self.bind)
             .field("root_path", &self.root_path)
-            .field("api_keys", &self.api_keys.len())
-            .field("tenant_keys", &self.tenant_keys.len())
-            .field("admin_keys", &self.admin_keys.len())
-            .field("basic_auth", &self.basic_auth.is_some())
-            .field("oidc", &self.oidc.is_some())
+            .field("api_key", &self.api_key.is_some())
             .field("webhook_secret", &self.webhook_secret.is_some())
             .field("store", &self.store.is_some())
             .finish_non_exhaustive()
@@ -269,8 +248,6 @@ impl Default for Config {
             fonts_dir: PathBuf::from("/fonts"),
             translations_dir: None,
             store: None,
-            store_scope: StoreScope::Caller,
-            admin_keys: Vec::new(),
             max_template_bytes: 50 * 1024 * 1024,
             max_templates: 10_000,
             max_template_storage: 5 * 1024 * 1024 * 1024,
@@ -279,12 +256,7 @@ impl Default for Config {
             max_font_storage: 1024 * 1024 * 1024,
             font_cache_dir: std::env::temp_dir().join("rusticdoc-stored-fonts"),
             store_sync_interval: Duration::from_secs(30),
-            api_keys: Vec::new(),
-            tenant_keys: Vec::new(),
-            basic_auth: None,
-            basic_auth_admin: false,
-            oidc_admin_subjects: Vec::new(),
-            oidc_admin_claim: None,
+            api_key: None,
             job_ttl: Duration::from_secs(3600),
             pdftoppm_bin: first_existing(&[
                 "/usr/bin/pdftoppm",
@@ -302,8 +274,7 @@ impl Default for Config {
             max_render_bytes: crate::limits::DEFAULT_MAX_RENDER_BYTES,
             libreoffice_max_disk: crate::limits::DEFAULT_LIBREOFFICE_MAX_DISK,
             max_form_parts: crate::limits::DEFAULT_MAX_FORM_PARTS,
-            max_async_jobs: 32,
-            max_async_jobs_per_caller: 8,
+            max_async_jobs: 8,
             batch_timeout: Duration::from_secs(300),
             render_mode: RenderMode::InProcess,
             render_mode_set: false,
@@ -327,7 +298,6 @@ impl Default for Config {
             convert_disabled: false,
             pdf_disabled: false,
             webhook_disabled: false,
-            oidc: None,
             engine_orders: BTreeMap::new(),
             webhook_allow_list: Vec::new(),
             webhook_deny_list: Vec::new(),
@@ -413,24 +383,6 @@ impl Config {
             c.fonts_dir = PathBuf::from(v);
         }
         c.store = get("STORE");
-        match get("STORE_SCOPE").as_deref() {
-            None | Some("caller") => {}
-            Some("shared") => c.store_scope = StoreScope::Shared,
-            Some(other) => c.problems.push(format!(
-                "RUSTICDOC_STORE_SCOPE is '{other}'; use 'caller' or 'shared'"
-            )),
-        }
-        if let Some(v) = get("ADMIN_KEYS") {
-            c.admin_keys = v
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if c.admin_keys.is_empty() {
-                c.problems
-                    .push("RUSTICDOC_ADMIN_KEYS is set but holds no key".into());
-            }
-        }
         if let Some(v) = get("MAX_TEMPLATE_BYTES") {
             match parse_bytes(&v) {
                 Some(n) if n > 0 => c.max_template_bytes = n,
@@ -490,60 +442,19 @@ impl Config {
                     .push(format!("RUSTICDOC_STORE_SYNC_INTERVAL: bad duration '{v}'")),
             }
         }
-        if let Some(v) = get("API_KEYS") {
-            c.api_keys = v
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            // Left empty is left unset, as compose passes it; a value with no
-            // key in it is a mistake that would leave the service open.
-            if c.api_keys.is_empty() {
+        // Left empty is left unset, as compose passes it; a value with no key
+        // in it is a mistake that would leave the service open. A list is the
+        // old setting's form, and as one key no caller would have it.
+        if let Some(v) = get("API_KEY") {
+            let key = v.trim();
+            if key.is_empty() {
                 c.problems
-                    .push("RUSTICDOC_API_KEYS is set but holds no key".into());
-            }
-        }
-        if let Some(v) = get("TENANT_KEYS") {
-            for entry in v.split(',').map(str::trim).filter(|e| !e.is_empty()) {
-                match entry.split_once(':') {
-                    Some((tenant, key)) if is_tenant_name(tenant.trim()) && !key.trim().is_empty() => {
-                        c.tenant_keys
-                            .push((tenant.trim().to_string(), key.trim().to_string()));
-                    }
-                    // The entry may be a key: never repeat it.
-                    _ => c.problems.push(
-                        "RUSTICDOC_TENANT_KEYS: each entry is tenant:key, and a tenant is 1 to 64 lowercase letters, digits and hyphens".into(),
-                    ),
-                }
-            }
-            if c.tenant_keys.is_empty() {
+                    .push("RUSTICDOC_API_KEY is set but holds no key".into());
+            } else if key.contains(',') {
                 c.problems
-                    .push("RUSTICDOC_TENANT_KEYS is set but holds no key".into());
-            }
-            let mut seen = std::collections::BTreeSet::new();
-            for (_, key) in &c.tenant_keys {
-                if !seen.insert(key.as_str()) || c.api_keys.contains(key) {
-                    c.problems.push(
-                        "RUSTICDOC_TENANT_KEYS: a key is listed twice, or is also in RUSTICDOC_API_KEYS; a key belongs to one caller".into(),
-                    );
-                    break;
-                }
-            }
-        }
-        match (get("BASIC_AUTH_USERNAME"), get("BASIC_AUTH_PASSWORD")) {
-            (Some(u), Some(p)) => c.basic_auth = Some((u, p)),
-            (None, None) => {}
-            _ => c.problems.push(
-                "RUSTICDOC_BASIC_AUTH_USERNAME and RUSTICDOC_BASIC_AUTH_PASSWORD go together"
-                    .into(),
-            ),
-        }
-        if let Some(v) = on("BASIC_AUTH_ADMIN") {
-            c.basic_auth_admin = v;
-            if v && c.basic_auth.is_none() {
-                c.problems.push(
-                    "RUSTICDOC_BASIC_AUTH_ADMIN is on but basic auth is not configured".into(),
-                );
+                    .push("RUSTICDOC_API_KEY holds one key, with no comma in it".into());
+            } else {
+                c.api_key = Some(key.to_string());
             }
         }
         if let Some(v) = get("JOB_TTL") {
@@ -642,9 +553,6 @@ impl Config {
         if let Some(v) = get("MAX_ASYNC_JOBS").and_then(|v| v.parse().ok()) {
             c.max_async_jobs = v;
         }
-        if let Some(v) = get("MAX_ASYNC_JOBS_PER_CALLER").and_then(|v| v.parse().ok()) {
-            c.max_async_jobs_per_caller = v;
-        }
         if let Some(v) = get("BATCH_TIMEOUT").and_then(|v| parse_duration(&v)) {
             c.batch_timeout = v;
         }
@@ -673,29 +581,14 @@ impl Config {
         if let Some(v) = on("WEBHOOK_DISABLED") {
             c.webhook_disabled = v;
         }
-        let (issuer, audience) = (get("OIDC_ISSUER"), get("OIDC_AUDIENCE"));
-        if issuer.is_some() || audience.is_some() {
-            c.oidc = Some(OidcConfig {
-                issuer: issuer.unwrap_or_default(),
-                audience: audience.unwrap_or_default(),
-                jwks_url: get("OIDC_JWKS_URL").unwrap_or_default(),
-            });
-        }
-        c.oidc_admin_subjects = list("OIDC_ADMIN_SUBJECTS");
-        if let Some(v) = get("OIDC_ADMIN_CLAIM") {
-            match v.split_once('=') {
-                Some((claim, value)) if !claim.trim().is_empty() && !value.trim().is_empty() => {
-                    c.oidc_admin_claim = Some((claim.trim().to_string(), value.trim().to_string()));
-                }
-                _ => c.problems.push(format!(
-                    "RUSTICDOC_OIDC_ADMIN_CLAIM is '{v}'; use claim=value, such as groups=rusticdoc-admins"
-                )),
+        // Ignored, one of these would change what the service does without a
+        // word: a service that relied on basic auth alone would start open.
+        for (name, instead) in REMOVED_VARIABLES {
+            if get(name).is_some() {
+                c.problems.push(format!(
+                    "RUSTICDOC_{name} is no longer supported; {instead}"
+                ));
             }
-        }
-        if c.oidc.is_none() && (!c.oidc_admin_subjects.is_empty() || c.oidc_admin_claim.is_some()) {
-            c.problems.push(
-                "RUSTICDOC_OIDC_ADMIN_SUBJECTS and RUSTICDOC_OIDC_ADMIN_CLAIM need OpenID Connect configured".into(),
-            );
         }
         c.webhook_allow_list = list("WEBHOOK_ALLOW_LIST");
         c.webhook_deny_list = list("WEBHOOK_DENY_LIST");
@@ -714,17 +607,7 @@ impl Config {
 
     /// True when requests must carry credentials.
     pub fn auth_configured(&self) -> bool {
-        !self.api_keys.is_empty()
-            || !self.tenant_keys.is_empty()
-            || self.basic_auth.is_some()
-            || self.oidc.is_some()
-    }
-
-    /// True when some credential other than an admin key can be an admin.
-    pub fn admin_users_configured(&self) -> bool {
-        self.basic_auth_admin
-            || !self.oidc_admin_subjects.is_empty()
-            || self.oidc_admin_claim.is_some()
+        self.api_key.is_some()
     }
 
     /// True when `/metrics` needs credentials.
@@ -782,21 +665,6 @@ impl Config {
                 }
             }
         }
-        if let Some(oidc) = &self.oidc {
-            if oidc.issuer.is_empty() || oidc.audience.is_empty() {
-                return Err("RUSTICDOC_OIDC_ISSUER and RUSTICDOC_OIDC_AUDIENCE go together".into());
-            }
-            for (name, url) in [
-                ("RUSTICDOC_OIDC_ISSUER", oidc.issuer.as_str()),
-                ("RUSTICDOC_OIDC_JWKS_URL", oidc.jwks_url.as_str()),
-            ] {
-                if !url.is_empty() && !is_secure_url(url) {
-                    return Err(format!(
-                        "{name} must be https, or http on a loopback host, not '{url}'"
-                    ));
-                }
-            }
-        }
         for (name, list) in [
             ("RUSTICDOC_WEBHOOK_ALLOW_LIST", &self.webhook_allow_list),
             ("RUSTICDOC_WEBHOOK_DENY_LIST", &self.webhook_deny_list),
@@ -824,33 +692,6 @@ impl Config {
             }
         }
         Ok(())
-    }
-}
-
-/// A tenant's name: 1 to 64 lowercase ASCII letters, digits and hyphens. Kept
-/// that narrow so the name is also a path segment in the store, and two names
-/// can never become the same one there.
-pub fn is_tenant_name(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-}
-
-/// True for an `https` URL, or an `http` one whose host is this machine.
-pub fn is_secure_url(url: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(url) else {
-        return false;
-    };
-    match parsed.scheme() {
-        "https" => true,
-        "http" => match parsed.host() {
-            Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-            None => false,
-        },
-        _ => false,
     }
 }
 
@@ -920,45 +761,58 @@ mod tests {
     }
 
     #[test]
-    fn half_configured_authentication_stops_the_service() {
+    fn a_bad_key_or_a_removed_setting_stops_the_service() {
         for vars in [
-            &[("RUSTICDOC_BASIC_AUTH_USERNAME", "u")][..],
+            &[("RUSTICDOC_API_KEY", "  ")][..],
+            &[("RUSTICDOC_API_KEY", " , ")],
+            &[("RUSTICDOC_API_KEY", "first-key,second-key")],
+            &[("RUSTICDOC_API_KEYS", "first-key")],
+            &[("RUSTICDOC_ADMIN_KEYS", "ops-key")],
+            &[("RUSTICDOC_TENANT_KEYS", "acme:k1")],
+            &[("RUSTICDOC_BASIC_AUTH_USERNAME", "u")],
             &[("RUSTICDOC_BASIC_AUTH_PASSWORD", "p")],
-            &[("RUSTICDOC_API_KEYS", " , ")],
+            &[("RUSTICDOC_BASIC_AUTH_ADMIN", "true")],
             &[("RUSTICDOC_OIDC_ISSUER", "https://idp.example.com")],
             &[("RUSTICDOC_OIDC_AUDIENCE", "a")],
+            &[("RUSTICDOC_OIDC_JWKS_URL", "https://idp.example.com/keys")],
+            &[("RUSTICDOC_OIDC_ADMIN_SUBJECTS", "alice")],
+            &[("RUSTICDOC_OIDC_ADMIN_CLAIM", "groups=admins")],
+            &[("RUSTICDOC_STORE_SCOPE", "shared")],
+            &[("RUSTICDOC_STORE_SCOPE", "caller")],
+            &[("RUSTICDOC_MAX_ASYNC_JOBS_PER_CALLER", "4")],
+            &[("RUSTICDOC_SIGNING_ALLOW", "*")],
+            // Beside the key too: the setting no longer does what it says.
             &[
-                ("RUSTICDOC_OIDC_ISSUER", "http://idp.example.com"),
-                ("RUSTICDOC_OIDC_AUDIENCE", "a"),
-            ],
-            &[
-                ("RUSTICDOC_OIDC_ISSUER", "https://idp.example.com"),
-                ("RUSTICDOC_OIDC_AUDIENCE", "a"),
-                ("RUSTICDOC_OIDC_JWKS_URL", "http://idp.example.com/keys"),
+                ("RUSTICDOC_API_KEY", "a-key"),
+                ("RUSTICDOC_API_KEYS", "a-key,another-key"),
             ],
         ] {
             assert!(from(vars).check().is_err(), "{vars:?}");
         }
+        let err = from(&[("RUSTICDOC_API_KEYS", "first-key")])
+            .check()
+            .unwrap_err();
+        assert!(
+            err.contains("RUSTICDOC_API_KEYS is no longer supported"),
+            "{err}"
+        );
+        // The message never repeats what may be a key.
+        let err = from(&[("RUSTICDOC_API_KEY", "sekrit-one,sekrit-two")])
+            .check()
+            .unwrap_err();
+        assert!(!err.contains("sekrit"), "{err}");
     }
 
     #[test]
-    fn authentication_settings_are_read() {
-        let basic = [
-            ("RUSTICDOC_BASIC_AUTH_USERNAME", "u"),
-            ("RUSTICDOC_BASIC_AUTH_PASSWORD", "p"),
-        ];
-        let config = from(&basic);
-        assert!(config.check().is_ok());
-        assert!(config.basic_auth.is_some());
+    fn the_key_is_read() {
         // Left empty is left unset, as compose passes it.
-        assert!(from(&[("RUSTICDOC_API_KEYS", "")]).check().is_ok());
-        assert_eq!(from(&[("RUSTICDOC_API_KEYS", "a, b")]).api_keys.len(), 2);
-        let local = [
-            ("RUSTICDOC_OIDC_ISSUER", "http://127.0.0.1:8080"),
-            ("RUSTICDOC_OIDC_AUDIENCE", "a"),
-        ];
-        assert!(from(&local).check().is_ok());
-        assert!(from(&local).auth_configured());
+        let empty = from(&[("RUSTICDOC_API_KEY", "")]);
+        assert!(empty.check().is_ok());
+        assert!(!empty.auth_configured());
+        let key = from(&[("RUSTICDOC_API_KEY", " a-key ")]);
+        assert!(key.check().is_ok());
+        assert_eq!(key.api_key.as_deref(), Some("a-key"));
+        assert!(key.auth_configured());
         assert!(from(&[]).check().is_ok());
         assert!(!from(&[]).auth_configured());
     }
@@ -1053,15 +907,11 @@ mod tests {
         let url = format!("file://{}/store", dir.path().display());
         let c = from(&[
             ("RUSTICDOC_STORE", url.as_str()),
-            ("RUSTICDOC_STORE_SCOPE", "shared"),
-            ("RUSTICDOC_ADMIN_KEYS", "one, two"),
             ("RUSTICDOC_MAX_TEMPLATES", "7"),
             ("RUSTICDOC_MAX_TEMPLATE_BYTES", "1MB"),
             ("RUSTICDOC_STORE_SYNC_INTERVAL", "5s"),
         ]);
         assert!(c.check().is_ok());
-        assert_eq!(c.store_scope, StoreScope::Shared);
-        assert_eq!(c.admin_keys, ["one", "two"]);
         assert_eq!(c.max_templates, 7);
         assert_eq!(c.max_template_bytes, 1024 * 1024);
         assert_eq!(c.store_sync_interval, Duration::from_secs(5));
@@ -1070,8 +920,6 @@ mod tests {
         for bad in [
             &[("RUSTICDOC_STORE", "https://example.com")][..],
             &[("RUSTICDOC_STORE", "s3://key:secret@bucket")],
-            &[("RUSTICDOC_STORE_SCOPE", "everyone")],
-            &[("RUSTICDOC_ADMIN_KEYS", " , ")],
             &[("RUSTICDOC_MAX_TEMPLATES", "0")],
             &[("RUSTICDOC_MAX_TEMPLATE_BYTES", "lots")],
             &[("RUSTICDOC_STORE_SYNC_INTERVAL", "0s")],
@@ -1133,51 +981,20 @@ mod tests {
     }
 
     #[test]
-    fn tenants_admins_jobs_and_previews_are_read() {
+    fn jobs_and_previews_are_read() {
         let c = from(&[
-            ("RUSTICDOC_TENANT_KEYS", "acme:k1,acme:k2"),
-            ("RUSTICDOC_BASIC_AUTH_USERNAME", "u"),
-            ("RUSTICDOC_BASIC_AUTH_PASSWORD", "p"),
-            ("RUSTICDOC_BASIC_AUTH_ADMIN", "true"),
-            ("RUSTICDOC_OIDC_ISSUER", "https://idp.example.com"),
-            ("RUSTICDOC_OIDC_AUDIENCE", "a"),
-            ("RUSTICDOC_OIDC_ADMIN_SUBJECTS", "alice, bob"),
-            (
-                "RUSTICDOC_OIDC_ADMIN_CLAIM",
-                "realm_access.roles = rusticdoc-admin",
-            ),
             ("RUSTICDOC_JOB_TTL", "10m"),
             ("RUSTICDOC_PDFTOPPM_BIN", "none"),
         ]);
         assert!(c.check().is_ok(), "{:?}", c.check());
-        assert_eq!(
-            c.tenant_keys,
-            [("acme".into(), "k1".into()), ("acme".into(), "k2".into())]
-        );
-        assert!(c.basic_auth_admin && c.admin_users_configured());
-        assert_eq!(c.oidc_admin_subjects, ["alice", "bob"]);
-        assert_eq!(
-            c.oidc_admin_claim,
-            Some(("realm_access.roles".into(), "rusticdoc-admin".into()))
-        );
         assert_eq!(c.job_ttl, Duration::from_secs(600));
         assert!(c.pdftoppm_bin.is_none());
-        assert!(!Config::default().admin_users_configured());
 
         for bad in [
             &[("RUSTICDOC_JOB_TTL", "0s")][..],
             &[("RUSTICDOC_JOB_TTL", "soon")],
-            &[
-                ("RUSTICDOC_OIDC_ISSUER", "https://idp.example.com"),
-                ("RUSTICDOC_OIDC_AUDIENCE", "a"),
-                ("RUSTICDOC_OIDC_ADMIN_CLAIM", "groups"),
-            ],
         ] {
             assert!(from(bad).check().is_err(), "{bad:?}");
-        }
-        assert!(is_tenant_name("acme-2"));
-        for bad in ["", "Acme", "a.b", "a_b", "a:b", &"a".repeat(65)] {
-            assert!(!is_tenant_name(bad), "{bad}");
         }
     }
 

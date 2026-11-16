@@ -11,10 +11,10 @@
 //! disabled, so neither DNS rebinding nor a redirect can turn a webhook into
 //! a request to something beside the service.
 //!
-//! Each caller signs with its own key, so one tenant cannot send another's
-//! receiver something that verifies: the key is `HMAC-SHA256(secret, principal)`,
-//! or the secret itself when the service requires no credentials and the
-//! principal is `public`. `rusticdoc webhook-secret` prints a caller's key.
+//! Deliveries are signed with a key derived from the API key:
+//! `HMAC-SHA256(secret, principal)`, or the secret itself when the service
+//! requires no credentials and the principal is `public`. `rusticdoc
+//! webhook-secret` prints it.
 //!
 //! The signature covers the timestamp, the event, the request id and the body:
 //! `X-Rusticdoc-Signature: v1=<hex HMAC-SHA256 of
@@ -211,7 +211,7 @@ impl FromRequestParts<AppState> for Hook {
         };
         match (hook, background) {
             (Some(mut hook), _) => {
-                hook.permit = Some(Arc::new(state.jobs.try_acquire(caller)?));
+                hook.permit = Some(Arc::new(state.jobs.try_acquire()?));
                 hook.principal = caller.to_string();
                 Ok(Self(Delivery::Webhook(Box::new(hook))))
             }

@@ -76,7 +76,7 @@ Sending both `templateId` and a `template` file part gets a `400`. Any files you
 
 `templateId` also takes an [alias](#aliases-and-versions), written as `invoice` or `invoice@2`.
 
-An id this caller doesn't have returns `404 not_found`, and so does one that's neither a UUID nor an alias.
+An id the store doesn't have returns `404 not_found`, and so does one that's neither a UUID nor an alias.
 
 ## Send JSON instead of a form
 
@@ -113,7 +113,7 @@ A JSON body can't carry files, so a member named `template`, `files`, `assets`, 
 
 ## List
 
-`GET /v1/templates` lists this caller's templates, oldest first.
+`GET /v1/templates` lists the stored templates, oldest first.
 
 | Query | Default | Meaning |
 |---|---|---|
@@ -225,7 +225,7 @@ To roll back, point the alias at the older template again, which adds a version,
 
 An alias whose template has since been deleted returns a `404` that says which template it names.
 
-An alias is 1 to 64 letters, digits, `.`, `_` and `-`. It has to start with a letter or digit and can't be shaped like a UUID. Any other name gets a `400`. Each caller has its own aliases, scoped the way templates are, so two callers can both have an `invoice`.
+An alias is 1 to 64 letters, digits, `.`, `_` and `-`. It has to start with a letter or digit and can't be shaped like a UUID. Any other name gets a `400`.
 
 Nothing in the store is modified to make this work, because each version is an object of its own and the newest one is the alias. A delete writes a marker first, then removes the older records.
 
@@ -317,14 +317,32 @@ grep -qi "^x-page-count: 1" headers.txt
 
 ## Scope
 
-`RUSTICDOC_STORE_SCOPE` decides who sees what.
+Templates and aliases are one set for the whole store. Every service on the store reads and deletes the same ones, whatever its [API key](authentication.md), and they stay when you replace the key. Background jobs belong to the key that started them.
 
-| Value | Behaviour |
-|---|---|
-| `caller` (default) | Each credential only sees its own templates and aliases. Another caller's id returns `404`, not `403`. An API key's scope follows the key, so replacing a key leaves its templates behind, unless it's a [tenant key](authentication.md#tenant-keys) |
-| `shared` | Every credential reads and deletes the same templates and aliases. Background jobs still belong to each caller |
+### Templates stored by an earlier version
 
-An admin key is a credential with its own scope, so it can't see other callers' templates either. With no [credentials configured](authentication.md), there's one scope, shared by everyone who can reach the service.
+Before 0.2.0 each caller had its own set, in `templates/<scope>/` and `aliases/<scope>/` of the store. The scope was `key-` and the SHA-256 of the API key, `tenant-<name>` for a tenant key, or `public` for a service with no credentials. The service now reads `templates/shared/` and `aliases/shared/` only, so it answers `404` for a template until you move it. A store that ran with `RUSTICDOC_STORE_SCOPE=shared` needs no move.
+
+Move them while no service is running on the store. On a volume, for `RUSTICDOC_STORE=file:///data/store`:
+
+```bash
+cd /data/store
+ls templates
+mv templates/key-<digest> templates/shared
+mv aliases/key-<digest> aliases/shared
+```
+
+In S3, for `RUSTICDOC_STORE=s3://bucket/prefix`:
+
+```bash
+aws s3 ls s3://bucket/prefix/templates/
+aws s3 mv --recursive s3://bucket/prefix/templates/key-<digest>/ s3://bucket/prefix/templates/shared/
+aws s3 mv --recursive s3://bucket/prefix/aliases/key-<digest>/ s3://bucket/prefix/aliases/shared/
+```
+
+A store that never set an alias has no `aliases/` to move. Templates keep their ids, and aliases keep their names and versions.
+
+If the store has more than one scope, move what's inside each into `shared`. Template ids never collide. An alias that two scopes both named would end up with the versions of both, so move it from one of them only.
 
 ## Limits
 

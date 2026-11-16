@@ -1,14 +1,12 @@
 //! The server's side of PDF signing: the outbound client that timestamps and
-//! validation data go through, and who may sign with which key.
+//! validation data go through.
 
 use std::time::Duration;
 
 use rusticdoc_core::Config;
 use rusticdoc_core::pdfops::sign::net::upstream;
-use rusticdoc_core::pdfops::sign::{Outbound, OutboundRequest, SignOptions, Signing};
+use rusticdoc_core::pdfops::sign::{Outbound, OutboundRequest};
 
-use crate::auth::Principal;
-use crate::error::ApiError;
 use crate::webhook::{UrlPolicy, client_for, redact, resolve};
 
 /// Requests to the timestamp authority, OCSP responders, CRL distribution
@@ -91,101 +89,5 @@ impl Outbound for PolicyOutbound {
         tokio::time::timeout(request.timeout + Duration::from_millis(100), work)
             .await
             .map_err(|_| failed(format!("no answer within {:?}", request.timeout)))?
-    }
-}
-
-/// True when the caller `principal` may sign with a key whose allow list is
-/// `allow`. An entry matches the principal string exactly (`key:<sha256>`,
-/// `basic:<sha256>`, `oidc:<sha256>`, `tenant:<name>`, `public`), `prefix*`
-/// matches every principal that starts with the prefix, and `*` matches every
-/// caller.
-pub fn may_use_signing_key(principal: &str, allow: &[String]) -> bool {
-    allow.iter().any(|entry| match entry.strip_suffix('*') {
-        Some(prefix) => principal.starts_with(prefix),
-        None => entry == principal,
-    })
-}
-
-/// Refuses, with 403, a caller that may not use the key `options` names. A
-/// key that is not configured is left to [`Signing::check`], which runs after
-/// the step order is checked.
-pub fn authorize(
-    signing: &Signing,
-    principal: &Principal,
-    options: &SignOptions,
-) -> Result<(), ApiError> {
-    let Ok(allow) = signing.allow_list(options.key.as_deref()) else {
-        return Ok(());
-    };
-    if let Some(allow) = allow
-        && !may_use_signing_key(&principal.0, allow)
-    {
-        return Err(ApiError::new(
-            axum::http::StatusCode::FORBIDDEN,
-            "signing_key_forbidden",
-            match &options.key {
-                Some(name) => format!("this caller may not sign with the key '{name}'"),
-                None => "this caller may not sign with the default key".to_string(),
-            },
-        ));
-    }
-    Ok(())
-}
-
-/// Refuses, with 403, a caller that may not renew a document timestamp. A
-/// renewal uses no key, but it spends the timestamp authority's service on
-/// the caller's file, so where keys are configured it is open to the callers
-/// who may sign with at least one of them. With no key configured there is
-/// no list to go by, and every caller of the API may renew.
-pub fn authorize_renewal(signing: &Signing, principal: &Principal) -> Result<(), ApiError> {
-    let mut keys = signing.keys().map(|(name, _)| name).peekable();
-    if keys.peek().is_none() {
-        return Ok(());
-    }
-    let allowed = keys.any(|name| match signing.allow_list(name) {
-        Ok(Some(allow)) => may_use_signing_key(&principal.0, allow),
-        Ok(None) => true,
-        Err(_) => false,
-    });
-    if allowed {
-        return Ok(());
-    }
-    Err(ApiError::new(
-        axum::http::StatusCode::FORBIDDEN,
-        "signing_key_forbidden",
-        "this caller may not use this service's signing, so it may not renew a timestamp",
-    ))
-}
-
-/// [`authorize`] for every `sign` step of a step list.
-pub fn authorize_steps(
-    signing: &Signing,
-    principal: &Principal,
-    steps: &[rusticdoc_core::Step],
-) -> Result<(), ApiError> {
-    for step in steps {
-        if let rusticdoc_core::Step::Sign { options } = step {
-            authorize(signing, principal, options)?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::may_use_signing_key;
-
-    #[test]
-    fn allow_lists_match_exactly_by_prefix_or_everyone() {
-        let allow = |entries: &[&str]| entries.iter().map(|e| e.to_string()).collect::<Vec<_>>();
-        assert!(may_use_signing_key("tenant:acme", &allow(&["tenant:acme"])));
-        assert!(!may_use_signing_key(
-            "tenant:acme2",
-            &allow(&["tenant:acme"])
-        ));
-        assert!(may_use_signing_key("tenant:acme2", &allow(&["tenant:*"])));
-        assert!(!may_use_signing_key("key:abc", &allow(&["tenant:*"])));
-        assert!(may_use_signing_key("public", &allow(&["*"])));
-        assert!(!may_use_signing_key("public", &allow(&[])));
     }
 }

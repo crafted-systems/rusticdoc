@@ -17,9 +17,8 @@ A document service reads complicated files from people it doesn't know, and rust
 - Stops documents reaching out. LibreOffice fetches nothing, HTML is laid out by Fulgur with no network, and images and SVG references are never fetched.
 - Refuses private addresses for webhooks, `downloadFrom`, timestamp authorities and revocation servers, pins the address it checked and doesn't follow redirects.
 - Checks what signing relies on. Timestamps must come from an authority you trust, and OCSP responses and CRLs must be current and signed by the right issuer.
-- Signs webhooks per caller, so one tenant can't send another's receiver something that verifies.
-- Keeps callers apart in the store. A caller reaches only its own stored templates, and another caller's id returns `404`. Uploads and deletes are logged with `log_type: audit`.
-- Asks for an admin key to change fonts, because a font decides what the digits look like in everyone's documents.
+- Signs webhooks with a key derived from the secret and the API key.
+- Logs uploads and deletes in the store with `log_type: audit`.
 - Runs hardened by default, as a non-root user with a read-only root filesystem and every capability dropped.
 
 ## What is left to you

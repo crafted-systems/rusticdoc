@@ -18,7 +18,7 @@
 //!
 //! A signature can certify instead of approve (DocMDP, permission 1 to 3).
 //! Keys come from PEM files or a PKCS#11 token; besides the default key there
-//! can be named keys, each with the callers allowed to use it. A timestamp
+//! can be named keys, which a request chooses by name. A timestamp
 //! authority or revocation source that fails makes the request fail: no file
 //! is returned at a lower level than asked for.
 
@@ -274,15 +274,13 @@ pub struct Network<'a> {
     pub limits: &'a Limits,
 }
 
-/// Every key the service signs with, who may use each, and what levels
+/// Every key the service signs with, and what levels
 /// beyond B-B need: the timestamp authority, the outbound client and the
 /// limits on fetching validation data.
 #[derive(Debug, Default)]
 pub struct Signing {
     default: Option<Arc<Signer>>,
-    /// Who may use the default key; every caller when `None`.
-    default_allow: Option<Vec<String>>,
-    named: BTreeMap<String, (Arc<Signer>, Vec<String>)>,
+    named: BTreeMap<String, Arc<Signer>>,
     tsa: Option<Tsa>,
     level: Level,
     limits: Limits,
@@ -312,17 +310,11 @@ impl Signing {
             )),
             None => None,
         };
-        if default.is_none() && settings.default_allow.is_some() {
-            return Err(
-                "RUSTICDOC_SIGNING_ALLOW is set, but there is no default key (RUSTICDOC_SIGNING_KEY)"
-                    .into(),
-            );
-        }
         let mut named = BTreeMap::new();
         for key in &settings.named {
             let signer = settings::load_key(&key.key, &key.cert, &settings.pkcs11)
                 .map_err(|e| format!("signing key '{}': {e}", key.name))?;
-            named.insert(key.name.clone(), (Arc::new(signer), key.allow.clone()));
+            named.insert(key.name.clone(), Arc::new(signer));
         }
         let tsa = match &settings.tsa {
             Some(tsa) => {
@@ -334,7 +326,6 @@ impl Signing {
         };
         Ok(Self {
             default,
-            default_allow: settings.default_allow.clone(),
             named,
             tsa,
             level: settings.level,
@@ -343,10 +334,9 @@ impl Signing {
         })
     }
 
-    /// Adds a named key with its allow list.
-    pub fn with_named(mut self, name: &str, signer: Signer, allow: Vec<String>) -> Self {
-        self.named
-            .insert(name.to_string(), (Arc::new(signer), allow));
+    /// Adds a named key.
+    pub fn with_named(mut self, name: &str, signer: Signer) -> Self {
+        self.named.insert(name.to_string(), Arc::new(signer));
         self
     }
 
@@ -385,7 +375,7 @@ impl Signing {
         self.default
             .iter()
             .map(|s| (None, s))
-            .chain(self.named.iter().map(|(n, (s, _))| (Some(n.as_str()), s)))
+            .chain(self.named.iter().map(|(n, s)| (Some(n.as_str()), s)))
     }
 
     /// The timestamp authority, when one is configured.
@@ -413,7 +403,7 @@ impl Signing {
                     .into(),
                 )
             }),
-            Some(name) => self.named.get(name).map(|(s, _)| s).ok_or_else(|| {
+            Some(name) => self.named.get(name).ok_or_else(|| {
                 if self.is_configured() {
                     Error::InvalidRequest(format!("there is no signing key named '{name}'"))
                 } else {
@@ -424,16 +414,6 @@ impl Signing {
                 }
             }),
         }
-    }
-
-    /// Who may use the key `name` names: `None` when every caller may. The
-    /// server matches the caller against it.
-    pub fn allow_list(&self, name: Option<&str>) -> Result<Option<&[String]>> {
-        self.key(name)?;
-        Ok(match name {
-            None => self.default_allow.as_deref(),
-            Some(name) => self.named.get(name).map(|(_, allow)| allow.as_slice()),
-        })
     }
 
     /// Refuses a signature this service cannot make, before any work: no

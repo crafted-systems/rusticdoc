@@ -52,7 +52,7 @@ replica() {
     docker run -d --name "$RUN-$name" --network "$NET" -p 127.0.0.1::9027 \
         --read-only --cap-drop ALL --security-opt no-new-privileges:true \
         --tmpfs /tmp:size=2g --tmpfs /home/rusticdoc:uid=1001,gid=1001,size=512m \
-        -e RUSTICDOC_API_KEYS=alice-key,bob-key -e RUSTICDOC_ADMIN_KEYS=admin-key \
+        -e RUSTICDOC_API_KEY=alice-key \
         -e RUSTICDOC_STORE_SYNC_INTERVAL=3s "$@" "$IMAGE" >/dev/null
 }
 until_ready() {
@@ -103,7 +103,7 @@ exercise() {
     check "another replica lists it" "$id" "$(curl -s -H 'x-api-key: alice-key' "http://$(url "$b")/v1/templates" | json "['templates'][-1]['id']")"
     check "the content comes back unchanged" "$(shasum -a 256 <"$WORK/letter.docx")" \
         "$(curl -s -H 'x-api-key: alice-key' "http://$(url "$b")/v1/templates/$id/content" | shasum -a 256)"
-    check "another caller cannot see it" 404 "$(code -H 'x-api-key: bob-key' "http://$(url "$b")/v1/templates/$id")"
+    check "another key gets nothing" 401 "$(code -H 'x-api-key: bob-key' "http://$(url "$b")/v1/templates/$id")"
     check "no credential gets nothing" 401 "$(code "http://$(url "$b")/v1/templates/$id")"
     printf '{%% for %%}' >"$WORK/broken.txt"
     check "the render worker refuses bad syntax at upload" 422 \
@@ -112,12 +112,12 @@ exercise() {
     echo " fonts"
     holds "before the upload the fallback is used" "x-fonts-used" "$(fonts_used "$b" "$id")"
     lacks "and not the probe font" "Probe" "$(fonts_used "$b" "$id")"
-    check "a caller's key cannot upload fonts" 403 \
-        "$(code -H 'x-api-key: alice-key' -F "file=@$WORK/fonts.zip" "http://$(url "$a")/v1/fonts")"
-    out=$(curl -s -m 60 -H 'x-api-key: admin-key' -F "file=@$WORK/fonts.zip" "http://$(url "$a")/v1/fonts")
+    check "no credential cannot upload fonts" 401 \
+        "$(code -F "file=@$WORK/fonts.zip" "http://$(url "$a")/v1/fonts")"
+    out=$(curl -s -m 60 -H 'x-api-key: alice-key' -F "file=@$WORK/fonts.zip" "http://$(url "$a")/v1/fonts")
     local font
     font=$(echo "$out" | json "['fonts'][0]['id']")
-    check "an admin's key can, and it reads the family" "Rusticdoc Probe" "$(echo "$out" | json "['fonts'][0]['faces'][0]['family']")"
+    check "the key can, and it reads the family" "Rusticdoc Probe" "$(echo "$out" | json "['fonts'][0]['faces'][0]['family']")"
     check "the licence is reported as skipped" LICENSE.txt "$(echo "$out" | json "['skipped'][0]['file']")"
     check "nothing escaped the ZIP's paths" absent \
         "$(docker exec "$RUN-$a" sh -c 'test -e /tmp/escaped && echo present || echo absent')"
@@ -135,8 +135,8 @@ exercise() {
     check "deleting a template works" 204 "$(code -X DELETE -H 'x-api-key: alice-key' "http://$(url "$a")/v1/templates/$id")"
     check "another replica refuses it at once, though it had it cached" 404 \
         "$(code -H 'x-api-key: alice-key' -F "templateId=$id" -F 'data={"name":"A"}' "http://$(url "$b")/v1/render")"
-    check "a caller's key cannot delete a font" 403 "$(code -X DELETE -H 'x-api-key: alice-key' "http://$(url "$a")/v1/fonts/$font")"
-    check "an admin's key can" 204 "$(code -X DELETE -H 'x-api-key: admin-key' "http://$(url "$a")/v1/fonts/$font")"
+    check "no credential cannot delete a font" 401 "$(code -X DELETE "http://$(url "$a")/v1/fonts/$font")"
+    check "the key can" 204 "$(code -X DELETE -H 'x-api-key: alice-key' "http://$(url "$a")/v1/fonts/$font")"
     check "the other replica drops it unprompted" no "$(font_listed "$b" no)"
 }
 
