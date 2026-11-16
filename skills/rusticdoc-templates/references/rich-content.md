@@ -374,7 +374,7 @@ curl -F template=@tagged.docx -F "data=<invoice.json" \
 | Kind | Tags |
 |---|---|
 | Blocks | `p`, `h1` to `h6`, `ul`, `ol`, `li`, `table`, `tr`, `td`, `th` |
-| Inline | `b`, `strong`, `i`, `em`, `u`, `s`, `sub`, `sup`, `br` |
+| Inline | `b`, `strong`, `i`, `em`, `u`, `s`, `del`, `strike`, `sub`, `sup`, `br` |
 | Links | `a href="..."`, with the same rules as `link` |
 | Colour | `span style="color:#hex"` |
 
