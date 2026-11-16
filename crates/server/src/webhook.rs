@@ -424,8 +424,8 @@ fn is_private_name(host: &str) -> bool {
 }
 
 /// Global unicast only: everything loopback, private, link-local, carrier
-/// NAT, multicast, reserved, documentation or benchmark is out, including
-/// IPv4 addresses embedded in IPv6 forms.
+/// NAT, multicast, reserved, documentation, benchmark or set aside for a
+/// protocol is out, including IPv4 addresses embedded in IPv6 forms.
 pub fn is_global_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_global_v4(ip),
@@ -465,8 +465,13 @@ pub fn is_global_ip(ip: IpAddr) -> bool {
                 || (s[0] & 0xffc0) == 0xfe80 // link local fe80::/10
                 || (s[0] & 0xffc0) == 0xfec0 // site local fec0::/10
                 || (s[0] & 0xff00) == 0xff00 // multicast ff00::/8
+                // IETF protocol assignments 2001::/23: Teredo, benchmark, ORCHID
+                // and a few anycast services. No receiver lives there, and
+                // ordinary allocations start at 2001:200::.
+                || (s[0] == 0x2001 && s[1] < 0x0200)
                 || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
-                || (s[0] == 0x2001 && s[1] == 0x0002 && s[2] == 0)) // benchmark
+                || (s[0] == 0x3fff && s[1] < 0x1000) // documentation 3fff::/20
+                || s[0] == 0x5f00) // segment routing 5f00::/16
         }
     }
 }
@@ -717,6 +722,14 @@ mod tests {
             "64:ff9b:1:abcd::808:808",
             "100::1",
             "100::ffff:ffff:ffff:ffff",
+            "2001::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "2001:2::1",
+            "2001:10::1",
+            "2001:1ff:ffff::1",
+            "3fff::1",
+            "3fff:fff:ffff::1",
+            "5f00::1",
         ] {
             assert!(!is_global_ip(ip(p)), "{p} should not be global");
         }
@@ -725,6 +738,9 @@ mod tests {
             "100.128.0.1",
             "172.32.0.1",
             "2606:4700::1111",
+            "2001:200::1",
+            "2001:4860:4860::8888",
+            "3fff:1000::1",
             "::ffff:8.8.8.8",
             "64:ff9b::808:808",
         ] {

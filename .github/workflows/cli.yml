@@ -49,7 +49,7 @@ jobs:
           [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "not a version tag such as v0.1.0: $TAG"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.TAG }}
+          ref: refs/tags/${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
@@ -88,7 +88,7 @@ jobs:
           [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "not a version tag such as v0.1.0: $TAG"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.TAG }}
+          ref: refs/tags/${{ env.TAG }}
       # The site workflow has already checked that the references match the
       # docs and that each SKILL.md names the workspace version.
       - name: Zip each skill
