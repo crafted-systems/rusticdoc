@@ -4,6 +4,7 @@ import Sheet from '../components/Sheet.astro';
 import Icon from '../components/Icon.astro';
 import Logo from '../components/Logo.astro';
 import { IMAGE, REPO } from '../site';
+import { faqPage, graph, organization, software, website } from '../seo';
 
 // Light highlighting for the snippets: comments, template tags and strings.
 const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -168,10 +169,10 @@ const faq = [
   },
 ];
 ---
-<Base title="rusticdoc: fill Office and PDF templates from JSON" description="Write a template in Word or Excel, send it with JSON, and get a finished PDF back. Self-hosted, open source, in one container." path="/">
+<Base title="rusticdoc: keep document layout out of your code, fill templates from JSON" description="Lay out the document in Word, Excel or PowerPoint, send it with JSON, and get a finished PDF back. Self-hosted, open source, in one container." path="/" jsonLd={graph(website, organization, software, faqPage(faq))}>
   <section class="hero">
-    <h1>Fill Office and PDF templates from&nbsp;JSON.</h1>
-    <p class="lede">Write the template in Word, Excel or PowerPoint and send it with your data. One request fills the tags and gives you back a finished PDF, from a single container on your own servers.</p>
+    <h1>Keep document layout out of your&nbsp;code.<br>Fill templates from&nbsp;JSON.</h1>
+    <p class="lede">Templates are ordinary Word, Excel and PowerPoint files, so the layout changes in the editor, not in your codebase. Send one with your data and a single request fills the tags and gives you back a finished PDF, from a container on your own servers.</p>
     <p class="actions">
       <a class="button" href="/docs/start/quickstart/">Read the quickstart</a>
       <a class="button secondary" href={REPO}>View on GitHub</a>
@@ -275,18 +276,21 @@ Total due {{ total | currency(currency) }}
         <h3>Invoices with a QR code to pay</h3>
         <p>Fill the Word invoice your finance team already uses. Add a QR code for payment, and embed Factur-X XML if you need e-invoicing.</p>
         <code set:html={hl('{{ payment_url | barcode("qr", size=90) }}')} />
+        <p class="more"><a href="/docs/use-cases/invoices/">Generate invoices</a></p>
       </article>
       <article class="use">
         <p class="use-tab">Reports</p>
         <h3>Reports from a spreadsheet</h3>
         <p>Fill the rows of an Excel sheet and its formulas keep working. Add a native chart, then convert the workbook to PDF.</p>
         <code set:html={hl('{% for r in rows %}{{ r.month }}  {{ r.sales }}{% endfor %}')} />
+        <p class="more"><a href="/docs/use-cases/excel-reports/">Build Excel reports</a></p>
       </article>
       <article class="use">
         <p class="use-tab">Forms</p>
         <h3>PDF forms you were given</h3>
         <p>Fill the fields of an existing PDF form from JSON, then flatten it so nobody can change the values.</p>
         <code set:html={hl('-F template=@application.pdf -F steps=flatten')} />
+        <p class="more"><a href="/docs/use-cases/pdf-forms/">Fill PDF forms</a></p>
       </article>
     </div>
   </section>

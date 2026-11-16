@@ -1,5 +1,6 @@
 ---
 title: Batch rendering
+seoTitle: "Batch rendering: one document per record, returned as a ZIP"
 description: Render one template once per element of an array in your data, and get the files back in a ZIP.
 sidebar:
   order: 8

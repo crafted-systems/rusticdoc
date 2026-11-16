@@ -1,5 +1,6 @@
 ---
 title: Validate a template
+seoTitle: "Validate a document template against sample JSON"
 description: Check a template against sample data and get a list of every problem and where it is, without producing a file.
 sidebar:
   order: 7

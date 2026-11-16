@@ -7,13 +7,16 @@ import ThemeSwitch from '../components/ThemeSwitch.astro';
 import Logo from '../components/Logo.astro';
 import SiteMenus from '../components/SiteMenus.astro';
 import { REPO } from '../site';
+import { OG_IMAGE_ALT } from '../seo';
 
 interface Props {
   title: string;
   description: string;
   path: string;
+  /** The page's schema.org JSON-LD, from graph() in src/seo.ts. */
+  jsonLd?: string;
 }
-const { title, description, path } = Astro.props;
+const { title, description, path, jsonLd } = Astro.props;
 // Under a base path, such as on GitHub Pages, the page's own address and the
 // preview image sit below it.
 const root = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -25,6 +28,7 @@ const footer = [
     links: [
       { href: '/docs/start/quickstart/', label: 'Quickstart' },
       { href: '/docs/templates/syntax/', label: 'Template syntax' },
+      { href: '/docs/use-cases/invoices/', label: 'Use cases' },
       { href: '/docs/reference/api/', label: 'HTTP API' },
       { href: '/docs/reference/cli/', label: 'CLI' },
     ],
@@ -44,6 +48,7 @@ const footer = [
       { href: '/about/', label: 'About' },
       { href: '/docs/project/changelog/', label: 'Changelog' },
       { href: '/docs/project/known-limits/', label: 'Known limits' },
+      { href: '/docs/compare/gotenberg/', label: 'Compare' },
       { href: REPO, label: 'GitHub' },
       { href: `${REPO}/issues`, label: 'Report a problem' },
     ],
@@ -65,7 +70,14 @@ const footer = [
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
     <meta property="og:image" content={image} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={OG_IMAGE_ALT} />
+    <meta property="og:site_name" content="rusticdoc" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content={image} />
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="Documentation for language models" />
+    {jsonLd && <script type="application/ld+json" set:html={jsonLd} />}
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#e9f0fc" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a1324" />
     <ThemeProvider expect="main" />
@@ -89,7 +101,7 @@ const footer = [
       <div class="colophon-inner">
         <div class="colophon-brand">
           <a class="brand" href="/" aria-label="rusticdoc home"><Logo /><span>rustic<span class="wordmark-doc">doc</span></span></a>
-          <p>Fill Office and PDF templates from JSON, in one container you run yourself. Open source under the <a href={`${REPO}/blob/main/LICENSE`}>Apache-2.0 licence</a>.</p>
+          <p>Keep document layout out of your code and fill templates from JSON, in one container you run yourself. Open source under the <a href={`${REPO}/blob/main/LICENSE`}>Apache-2.0 licence</a>.</p>
         </div>
         {footer.map((col) => (
           <nav class="colophon-col" aria-label={col.title}>

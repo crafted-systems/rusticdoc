@@ -1,5 +1,6 @@
 ---
 title: Docker
+seoTitle: "Run rusticdoc in Docker"
 description: Run one rusticdoc container that other people can use, with credentials, limits, fonts, health checks and upgrades.
 sidebar:
   order: 1

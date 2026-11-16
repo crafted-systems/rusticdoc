@@ -1,5 +1,6 @@
 ---
 title: Install
+seoTitle: "Install rusticdoc with Docker, Compose or from source"
 description: Run rusticdoc from the image, with Compose or from source, and use its CLI.
 sidebar:
   order: 2

@@ -24,17 +24,29 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'rusticdoc',
-      description: 'Fill Office and PDF templates from JSON, convert them with LibreOffice and finish them with PDF operations, in one self-hosted container.',
+      description: 'Keep document layout out of your code: fill Office, HTML and PDF templates from JSON, convert them with LibreOffice and finish them with PDF operations, in one self-hosted container.',
       logo: { light: './src/assets/logo-light.svg', dark: './src/assets/logo-dark.svg', alt: '' },
       favicon: '/favicon.svg',
       disable404Route: true,
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/crafted-systems/rusticdoc' }],
       editLink: { baseUrl: 'https://github.com/crafted-systems/rusticdoc/edit/main/site/' },
       lastUpdated: false,
+      // Starlight sets og:title and og:description per page; the share image
+      // and the pointers for agents are the same everywhere.
+      head: [
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://rusticdoc.com/og.png' } },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'rusticdoc: keep document layout out of your code, fill templates from JSON' } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://rusticdoc.com/og.png' } },
+        { tag: 'link', attrs: { rel: 'alternate', type: 'text/plain', href: '/llms.txt', title: 'Documentation for language models' } },
+      ],
+      routeMiddleware: './src/routeData.ts',
       components: {
         Header: './src/components/Header.astro',
         ThemeProvider: './src/components/ThemeProvider.astro',
         ThemeSelect: './src/components/ThemeSwitch.astro',
+        PageTitle: './src/components/PageTitle.astro',
       },
       customCss: ['./src/styles/fonts.css', './src/styles/tokens.css', './src/styles/docs.css'],
       // Code block settings live in ec.config.mjs: they use functions, which
@@ -58,6 +70,7 @@ export default defineConfig({
       ],
       sidebar: [
         { label: 'Start here', items: [{ autogenerate: { directory: 'docs/start' } }] },
+        { label: 'Use cases', items: [{ autogenerate: { directory: 'docs/use-cases' } }] },
         { label: 'Write templates', items: [{ autogenerate: { directory: 'docs/templates' } }] },
         { label: 'Use the API', items: [{ autogenerate: { directory: 'docs/guides' } }] },
         { label: 'Run it', items: [{ autogenerate: { directory: 'docs/operate' } }] },
@@ -71,6 +84,7 @@ export default defineConfig({
             { slug: 'docs/reference/errors' },
           ],
         },
+        { label: 'Compare', collapsed: true, items: [{ autogenerate: { directory: 'docs/compare' } }] },
         {
           label: 'Project',
           items: [{ autogenerate: { directory: 'docs/project' } }],

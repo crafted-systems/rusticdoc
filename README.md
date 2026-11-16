@@ -10,7 +10,7 @@
   </a>
 </p>
 
-<h3 align="center">Fill Office, HTML and PDF templates from JSON.<br>Convert, sign and finish them in one request, from one container.</h3>
+<h3 align="center">Keep document layout out of your code. Fill templates from JSON.<br>Office, HTML and PDF templates, converted, signed and finished in one request, from one container.</h3>
 
 <p align="center">
   <a href="https://rusticdoc.com/docs/"><img alt="Documentation" src="https://img.shields.io/badge/Documentation-1668f5?style=for-the-badge&logo=readthedocs&logoColor=white"></a>

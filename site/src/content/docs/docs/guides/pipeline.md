@@ -1,5 +1,6 @@
 ---
 title: The render pipeline
+seoTitle: "Fill a template and convert it to PDF in one request"
 description: Fill a template from JSON and run conversion and PDF steps in one request to /v1/render.
 sidebar: { order: 1 }
 ---

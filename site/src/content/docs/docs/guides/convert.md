@@ -1,5 +1,6 @@
 ---
 title: Convert documents
+seoTitle: "Convert Word, Excel and PowerPoint to PDF with LibreOffice"
 description: Convert one or more uploaded documents with LibreOffice, or HTML with Fulgur, and merge or finish the result with PDF options.
 sidebar: { order: 2 }
 ---

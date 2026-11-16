@@ -1,5 +1,6 @@
 ---
 title: Stored templates
+seoTitle: "Stored templates: upload once, render by id or alias"
 description: Upload a template once, then render it by id or alias, roll versions forward and back, list the data it reads and preview it as a PNG.
 sidebar: { order: 4 }
 ---

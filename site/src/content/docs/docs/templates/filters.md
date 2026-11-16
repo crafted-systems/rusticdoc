@@ -1,5 +1,6 @@
 ---
 title: Filters
+seoTitle: "Template filters: format numbers, money and dates"
 description: Format numbers, money and dates, translate labels, and transform values with every filter a template can use.
 sidebar:
   order: 2

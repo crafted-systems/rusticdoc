@@ -1,5 +1,6 @@
 ---
 title: Office formats
+seoTitle: "Word, Excel and PowerPoint templates (DOCX, XLSX, PPTX, ODT, ODS, ODP)"
 description: Where to put loops and conditions in DOCX, ODT, XLSX, ODS, PPTX and ODP templates, and what each format supports.
 sidebar:
   order: 4

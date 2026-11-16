@@ -1,5 +1,6 @@
 ---
 title: Kubernetes
+seoTitle: "Deploy rusticdoc on Kubernetes"
 description: What the manifest in deploy/kubernetes.yaml sets up, and what to change before you apply it to your cluster.
 sidebar:
   order: 3

@@ -1,5 +1,6 @@
 ---
 title: Webhooks
+seoTitle: "Webhooks for generated documents"
 description: Get results by HTTP callback instead of holding a request open, and verify that a delivery came from your service.
 sidebar: { order: 6 }
 ---

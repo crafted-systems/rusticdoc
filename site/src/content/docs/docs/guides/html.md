@@ -1,5 +1,6 @@
 ---
 title: HTML to PDF
+seoTitle: "HTML to PDF without a browser"
 description: Turn HTML and CSS you write for print into PDF with Fulgur, a layout engine with no browser and no network access.
 sidebar: { order: 2 }
 ---

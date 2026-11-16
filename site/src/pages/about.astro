@@ -2,6 +2,7 @@
 import Base from '../layouts/Base.astro';
 import Icon from '../components/Icon.astro';
 import { REPO, VERSION } from '../site';
+import { graph, organization, software } from '../seo';
 
 const madeBy = 'rusticdoc is made by the team at Crafted Systems, a software development company in Nairobi, Kenya.';
 const company = [
@@ -10,7 +11,7 @@ const company = [
   { label: 'LinkedIn', icon: 'linkedin', href: 'https://www.linkedin.com/company/crafted-systems' },
 ] as const;
 ---
-<Base title="About: rusticdoc" description={madeBy} path="/about/">
+<Base title="About: rusticdoc" description={madeBy} path="/about/" jsonLd={graph(organization, software)}>
   <header class="page-head">
     <h1>About rusticdoc</h1>
     <p>{madeBy}</p>

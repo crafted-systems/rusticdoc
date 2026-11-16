@@ -1,5 +1,6 @@
 ---
 title: Template syntax
+seoTitle: "Template syntax for Word, Excel, PowerPoint and PDF templates"
 description: How to write tags, loops, conditions and expressions, what a missing value does, and how each format escapes values.
 sidebar:
   order: 1

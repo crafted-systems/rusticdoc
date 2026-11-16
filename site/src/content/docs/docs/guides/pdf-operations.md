@@ -1,5 +1,6 @@
 ---
 title: PDF operations
+seoTitle: "PDF operations: merge, split, sign, watermark and protect"
 description: Merge, split, rotate, mark, sign with an image or a certificate, secure, describe and fill PDFs through the /v1/pdf routes.
 sidebar: { order: 3 }
 ---

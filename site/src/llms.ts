@@ -9,15 +9,17 @@ export const SITE = 'https://rusticdoc.com';
 // The sidebar's sections, in its order.
 const SECTIONS: Array<[string, string]> = [
   ['start', 'Start here'],
+  ['use-cases', 'Use cases'],
   ['templates', 'Write templates'],
   ['guides', 'Use the API'],
   ['operate', 'Run it'],
   ['ai', 'Use with AI'],
   ['reference', 'Reference'],
+  ['compare', 'Compare'],
   ['project', 'Project'],
 ];
 
-export const SUMMARY = `rusticdoc is a self-hosted document service written in Rust, at version ${VERSION}. It fills Office (.docx, .xlsx, .pptx, .odt, .ods, .odp), text, HTML and PDF form templates from JSON, converts the result with LibreOffice or Fulgur, and finishes it with PDF operations, in one multipart HTTP request or from the \`rusticdoc\` CLI.`;
+export const SUMMARY = `rusticdoc is a self-hosted document service written in Rust, at version ${VERSION}. It keeps document layout out of application code: templates are ordinary files made in Word, Excel, PowerPoint, an HTML editor or a PDF form tool. It fills Office (.docx, .xlsx, .pptx, .odt, .ods, .odp), text, HTML and PDF form templates from JSON, converts the result with LibreOffice or Fulgur, and finishes it with PDF operations, in one multipart HTTP request or from the \`rusticdoc\` CLI.`;
 
 export const DETAILS = `Things to know before writing templates or calls:
 
@@ -25,6 +27,7 @@ export const DETAILS = `Things to know before writing templates or calls:
 - A missing value stops the render with an error instead of printing nothing. \`POST /v1/templates/validate\` lists every problem in a template against sample data.
 - \`image\` takes base64 or a data URL and never fetches a URL. HTML is laid out by Fulgur with no browser, no JavaScript and no network.
 - There is no hosted service: every call goes to the reader's own deployment, usually on port 9027, with an \`X-Api-Key\` header when credentials are configured.
+- Every docs page is also served as Markdown: add \`index.md\` to its address, e.g. https://rusticdoc.com/docs/start/quickstart/index.md.
 - Agent skills for writing templates and calling the API are in the repository's \`skills/\` folder: https://github.com/crafted-systems/rusticdoc/tree/main/skills`;
 
 type Page = CollectionEntry<'docs'>;
@@ -41,6 +44,14 @@ export async function pages(): Promise<Array<[string, Page[]]>> {
 }
 
 export const url = (p: Page) => `${SITE}/${p.id}/`;
+
+// Ids of the pages written in Markdown, which pages/docs/[...slug]/index.md.ts
+// serves as Markdown. Pages the OpenAPI plugin generates aren't among them.
+let markdownIds: Promise<Set<string>> | undefined;
+export function hasMarkdown(id: string): Promise<boolean> {
+  markdownIds ??= getCollection('docs').then((all) => new Set(all.map((p) => p.id)));
+  return markdownIds.then((ids) => ids.has(id));
+}
 
 // A page's Markdown with absolute links and without the code fence options only
 // the site reads.

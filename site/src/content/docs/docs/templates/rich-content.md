@@ -1,5 +1,6 @@
 ---
 title: Rich content
+seoTitle: "Images, barcodes, QR codes and charts in Word templates"
 description: Put images, barcodes, links, coloured text, HTML, charts and page breaks into Office templates.
 sidebar:
   order: 3

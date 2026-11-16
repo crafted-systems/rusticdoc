@@ -1,0 +1,71 @@
+---
+// Starlight's page heading, with a way to take the page as Markdown: to paste
+// into an assistant or read as plain text. Pages from the OpenAPI plugin have
+// no Markdown version, so they keep the plain heading.
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+import { hasMarkdown } from '../llms';
+
+const { entry } = Astro.locals.starlightRoute;
+const md = (await hasMarkdown(entry.id)) ? `${Astro.url.pathname}index.md` : undefined;
+---
+
+<Default />
+{md && (
+  <p class="md-actions print:hidden">
+    <button type="button" class="md-copy" data-src={md}>Copy page as Markdown</button>
+    <a href={md}>View as Markdown</a>
+  </p>
+)}
+
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>('.md-copy')) {
+    const label = button.textContent;
+    button.addEventListener('click', async () => {
+      try {
+        const text = fetch(button.dataset.src!).then((res) => {
+          if (!res.ok) throw new Error(res.statusText);
+          return res.text();
+        });
+        // Handing the clipboard a promise keeps the click's permission in
+        // Safari, which drops it once the handler awaits anything.
+        if (typeof ClipboardItem !== 'undefined' && ClipboardItem.supports?.('text/plain') !== false) {
+          const blob = text.then((t) => new Blob([t], { type: 'text/plain' }));
+          await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+        } else {
+          await navigator.clipboard.writeText(await text);
+        }
+        button.textContent = 'Copied';
+      } catch {
+        button.textContent = 'Couldn’t copy';
+      }
+      setTimeout(() => (button.textContent = label), 2000);
+    });
+  }
+</script>
+
+<style>
+  .md-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: center;
+    margin-top: 0.75rem;
+    font-size: var(--sl-text-sm);
+  }
+  .md-actions a,
+  .md-copy {
+    color: var(--sl-color-gray-3);
+  }
+  .md-copy {
+    font: inherit;
+    background: none;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 4px;
+    padding: 0.2rem 0.6rem;
+    cursor: pointer;
+  }
+  .md-copy:hover,
+  .md-actions a:hover {
+    color: var(--sl-color-white);
+  }
+</style>

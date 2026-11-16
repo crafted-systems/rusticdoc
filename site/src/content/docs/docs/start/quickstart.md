@@ -1,5 +1,6 @@
 ---
 title: Quickstart
+seoTitle: "Quickstart: fill a Word template from JSON and get a PDF"
 description: Start the service, send it a Word template and some JSON, and get a filled invoice back as a PDF.
 sidebar:
   order: 1

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "rusticdoc",
+  "description": "Self-hosted document service in Rust: fill Word, Excel, PowerPoint, HTML and PDF form templates from JSON, convert with LibreOffice or Fulgur, and finish with PDF operations in one HTTP request.",
+  "folders": ["site/src/content/docs/docs", "skills"],
+  "excludeFolders": ["site/node_modules", "site/dist", "target", "crates", "test", "local"],
+  "rules": [
+    "Templates use Jinja-style tags evaluated by minijinja: {{ customer.name }}, {% for item in items %}, {% if %} and filters. This is not Carbone's {d.field} or docxtemplater's {#items} syntax.",
+    "A missing value stops the render with an error instead of printing nothing. POST /v1/templates/validate lists every problem in a template against sample data.",
+    "There is no hosted service: send requests to your own deployment, usually http://localhost:9027, with an X-Api-Key header when an API key is configured.",
+    "Send the template and data as multipart form fields to POST /v1/render, e.g. -F template=@invoice.docx -F \"data=<invoice.json\" -F steps=convert for a PDF.",
+    "Images take base64 or a data URL; nothing fetches a URL. HTML is laid out by Fulgur, with no browser, no JavaScript and no network."
+  ]
+}

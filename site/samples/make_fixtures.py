@@ -34,6 +34,20 @@ book.active.append(["Month", "Sales"])
 book.active.append(["January", 120])
 book.save(out / "sheet.xlsx")
 
+# A report with a row loop and a total under it.
+book = Workbook()
+sheet = book.active
+sheet.title = "Sales"
+sheet.append(["Sales report, {{ month }}"])
+sheet.append(["Region", "Units", "Revenue"])
+sheet.append(["{% for r in rows %}{{ r.region }}", "{{ r.units }}", "{{ r.revenue }}", "{% endfor %}"])
+sheet.append(["Total", "=SUM(B3:B3)", "=SUM(C3:C3)"])
+for row in (3, 4):
+    sheet.cell(row, 3).number_format = "#,##0.00"
+sheet.column_dimensions["A"].width = 28
+sheet.column_dimensions["C"].width = 16
+book.save(out / "sales.xlsx")
+
 for name, text in (("a.pdf", "Page A"), ("b.pdf", "Page B")):
     pdf = fitz.open()
     pdf.new_page().insert_text((72, 72), text, fontsize=24)

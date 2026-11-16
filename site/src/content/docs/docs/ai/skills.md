@@ -1,5 +1,6 @@
 ---
 title: Agent skills
+seoTitle: "Agent skills for document templates in Claude Code, Codex, Cursor and Copilot"
 description: Install the rusticdoc skills so AI assistants write correct templates, check them and render documents, in Claude Code, Codex, Cursor, Copilot, Gemini CLI, claude.ai and ChatGPT.
 sidebar:
   order: 1

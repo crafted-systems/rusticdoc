@@ -1,4 +1,7 @@
 User-agent: *
 Allow: /
 
+# The documentation as Markdown for language models: https://rusticdoc.com/llms.txt
+# Every docs page is also at its address plus index.md.
+
 Sitemap: https://rusticdoc.com/sitemap-index.xml
