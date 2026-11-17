@@ -1,7 +1,7 @@
 ---
 // What every page's top bar carries, on the marketing pages and in the docs
-// alike: two menus, for what rusticdoc is and how to use it, and a plain link
-// to the About page. Each menu is a disclosure that works without JavaScript.
+// alike: two menus, for what rusticdoc is and how to use it, and plain links
+// to the blog and the About page. Each menu is a disclosure that works without JavaScript.
 // With a mouse it also opens on hover; a small script does that, closes the
 // others, and closes on Escape or a click elsewhere.
 interface Props {
@@ -84,6 +84,7 @@ const menus = [
       </div>
     </details>
   ))}
+  <a class="site-menu-link" href="/blog/" aria-current={path.startsWith('/blog/') ? 'page' : undefined}>Blog</a>
   <a class="site-menu-link" href="/about/" aria-current={path === '/about/' ? 'page' : undefined}>About</a>
 </div>
 

@@ -1,0 +1,51 @@
+---
+// /blog/2026/: the posts of one year, so a post's address still leads
+// somewhere with its last part taken off.
+import Base from '../../../layouts/Base.astro';
+import Icon from '../../../components/Icon.astro';
+import PostList from '../../../components/PostList.astro';
+import { postYear, posts, type Post } from '../../../blog';
+import { SITE, breadcrumbs, graph } from '../../../seo';
+
+export async function getStaticPaths() {
+  const byYear = new Map<string, Post[]>();
+  for (const post of await posts()) {
+    const year = postYear(post);
+    byYear.set(year, [...(byYear.get(year) ?? []), post]);
+  }
+  return [...byYear].map(([year, list]) => ({ params: { year }, props: { list } }));
+}
+
+interface Props { list: Post[] }
+const { list } = Astro.props;
+const { year } = Astro.params;
+const path = `/blog/${year}/`;
+const intro = `Everything posted on the rusticdoc blog in ${year}.`;
+const jsonLd = graph(
+  breadcrumbs([
+    { name: 'rusticdoc', url: `${SITE}/` },
+    { name: 'Blog', url: `${SITE}/blog/` },
+    { name: year, url: `${SITE}${path}` },
+  ]),
+);
+---
+<Base title={`${year}: rusticdoc blog`} description={intro} path={path} jsonLd={jsonLd} tone="paper">
+  <div class="blog">
+    <header class="blog-head">
+      <a class="up" href="/blog/"><Icon name="back" />Blog</a>
+      <h1>Posts from {year}</h1>
+      <p>{intro}</p>
+    </header>
+    <PostList posts={list} />
+  </div>
+</Base>
+
+<style>
+  .blog { padding: clamp(2.5rem, 6vw, 4rem) var(--gutter) clamp(4rem, 8vw, 6rem); }
+  .blog-head { padding-bottom: 1.75rem; margin-bottom: clamp(2rem, 4vw, 3rem); border-bottom: 1px solid var(--line); }
+  .up { display: inline-flex; align-items: center; gap: 0.35rem; margin-bottom: 1rem; color: var(--ink-soft); font-size: 0.92rem; font-weight: 500; text-decoration: none; }
+  .up:hover { color: var(--blue-deep); }
+  .up :global(.icon) { width: 15px; height: 15px; }
+  .blog-head h1 { font-size: clamp(2rem, 4vw, 2.75rem); font-weight: 650; letter-spacing: -0.03em; margin: 0 0 0.4rem; }
+  .blog-head p { margin: 0; color: var(--ink-soft); font-size: 1.05rem; }
+</style>

@@ -52,3 +52,13 @@ Astro caches rendered docs in `.astro/` and `node_modules/.astro/`, including th
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --allow-file-access-from-files --force-device-scale-factor=1 --window-size=1200,630 --screenshot="$PWD/public/og.png" "file://$PWD/scripts/og.html"
 ```
+
+## Blog
+
+Posts are Markdown files in `src/content/blog/`. A post's address is the year of its `date` and its file name: `introducing-rusticdoc.md` dated 2026 is `/blog/2026/introducing-rusticdoc/`, and `/blog/2026/` lists that year's posts. The frontmatter needs `title`, `description`, `date`, `cover` and `coverAlt`, and takes an `author`, which is otherwise the rusticdoc team, and a `tag`, the small label above the title such as Announcement. `draft: true` keeps a post out of the built site.
+
+A post's cover is shown on its card, at the top of the post and as its share image. Each one is rendered from an HTML file in `scripts/blog-covers/`, at twice its 1200 by 630 size so it stays sharp. For `introducing-rusticdoc`, run this from `site/`:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --allow-file-access-from-files --force-device-scale-factor=2 --window-size=1200,630 --screenshot="$PWD/src/assets/blog/introducing-rusticdoc.png" "file://$PWD/scripts/blog-covers/introducing-rusticdoc.html"
+```

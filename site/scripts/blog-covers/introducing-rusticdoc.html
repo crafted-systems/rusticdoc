@@ -1,0 +1,87 @@
+<!doctype html>
+<!-- Source of src/assets/blog/introducing-rusticdoc.png, the post's cover.
+     See the site README for the command that renders it. -->
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: 'Space Grotesk'; src: url(../../node_modules/@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2); font-weight: 300 700; }
+  @font-face { font-family: 'Source Code Pro'; src: url(../../node_modules/@fontsource-variable/source-code-pro/files/source-code-pro-latin-wght-normal.woff2); font-weight: 200 900; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    font-family: 'Space Grotesk'; color: #16181d; position: relative;
+    background:
+      radial-gradient(700px 480px at 85% -10%, #ffffff 0%, transparent 62%),
+      #f1f1ef;
+  }
+  /* Faint grid, like the paper under a drawing. */
+  body::before {
+    content: ''; position: absolute; inset: 0;
+    background-image: linear-gradient(#d7d7d366 1px, transparent 1px), linear-gradient(90deg, #d7d7d366 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(900px 500px at 50% 50%, #000 30%, transparent 80%);
+  }
+
+  .card {
+    position: absolute; background: #fff; border: 1px solid #e2e2df; border-radius: 6px; overflow: hidden;
+    box-shadow: 0 2px 4px rgb(20 20 30 / 0.06), 0 34px 60px -30px rgb(20 20 30 / 0.35);
+  }
+  .card img { display: block; width: 100%; }
+  .label {
+    position: absolute; display: inline-flex; align-items: center; gap: 9px;
+    font: 600 17px 'Source Code Pro'; letter-spacing: -0.01em;
+    background: #fff; border: 1px solid #e2e2df; border-radius: 4px; padding: 7px 13px;
+    box-shadow: 0 10px 22px -14px rgb(20 20 30 / 0.3);
+  }
+  .label i { width: 10px; height: 10px; border-radius: 2px; display: block; }
+
+  /* The template: back left, tilted away. */
+  .template { left: 48px; top: 96px; width: 362px; height: 410px; transform: rotate(-5deg); }
+  .template img { width: 446px; margin: -36px 0 0 -36px; }
+  .l-template { left: 70px; top: 516px; color: #8a5300; }
+  .l-template i { background: #e8920c; }
+
+  /* The data: a JSON panel in the middle. */
+  .data {
+    left: 398px; top: 170px; width: 328px; padding: 20px 20px 22px;
+    font: 500 15px/1.62 'Source Code Pro'; color: #2b2e35; white-space: pre; z-index: 2;
+  }
+  .data .k { color: #0f56d6; }
+  .data .s { color: #0c7a40; }
+  .data .n { color: #a84a08; }
+  .l-data { left: 488px; top: 114px; color: #0f56d6; z-index: 3; }
+  .l-data i { background: #1668f5; }
+
+  /* The PDF: front right, the finished thing. */
+  .pdf { left: 778px; top: 74px; width: 372px; height: 430px; transform: rotate(3.5deg); z-index: 1; }
+  .pdf img { width: 452px; margin: -38px 0 0 -38px; }
+  .l-pdf { left: 952px; top: 520px; color: #0c7a40; z-index: 3; }
+  .l-pdf i { background: #18a058; }
+
+  .arrow { position: absolute; z-index: 3; width: 46px; height: 46px; border-radius: 50%; background: #16181d; display: grid; place-items: center; box-shadow: 0 10px 20px -10px rgb(20 20 30 / 0.6); }
+  .arrow svg { width: 22px; height: 22px; }
+  .a1 { left: 372px; top: 300px; }
+  .a2 { left: 729px; top: 300px; }
+</style>
+
+<div class="card template"><img src="../../src/assets/invoice-template.png" alt=""></div>
+<span class="label l-template"><i></i>invoice-template.docx</span>
+
+<div class="card pdf"><img src="../../src/assets/invoice-filled.png" alt=""></div>
+<span class="label l-pdf"><i></i>invoice.pdf</span>
+
+<div class="card data">{
+  <span class="k">"number"</span>: <span class="s">"INV-2041"</span>,
+  <span class="k">"customer"</span>: {
+    <span class="k">"name"</span>: <span class="s">"Amani Otieno"</span>
+  },
+  <span class="k">"items"</span>: [
+    { <span class="k">"name"</span>: <span class="s">"Single-origin…"</span>,
+      <span class="k">"qty"</span>: <span class="n">12</span>, <span class="k">"price"</span>: <span class="n">2400</span> },
+    …
+  ],
+  <span class="k">"total"</span>: <span class="n">36300</span>
+}</div>
+<span class="label l-data"><i></i>invoice.json</span>
+
+<span class="arrow a1"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="square"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+<span class="arrow a2"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="square"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>

@@ -42,10 +42,14 @@ import ApiExamples from './ApiExamples.astro';
   /* The menus' panels hang below the bar, so the bar must not clip them. */
   .right-group { overflow: visible; }
   /* Just above the width where the bar switches to its desktop layout there is
-     no room for the About link beside the menus and the search, so it waits
-     for a wider window. It stays on the marketing pages at every width. */
-  @media (min-width: 50rem) and (max-width: 56.99rem) {
+     no room for the Blog and About links beside the menus and the search, so
+     About waits for a wider window, and Blog for a little less. Both stay on
+     the marketing pages at every width. */
+  @media (min-width: 50rem) and (max-width: 60.49rem) {
     .right-group { gap: 0.5rem; }
+  }
+  @media (min-width: 50rem) and (max-width: 59.49rem) {
+    .right-group :global(.site-menu-link[href='/about/']) { display: none; }
   }
   @media (min-width: 50rem) and (max-width: 54.49rem) {
     .right-group :global(.site-menu-link) { display: none; }

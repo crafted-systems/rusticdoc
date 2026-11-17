@@ -1,0 +1,51 @@
+---
+import Base from '../../layouts/Base.astro';
+import Icon from '../../components/Icon.astro';
+import PostList from '../../components/PostList.astro';
+import { postPath, posts } from '../../blog';
+import { SITE, blog, breadcrumbs, graph, organization, website } from '../../seo';
+
+const all = await posts();
+const intro = 'News about rusticdoc: what each release brings, how it works, and why it works that way.';
+const jsonLd = graph(
+  website,
+  organization,
+  {
+    ...blog,
+    blogPost: all.map((p) => ({ '@type': 'BlogPosting', headline: p.data.title, url: new URL(postPath(p), SITE).href, datePublished: p.data.date.toISOString() })),
+  },
+  breadcrumbs([
+    { name: 'rusticdoc', url: `${SITE}/` },
+    { name: 'Blog', url: `${SITE}/blog/` },
+  ]),
+);
+---
+<Base title="Blog: rusticdoc" description={intro} path="/blog/" jsonLd={jsonLd} tone="paper">
+  <div class="blog">
+    <header class="blog-head">
+      <div>
+        <h1>Blog</h1>
+        <p>{intro}</p>
+      </div>
+      <a class="feed" href="/blog/rss.xml"><Icon name="rss" />RSS</a>
+    </header>
+    <PostList posts={all} />
+  </div>
+</Base>
+
+<style>
+  .blog { padding: clamp(2.5rem, 6vw, 4rem) var(--gutter) clamp(4rem, 8vw, 6rem); }
+  .blog-head {
+    display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 1rem 2rem;
+    padding-bottom: 1.75rem; margin-bottom: clamp(2rem, 4vw, 3rem); border-bottom: 1px solid var(--line);
+  }
+  .blog-head h1 { font-size: clamp(2rem, 4vw, 2.75rem); font-weight: 650; letter-spacing: -0.03em; margin: 0 0 0.4rem; }
+  .blog-head p { margin: 0; color: var(--ink-soft); font-size: 1.05rem; max-width: 40rem; }
+  .feed {
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.8rem;
+    border: 1px solid var(--line-strong); border-radius: var(--r-small); background: var(--card);
+    color: var(--ink); font-size: 0.92rem; font-weight: 600; text-decoration: none;
+  }
+  .feed:hover { border-color: var(--ink-soft); }
+  .feed :global(.icon) { width: 15px; height: 15px; color: var(--amber); }
+</style>

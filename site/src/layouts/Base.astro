@@ -15,13 +15,20 @@ interface Props {
   path: string;
   /** The page's schema.org JSON-LD, from graph() in src/seo.ts. */
   jsonLd?: string;
+  /** For a blog post: when it was published, which makes og:type article. */
+  published?: Date;
+  /** A share image of the page's own, 1200 by 630, in place of og.png. */
+  shareImage?: { src: string; alt: string };
+  /** paper: a neutral background for pages made for reading. See tokens.css. */
+  tone?: 'paper';
 }
-const { title, description, path, jsonLd } = Astro.props;
+const { title, description, path, jsonLd, published, shareImage, tone } = Astro.props;
 // Under a base path, such as on GitHub Pages, the page's own address and the
 // preview image sit below it.
 const root = import.meta.env.BASE_URL.replace(/\/$/, '');
 const canonical = new URL(root + path, Astro.site).href;
-const image = new URL(root + '/og.png', Astro.site).href;
+const image = new URL(shareImage?.src ?? root + '/og.png', Astro.site).href;
+const imageAlt = shareImage?.alt ?? OG_IMAGE_ALT;
 const footer = [
   {
     title: 'Use it',
@@ -46,6 +53,7 @@ const footer = [
     title: 'Project',
     links: [
       { href: '/about/', label: 'About' },
+      { href: '/blog/', label: 'Blog' },
       { href: '/docs/project/changelog/', label: 'Changelog' },
       { href: '/docs/project/known-limits/', label: 'Known limits' },
       { href: '/docs/compare/gotenberg/', label: 'Compare' },
@@ -56,7 +64,7 @@ const footer = [
 ];
 ---
 <!doctype html>
-<html lang="en">
+<html lang="en" data-tone={tone}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -65,21 +73,23 @@ const footer = [
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="sitemap" href="/sitemap-index.xml" />
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={published ? 'article' : 'website'} />
+    {published && <meta property="article:published_time" content={published.toISOString()} />}
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
     <meta property="og:image" content={image} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content={OG_IMAGE_ALT} />
+    <meta property="og:image:alt" content={imageAlt} />
     <meta property="og:site_name" content="rusticdoc" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content={image} />
     <link rel="alternate" type="text/plain" href="/llms.txt" title="Documentation for language models" />
+    <link rel="alternate" type="application/rss+xml" href="/blog/rss.xml" title="rusticdoc blog" />
     {jsonLd && <script type="application/ld+json" set:html={jsonLd} />}
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#e9f0fc" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a1324" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content={tone === 'paper' ? '#fafaf9' : '#e9f0fc'} />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content={tone === 'paper' ? '#121317' : '#0a1324'} />
     <ThemeProvider expect="main" />
   </head>
   <body>

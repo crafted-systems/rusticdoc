@@ -62,6 +62,38 @@ export function faqPage(items: Array<{ q: string; a: string }>) {
   };
 }
 
+export const blog = {
+  '@type': 'Blog',
+  '@id': `${SITE}/blog/#blog`,
+  name: 'rusticdoc blog',
+  url: `${SITE}/blog/`,
+  publisher: { '@id': ORG_ID },
+  isPartOf: { '@id': SITE_ID },
+  inLanguage: 'en',
+};
+
+export function blogPosting(post: { title: string; description: string; url: string; date: Date; author: string; image?: string }) {
+  return {
+    '@type': 'BlogPosting',
+    headline: post.title,
+    description: post.description,
+    url: post.url,
+    mainEntityOfPage: post.url,
+    datePublished: post.date.toISOString(),
+    // A post signed by a person names them, as part of Crafted Systems; the
+    // default signature is the team's.
+    author:
+      post.author === 'The rusticdoc team'
+        ? { '@type': 'Organization', name: post.author, url: `${SITE}/about/` }
+        : { '@type': 'Person', name: post.author, worksFor: { '@id': ORG_ID } },
+    publisher: { '@id': ORG_ID },
+    isPartOf: { '@id': blog['@id'] },
+    about: { '@id': APP_ID },
+    image: post.image ?? OG_IMAGE,
+    inLanguage: 'en',
+  };
+}
+
 export function breadcrumbs(trail: Array<{ name: string; url: string }>) {
   return {
     '@type': 'BreadcrumbList',

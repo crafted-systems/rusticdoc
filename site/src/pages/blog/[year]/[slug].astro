@@ -1,0 +1,225 @@
+---
+import { render } from 'astro:content';
+import { Image, getImage } from 'astro:assets';
+import Base from '../../../layouts/Base.astro';
+import Icon from '../../../components/Icon.astro';
+import Byline from '../../../components/Byline.astro';
+import { longDate, postPath, postYear, posts, readingTime, type Post } from '../../../blog';
+import { SITE, blogPosting, breadcrumbs, graph } from '../../../seo';
+import { REPO } from '../../../site';
+
+export async function getStaticPaths() {
+  const all = await posts();
+  return all.map((post, i) => ({
+    params: { year: postYear(post), slug: post.id },
+    // The list is newest first, so the next post along is the older one.
+    props: { post, older: all[i + 1], newer: all[i - 1] },
+  }));
+}
+
+interface Props { post: Post; older?: Post; newer?: Post }
+const { post, older, newer } = Astro.props;
+const { Content, headings } = await render(post);
+const contents = headings.filter((h) => h.depth === 2);
+const path = postPath(post);
+const url = new URL(path, SITE).href;
+const { title, description, date, author, tag, cover, coverAlt } = post.data;
+const when = `${longDate(date)} · ${readingTime(post)} min read`;
+// The share image is the cover at the size every network expects.
+const share = await getImage({ src: cover, width: 1200, height: 630, format: 'png' });
+const shareUrl = new URL(share.src, SITE).href;
+const jsonLd = graph(
+  blogPosting({ title, description, url, date, author, image: shareUrl }),
+  breadcrumbs([
+    { name: 'rusticdoc', url: `${SITE}/` },
+    { name: 'Blog', url: `${SITE}/blog/` },
+    { name: postYear(post), url: `${SITE}/blog/${postYear(post)}/` },
+    { name: title, url },
+  ]),
+);
+---
+<Base title={`${title} | rusticdoc blog`} description={description} path={path} jsonLd={jsonLd} published={date} shareImage={{ src: share.src, alt: coverAlt }} tone="paper">
+  <article class="post">
+    <nav class="rail" aria-label="Blog">
+      <a class="up" href="/blog/"><Icon name="back" />Blog</a>
+    </nav>
+
+    <header class="post-head">
+      <a class="up up-inline" href="/blog/"><Icon name="back" />Blog</a>
+      <h1>{title}</h1>
+      <p class="lede-text">{description}</p>
+    </header>
+
+    <aside class="side">
+      <div class="side-inner">
+        <div class="facts">
+          {tag && <p class="tag">{tag}</p>}
+          <p class="when"><time datetime={date.toISOString()}>{longDate(date)}</time> · {readingTime(post)} min read</p>
+          <Byline author={author} detail="Crafted Systems" size="large" />
+        </div>
+        {contents.length > 1 && (
+          <nav class="toc" aria-labelledby="toc-heading">
+            <p id="toc-heading" class="toc-heading">On this page</p>
+            <ol>{contents.map((h) => <li><a href={`#${h.slug}`}>{h.text}</a></li>)}</ol>
+          </nav>
+        )}
+      </div>
+    </aside>
+
+    <div class="post-main">
+      <figure class="cover">
+        <Image src={cover} alt={coverAlt} widths={[640, 960, 1440, 2000]} sizes="(min-width: 64rem) 44rem, 92vw" loading="eager" fetchpriority="high" />
+      </figure>
+
+      <div class="post-body">
+        <Content />
+      </div>
+
+      <footer class="post-foot">
+        <Byline author={author} detail={when} size="large" />
+        <aside class="try" aria-labelledby="try-heading">
+          <h2 id="try-heading">Try rusticdoc</h2>
+          <p>One container, a template and some JSON. The quickstart gets you to a filled PDF in about five minutes.</p>
+          <div class="actions">
+            <a class="button" href="/docs/start/quickstart/">Quickstart</a>
+            <a class="button secondary" href={REPO}>View on GitHub</a>
+          </div>
+        </aside>
+        {(older || newer) && (
+          <nav class="pager" aria-label="More posts">
+            {newer && <a class="newer" href={postPath(newer)}><span>Newer</span>{newer.data.title}</a>}
+            {older && <a class="older" href={postPath(older)}><span>Older</span>{older.data.title}</a>}
+          </nav>
+        )}
+      </footer>
+    </div>
+  </article>
+</Base>
+
+<script>
+  // Marks the section being read in the contents. The section is the last
+  // heading that has scrolled above a line a third of the way down the window.
+  const links = [...document.querySelectorAll<HTMLAnchorElement>('.toc a')];
+  const targets = links.map((a) => document.getElementById(decodeURIComponent(a.hash.slice(1)))).filter((h): h is HTMLElement => !!h);
+  if (targets.length) {
+    const mark = () => {
+      const line = window.innerHeight / 3;
+      let current = -1;
+      targets.forEach((h, i) => { if (h.getBoundingClientRect().top < line) current = i; });
+      links.forEach((a, i) => a.toggleAttribute('aria-current', i === current));
+    };
+    addEventListener('scroll', mark, { passive: true });
+    mark();
+  }
+</script>
+
+<style>
+  /* Three columns on a wide screen, as in most engineering blogs: a way back
+     on the left, the post in the middle, and its facts and contents on the
+     right, staying in view while the post scrolls. */
+  .post {
+    display: grid; justify-content: center; column-gap: clamp(2rem, 4vw, 3.5rem);
+    grid-template-columns: 8rem minmax(0, 44rem) 15rem;
+    grid-template-areas: 'rail head .' 'rail main side';
+    padding: clamp(2.5rem, 6vw, 4rem) var(--gutter) clamp(3rem, 7vw, 5rem);
+  }
+  .rail { grid-area: rail; }
+  .post-head { grid-area: head; }
+  .side { grid-area: side; }
+  .post-main { grid-area: main; min-width: 0; }
+  .rail, .side-inner { position: sticky; top: 6.5rem; }
+  .side { align-self: stretch; }
+
+  .up {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    color: var(--ink-soft); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; text-decoration: none;
+  }
+  .up :global(.icon) { width: 14px; height: 14px; transition: transform 150ms; }
+  .up:hover { color: var(--blue-deep); }
+  .up:hover :global(.icon) { transform: translateX(-3px); }
+  .rail .up { margin-top: 0.85rem; }
+  .up-inline { display: none; margin-bottom: 1.25rem; }
+
+  .post-head h1 {
+    font-size: clamp(2.2rem, 4.6vw, 3.2rem); font-weight: 650; letter-spacing: -0.03em; line-height: 1.06;
+    margin: 0 0 0.5em;
+  }
+  .lede-text { font-size: clamp(1.1rem, 1.5vw, 1.22rem); line-height: 1.5; color: var(--ink-soft); margin: 0 0 2rem; }
+
+  .facts { display: grid; gap: 0.35rem; padding-bottom: 1.5rem; }
+  .tag { margin: 0; color: var(--blue-deep); font-size: 0.88rem; font-weight: 600; }
+  .when { margin: 0 0 0.9rem; color: var(--ink-soft); font-size: 0.9rem; }
+  .toc { padding-top: 1.25rem; border-top: 1px solid var(--line); }
+  .toc-heading { margin: 0 0 0.6rem; color: var(--ink-soft); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+  .toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; }
+  .toc a {
+    display: block; padding: 0.3rem 0 0.3rem 0.75rem; border-left: 2px solid var(--line);
+    color: var(--ink-soft); font-size: 0.9rem; line-height: 1.35; text-decoration: none;
+  }
+  .toc a:hover { color: var(--ink); }
+  .toc a[aria-current] { color: var(--ink); border-left-color: var(--ink); font-weight: 500; }
+
+  .cover { margin: 0 0 2.5rem; }
+  .cover :global(img) { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+
+  /* The post's own text, from Markdown. */
+  .post-body { color: var(--body); font-size: 1.09rem; line-height: 1.72; }
+  .post-body :global(p) { margin: 0 0 1.25em; }
+  .post-body :global(h2) { font-size: clamp(1.45rem, 2.4vw, 1.8rem); font-weight: 600; color: var(--ink); margin: 2.2em 0 0.6em; scroll-margin-top: 6rem; }
+  .post-body :global(h3) { color: var(--ink); }
+  .post-body :global(a) { color: var(--ink); text-decoration-color: var(--line-strong); text-decoration-thickness: 1px; }
+  .post-body :global(a:hover) { color: var(--blue-deep); text-decoration-color: currentColor; }
+  .post-body :global(strong) { color: var(--ink); }
+  .post-body :global(ul), .post-body :global(ol) { padding-left: 1.2em; margin: 0 0 1.25em; }
+  .post-body :global(li) { margin-bottom: 0.45em; }
+  .post-body :global(li::marker) { color: var(--ink-soft); }
+  .post-body :global(:not(pre) > code) {
+    font-size: 0.86em; padding: 0.1em 0.35em; border-radius: var(--r-small);
+    background: var(--tint); border: 1px solid var(--line); color: var(--ink); overflow-wrap: anywhere;
+  }
+  .post-body :global(.expressive-code) { margin: 1.5em 0 1.75em; }
+  /* Pictures of documents sit on white, like paper, in either theme. */
+  .post-body :global(p:has(> img)) { margin: 1.75em 0 2em; }
+  .post-body :global(img) {
+    width: 100%; height: auto; background: var(--paper);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .post-body :global(blockquote) {
+    margin: 1.5em 0; padding: 0.2em 0 0.2em 1.2em; border-left: 3px solid var(--line-strong); color: var(--ink-soft);
+  }
+
+  .post-foot { margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--line); display: grid; gap: 2rem; }
+  .try { padding: clamp(1.5rem, 4vw, 2.25rem); border: 1px solid var(--line); border-radius: 8px; background: var(--tint); }
+  .try h2 { font-size: clamp(1.4rem, 2.6vw, 1.8rem); font-weight: 600; margin: 0 0 0.4em; }
+  .try p { color: var(--ink-soft); margin: 0; max-width: 32rem; line-height: 1.5; }
+  .try .actions { margin-top: 1.4rem; }
+  .pager { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  .pager a {
+    display: grid; gap: 0.2rem; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--ink); font-weight: 600; text-decoration: none;
+  }
+  .pager a:hover { border-color: var(--line-strong); color: var(--blue-deep); }
+  .pager span { color: var(--ink-soft); font-size: 0.85rem; font-weight: 500; }
+  .pager .older { grid-column: 2; text-align: right; }
+
+  @media (prefers-reduced-motion: reduce) { .up :global(.icon) { transition: none; } }
+
+  /* Narrower: the way back joins the heading. */
+  @media (max-width: 1180px) {
+    .post { grid-template-columns: minmax(0, 44rem) 14rem; grid-template-areas: 'head .' 'main side'; }
+    .rail { display: none; }
+    .up-inline { display: inline-flex; }
+  }
+  /* One column: the facts sit under the heading and the contents go. */
+  @media (max-width: 900px) {
+    .post { grid-template-columns: minmax(0, 44rem); grid-template-areas: 'head' 'side' 'main'; }
+    .side-inner { position: static; }
+    .facts { padding-bottom: 1.75rem; }
+    .toc { display: none; }
+  }
+  @media (max-width: 640px) {
+    .post-body { font-size: 1.03rem; }
+    .pager { grid-template-columns: minmax(0, 1fr); }
+    .pager .older { grid-column: auto; text-align: left; }
+  }
+</style>
