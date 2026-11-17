@@ -108,7 +108,7 @@ head -c4 draft.pdf | grep -q %PDF
 head -c4 branded.pdf | grep -q %PDF
 ```
 
-Text marks are drawn in Helvetica (see [known limits](/docs/project/known-limits/)).
+Text marks are drawn in Helvetica, so they cover Latin text only (see [known limits](/docs/project/known-limits/)).
 
 ### `POST /v1/pdf/sign`
 

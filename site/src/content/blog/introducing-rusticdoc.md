@@ -99,7 +99,7 @@ We wanted a service that starts quickly, sits lightly in memory while it waits, 
 
 rusticdoc isn't a browser. If you need to print a live web page, run its JavaScript or screenshot a URL, a Chromium-based tool like Gotenberg is the better fit. We wrote [a comparison of the two](/docs/compare/gotenberg/) that tries to be fair to both.
 
-It also has rough edges, and we keep a list of them. [Known limits](/docs/project/known-limits/) is worth five minutes before you depend on it. It covers things like fonts that aren't in the image and spreadsheet features a loop doesn't follow.
+It also has rough edges, and we keep a list of them. [Known limits](/docs/project/known-limits/) is worth five minutes before you depend on it. It covers things like spreadsheet features a loop doesn't follow and the signing keys that aren't supported.
 
 ## Try it
 

@@ -4,7 +4,9 @@ description: Add fonts by uploading them, mounting them or sending them with one
 sidebar: { order: 5 }
 ---
 
-When a document names a font the service doesn't have, it comes out in a fallback font and you get no error. There are three ways to add a font, and none of them needs a rebuild.
+When a document names a font the service doesn't have, it comes out in a fallback font and you get no error. Its line and page breaks can move. Word's default font, Aptos, isn't in the image, so a document set in it needs Aptos added or a font the image has.
+
+There are three ways to add a font, and none of them needs a rebuild.
 
 | Way | Needs | Applies to | Survives a restart |
 |---|---|---|---|
