@@ -58,22 +58,22 @@
   --font-mono: 'Source Code Pro Variable', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 /* Pages made for reading, like the blog, sit on a neutral paper tone: the
-   blue field and its blooms give way to off-white, or a near-black grey in
+   blue field and its blooms give way to white, or a near-black grey in
    dark mode, and greys replace the blue-tinted ones. Blue stays for links,
    buttons and small accents. */
 :root[data-tone='paper'] {
-  --field: light-dark(#fafaf9, #121317);
+  --field: light-dark(#ffffff, #121317);
   --mist: light-dark(#ffffff, #17181c);
-  --glass: light-dark(rgb(255 255 255 / 0.82), rgb(24 26 31 / 0.82));
+  --glass: light-dark(rgb(255 255 255 / 0.88), rgb(24 26 31 / 0.82));
   --glass-edge: light-dark(rgb(255 255 255 / 0.9), rgb(255 255 255 / 0.08));
   --card: light-dark(#ffffff, #1b1d22);
-  --line: light-dark(#e8e8e5, #2c2f36);
-  --line-strong: light-dark(#d7d7d3, #42454d);
-  --tint: light-dark(#f4f4f2, #202228);
+  --line: light-dark(#e9e9ec, #2c2f36);
+  --line-strong: light-dark(#d8d8dc, #42454d);
+  --tint: light-dark(#f6f6f7, #202228);
   --ink: light-dark(#16181d, #eceef2);
   --ink-soft: light-dark(#5c6068, #a9adb6);
   --body: light-dark(#2b2e35, #d3d5da);
-  --code-bg: light-dark(#f6f6f4, #17191d);
+  --code-bg: light-dark(#f7f7f8, #17191d);
   --shadow-soft: light-dark(rgb(20 20 30 / 0.05), rgb(0 0 0 / 0.3));
   --shadow-wide: light-dark(rgb(20 20 30 / 0.16), rgb(0 0 0 / 0.55));
 }
