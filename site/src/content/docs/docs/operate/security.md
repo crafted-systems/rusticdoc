@@ -12,7 +12,7 @@ rusticdoc contains what a hostile document tries to do, and the [security overvi
 - Set `RUSTICDOC_API_KEY` and `RUSTICDOC_WEBHOOK_SECRET`. With no key, anyone can use the service and it warns at every start. See [authentication](/docs/guides/authentication/).
 - Rate limit at a reverse proxy. The per-caller and connection limits bound what one client can hold, but many clients together can still fill them for as long as the timeouts allow.
 - Terminate TLS in front of it, because the service speaks plain HTTP.
-- Rebuild the image regularly, because fixes from Debian only arrive when you rebuild. `make docker` uses the digests pinned in the `Dockerfile`.
+- Rebuild the image regularly, because fixes from Debian only arrive when you rebuild. `make docker` uses the digests pinned in the [`Dockerfile`](https://github.com/crafted-systems/rusticdoc/blob/main/Dockerfile).
 - Run it with the flags under [Install](/docs/start/install/), and do not add `--init`, which puts a process at PID 1 that exposes the environment.
 - Protect the store. Back up the bucket and turn on its encryption. It's the only copy, and templates can hold whatever your documents hold.
 - Give `/tmp` room. The disk limit applies to each conversion and is measured every 100 ms, so several conversions together can use `RUSTICDOC_WORKERS` times the limit and a little more.

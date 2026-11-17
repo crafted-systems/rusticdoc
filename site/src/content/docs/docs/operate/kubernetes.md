@@ -6,11 +6,17 @@ sidebar:
   order: 3
 ---
 
-`deploy/kubernetes.yaml` is a starting point for you to adapt to your cluster.
+[`deploy/kubernetes.yaml`](https://github.com/crafted-systems/rusticdoc/blob/main/deploy/kubernetes.yaml) is a starting point for you to adapt to your cluster.
 
 ## Before you apply it
 
 The manifest runs three replicas on one S3-compatible bucket, which is the only thing they share. [Many containers](/docs/operate/many-containers/) explains how that behaves.
+
+Download the manifest for this release:
+
+```bash
+curl -fLO https://raw.githubusercontent.com/crafted-systems/rusticdoc/v0.2.0/deploy/kubernetes.yaml
+```
 
 Create the secret:
 
@@ -33,7 +39,7 @@ Then change these in the file:
 On EKS with a service account role you can drop the two AWS key variables, but read the note on tokens under [security](/docs/operate/security/) first, because a compromised LibreOffice runs as the same user and can read a token mounted in the pod.
 
 ```bash
-kubectl apply -f deploy/kubernetes.yaml
+kubectl apply -f kubernetes.yaml
 ```
 
 ## The Deployment

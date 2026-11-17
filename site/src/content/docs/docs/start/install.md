@@ -42,7 +42,7 @@ With no credentials set, the service accepts requests from anyone and logs a war
 
 ## Compose
 
-`deploy/compose.yaml` sets the same flags and adds limits on memory, processes and temporary files. It reads its settings from your environment. From the root of a checkout:
+[`deploy/compose.yaml`](https://github.com/crafted-systems/rusticdoc/blob/main/deploy/compose.yaml) sets the same flags and adds limits on memory, processes and temporary files. It reads its settings from your environment. From the root of a checkout:
 
 ```bash
 docker compose -f deploy/compose.yaml up -d --build

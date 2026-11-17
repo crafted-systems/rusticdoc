@@ -27,7 +27,7 @@ Any other number, size or duration that the service can't parse is ignored witho
 
 The image sets `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN`, `RUSTICDOC_PDFCPU_BIN`, `RUSTICDOC_FONTS_DIR` and `RUSTICDOC_LOG_FORMAT` for you, along with `TZ=UTC`, `LANG=C.UTF-8` and `LC_ALL=C.UTF-8`.
 
-`deploy/compose.yaml` has variables of its own that shape the container. They're listed under [Docker](/docs/operate/docker/).
+[`deploy/compose.yaml`](https://github.com/crafted-systems/rusticdoc/blob/main/deploy/compose.yaml) has variables of its own that shape the container. They're listed under [Docker](/docs/operate/docker/).
 
 ## Service
 

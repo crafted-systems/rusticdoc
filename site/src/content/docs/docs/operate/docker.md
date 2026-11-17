@@ -58,7 +58,7 @@ curl http://localhost:9027/ready
 
 ## Compose
 
-`deploy/compose.yaml` runs the same hardened container. From the root of a checkout:
+[`deploy/compose.yaml`](https://github.com/crafted-systems/rusticdoc/blob/main/deploy/compose.yaml) runs the same hardened container. From the root of a checkout:
 
 ```bash
 docker compose -f deploy/compose.yaml up -d --build

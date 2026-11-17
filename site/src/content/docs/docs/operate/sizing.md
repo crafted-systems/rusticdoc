@@ -91,7 +91,7 @@ The two resident memory figures in this table were measured. The rest are worked
 | The service | No limit set by the service | About 10 MB of resident memory at rest, in the same measurement |
 | Temporary files, under Docker | 2.5 GiB with the Compose sizes | `/tmp` and the home directory are on tmpfs, which counts against the container's memory. On Kubernetes the manifest uses `emptyDir` on disk, so they don't count |
 
-`deploy/compose.yaml` and the Kubernetes manifest both set a limit of 6 GiB, which covers the render workers at their limit and leaves 2 GiB for everything else.
+[`deploy/compose.yaml`](https://github.com/crafted-systems/rusticdoc/blob/main/deploy/compose.yaml) and the [Kubernetes manifest](/docs/operate/kubernetes/) both set a limit of 6 GiB, which covers the render workers at their limit and leaves 2 GiB for everything else.
 
 The ceilings add up to more than 6 GiB, so the limit doesn't cover the worst case. The load check above peaked at 249 MiB, but with one small document. Large documents and large data come closer to the limit. An address space limit counts memory a process has reserved as well as memory it uses, so a worker's resident memory can be lower than its limit. If memory does run out, the kernel kills render workers first because they run with the highest `oom_score_adj`. Their requests fail and the service carries on.
 
