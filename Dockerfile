@@ -55,8 +55,11 @@ FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c5
 ENV TZ=UTC LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 LABEL org.opencontainers.image.title="rusticdoc" \
-      org.opencontainers.image.description="Document engine: Office and PDF templates with {{ }} tags, LibreOffice conversion, PDF operations." \
+      org.opencontainers.image.description="Keep document layout out of your code: fill Word, Excel, PowerPoint, HTML and PDF form templates from JSON, convert with LibreOffice and finish PDFs in one container." \
+      org.opencontainers.image.url="https://rusticdoc.com" \
+      org.opencontainers.image.documentation="https://rusticdoc.com/docs/" \
       org.opencontainers.image.source="https://github.com/crafted-systems/rusticdoc" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.base.name="debian:13-slim"
 
 COPY deploy/dpkg-excludes /etc/dpkg/dpkg.cfg.d/rusticdoc

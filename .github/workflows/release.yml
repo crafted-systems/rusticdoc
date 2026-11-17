@@ -66,6 +66,8 @@ jobs:
           no-cache-filters: runtime
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://rusticdoc.com
+            org.opencontainers.image.documentation=https://rusticdoc.com/docs/
             org.opencontainers.image.version=${{ env.TAG }}
             org.opencontainers.image.licenses=Apache-2.0
       - name: smoke
@@ -128,7 +130,14 @@ jobs:
             echo "$TAG is older than $newest, so latest is not moved"
           fi
           # One index under both tags, so they share the digest the attestation covers.
+          # GHCR reads a multi-arch package's description and links from the
+          # index annotations, not from the per-architecture image labels.
           docker buildx imagetools create "${tags[@]}" \
+            --annotation "index:org.opencontainers.image.description=Keep document layout out of your code: fill Word, Excel, PowerPoint, HTML and PDF form templates from JSON, convert with LibreOffice and finish PDFs in one container." \
+            --annotation "index:org.opencontainers.image.url=https://rusticdoc.com" \
+            --annotation "index:org.opencontainers.image.documentation=https://rusticdoc.com/docs/" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --annotation "index:org.opencontainers.image.licenses=Apache-2.0" \
             $(printf "${IMAGE}@sha256:%s " $(ls | sed 's/^sha256://'))
           docker buildx imagetools inspect "${IMAGE}:${version}"
           digest="$(docker buildx imagetools inspect "${IMAGE}:${version}" --format '{{json .Manifest}}' | jq -r .digest)"
