@@ -352,7 +352,7 @@ Bars lighter than their background are refused too, unless you pass `invert=true
 
 How much a logo may hide depends on the error correction: at most 7.5% of the data modules at `M`, 12.5% at `Q` and 15% at `H`, which is half of what each level restores. The hole also stays clear of the corner squares and the timing patterns. If a logo doesn't fit, the service picks a larger version until it does, so a short value makes a denser code. With `version` set, it says what to change instead: `a logo 25% wide hides too much of this version 1 code at error correction H`.
 
-PNG, JPEG, GIF, WebP and SVG logos work. An SVG is cleaned as for `image` and stays a vector in the code. A logo holds at most 2 MB, since a copy goes into each code that uses it.
+PNG, JPEG, GIF, WebP and SVG logos work. An SVG is cleaned as for `image` and stays a vector in the code. A logo holds at most 2 MB, since a copy goes into each code that uses it, and at most 16 megapixels, since it is decoded to draw the PNG.
 
 ### GS1 Digital Link and GS1 QR codes
 
@@ -619,7 +619,7 @@ In a placeholder picture, `alt` replaces the alt text that held the tag. A barco
 | Images and barcodes in one render | 200 |
 | Barcode value | 4 KB, and 4096 modules when linear |
 | Barcode PNG | 4 megapixels. The module gets smaller and the printed size doesn't |
-| Barcode logo | 2 MB |
+| Barcode logo | 2 MB and 16 megapixels |
 | Alt text | 1000 characters |
 | Charts in one render | 200 |
 | Values in one chart | 1,000 |

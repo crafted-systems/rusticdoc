@@ -34,7 +34,7 @@ const MAX_EXPANDED: u64 = 1_000_000;
 /// The deepest elements may nest.
 const MAX_DEPTH: u32 = 256;
 /// The most pixels a picture embedded in an SVG may have.
-const MAX_EMBEDDED_PIXELS: u64 = 16_000_000;
+pub const MAX_EMBEDDED_PIXELS: u64 = 16_000_000;
 /// The longest side of the PNG drawn for readers without SVG.
 const FALLBACK_SIDE: f32 = 2000.0;
 /// The most the PNG enlarges a small drawing.

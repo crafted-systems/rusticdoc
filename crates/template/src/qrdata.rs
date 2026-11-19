@@ -362,10 +362,18 @@ fn phone_number(s: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// An address that goes into a `mailto:` URI as it is: characters that
+/// would start a query, a parameter or an escape are refused, so a value
+/// cannot add a `bcc` or a body of its own.
 fn check_address(s: &str) -> Result<(), String> {
     let ok = s.split_once('@').is_some_and(|(local, domain)| {
-        !local.is_empty() && domain.contains('.') && !domain.starts_with('.')
-    }) && !s.chars().any(|c| c.is_whitespace() || "<>,;\"".contains(c));
+        !local.is_empty()
+            && domain.contains('.')
+            && !domain.starts_with('.')
+            && !domain.contains('@')
+    }) && !s
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || "<>,;:\"?&=%#/\\()[]".contains(c));
     if !ok {
         return Err(format!("{s:?} is not an email address"));
     }
@@ -573,7 +581,8 @@ fn creditor_reference(s: &str) -> Result<String, String> {
         .filter(|c| !c.is_whitespace())
         .collect::<String>()
         .to_ascii_uppercase();
-    let shaped = (5..=25).contains(&compact.len())
+    let shaped = compact.is_ascii()
+        && (5..=25).contains(&compact.len())
         && compact.starts_with("RF")
         && compact[2..4].chars().all(|c| c.is_ascii_digit())
         && compact.chars().all(|c| c.is_ascii_alphanumeric());
@@ -613,7 +622,8 @@ fn epc(v: &Value) -> Result<String, String> {
     let bic = match text(v, "bic")? {
         Some(b) => {
             let b = b.to_ascii_uppercase();
-            let ok = (b.len() == 8 || b.len() == 11)
+            let ok = b.is_ascii()
+                && (b.len() == 8 || b.len() == 11)
                 && b[..6].chars().all(|c| c.is_ascii_uppercase())
                 && b[6..].chars().all(|c| c.is_ascii_alphanumeric());
             if !ok {
@@ -632,7 +642,7 @@ fn epc(v: &Value) -> Result<String, String> {
     }
     let amount = amount(v)?.map(|a| format!("EUR{a}")).unwrap_or_default();
     let purpose = match text(v, "purpose")? {
-        Some(p) if p.len() == 4 && p.chars().all(|c| c.is_ascii_alphabetic()) => {
+        Some(p) if p.len() == 4 && p.bytes().all(|c| c.is_ascii_alphabetic()) => {
             p.to_ascii_uppercase()
         }
         Some(p) => {
@@ -1136,5 +1146,41 @@ mod tests {
         assert!(creditor_reference("RF18 5390 0754 7034").is_ok());
         assert!(iban("GB82 WEST 1234 5698 7654 32").is_ok());
         assert!(iban("GB82 WEST 1234 5698 7654 33").is_err());
+    }
+
+    #[test]
+    fn text_that_is_not_ascii_is_refused_not_a_panic() {
+        // Byte lengths that pass, with a character across the slice point.
+        for bic in ["ABCDE\u{e9}XX", "ABCDEF\u{e9}X", "\u{e9}\u{e9}\u{e9}\u{e9}"] {
+            let v = json!({"name": "A", "iban": "DE89370400440532013000", "bic": bic});
+            assert!(run("epc", v).is_err(), "{bic}");
+        }
+        assert!(creditor_reference("RF1\u{e9}23").is_err());
+        assert!(creditor_reference("RF\u{e9}1234").is_err());
+        let v = json!({"name": "A", "iban": "DE89370400440532013000", "purpose": "\u{e9}\u{e9}"});
+        assert!(run("epc", v).is_err());
+    }
+
+    #[test]
+    fn an_address_cannot_add_to_a_mailto() {
+        for to in [
+            "a@example.com?bcc=evil@example.org",
+            "a@example.com&body=x",
+            "a%40b@example.com",
+            "a@example.com#x",
+            "a@example.com/x",
+            "a@b@example.com",
+        ] {
+            assert!(run("email", json!(to)).is_err(), "{to}");
+            assert!(run("email", json!({"to": to})).is_err(), "{to}");
+            assert!(
+                run("email", json!({"to": "ok@example.com", "cc": to})).is_err(),
+                "{to}"
+            );
+        }
+        assert_eq!(
+            run("email", json!("first.last+tag@example.co.uk")).unwrap(),
+            "mailto:first.last+tag@example.co.uk"
+        );
     }
 }
