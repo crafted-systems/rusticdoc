@@ -1342,6 +1342,7 @@ fn chart_kinds() {
         ("column", "<c:barDir val=\"col\"/>"),
         ("bar", "<c:barDir val=\"bar\"/>"),
         ("line", "<c:lineChart>"),
+        ("area", "<c:areaChart><c:grouping val=\"standard\"/>"),
         ("pie", "<c:pieChart>"),
     ] {
         let doc = docx(&p(&format!(
@@ -1372,7 +1373,7 @@ fn charts_refuse_bad_values() {
         (
             "type=\"radar\", x=\"m\", y=\"v\"",
             rows(json!([])),
-            "type must be",
+            "type must be bar, column, line, area, pie or scatter",
         ),
         ("x=\"m\", y=\"v\"", rows(json!([])), "type= is required"),
         ("type=\"bar\", y=\"v\"", rows(json!([])), "x= is required"),
@@ -1417,6 +1418,103 @@ fn charts_refuse_bad_values() {
     let points: Vec<Value> = (0..1000).map(|i| json!({"m": "a", "v": i})).collect();
     let out = render(Format::Docx, &tag(good), rows(json!(points)));
     assert!(bytes_of(&out, "word/charts/chart1.xml").is_some());
+}
+
+#[test]
+fn area_charts_are_see_through_in_the_theme_colours() {
+    let doc = docx(&p(
+        "{{ rows | chart(type=\"area\", x=\"month\", y=[\"sales\", \"costs\"]) }}",
+    ));
+    let chart = part(
+        &render(Format::Docx, &doc, sales()),
+        "word/charts/chart1.xml",
+    );
+    for accent in ["accent1", "accent2"] {
+        assert!(
+            chart.contains(&format!(
+                "<c:spPr><a:solidFill><a:schemeClr val=\"{accent}\"><a:alpha val=\"75000\"/>"
+            )),
+            "{chart}"
+        );
+    }
+    // Area series take no markers, and the area spans the categories.
+    assert!(!chart.contains("<c:marker>"), "{chart}");
+    assert!(
+        chart.contains("<c:crossBetween val=\"midCat\"/>"),
+        "{chart}"
+    );
+    assert!(chart.contains("<c:catAx>"), "{chart}");
+}
+
+fn points() -> Value {
+    json!({"rows": [
+        {"height": 1.6, "weight": 55, "age": 30},
+        {"height": 1.85, "weight": null, "age": 41},
+        {"height": -0.5, "weight": 90.5, "age": 22},
+    ]})
+}
+
+const SCATTER_TAG: &str =
+    "{{ rows | chart(type=\"scatter\", x=\"height\", y=[\"weight\", \"age\"]) }}";
+
+#[test]
+fn scatter_charts_place_points_by_x_on_two_value_axes() {
+    let out = render(Format::Docx, &docx(&p(SCATTER_TAG)), points());
+    let chart = part(&out, "word/charts/chart1.xml");
+    assert!(
+        chart.contains("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/>"),
+        "{chart}"
+    );
+    assert_eq!(chart.matches("<c:valAx>").count(), 2, "{chart}");
+    assert!(
+        !chart.contains("<c:catAx>") && !chart.contains("<c:cat>"),
+        "{chart}"
+    );
+    // Points only, no joining line.
+    assert!(
+        chart.contains("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>"),
+        "{chart}"
+    );
+    // Each series' markers take its own theme accent.
+    for accent in ["accent1", "accent2"] {
+        assert!(
+            chart.contains(&format!(
+                "<c:size val=\"6\"/><c:spPr><a:solidFill><a:schemeClr val=\"{accent}\"/>"
+            )),
+            "{chart}"
+        );
+    }
+    assert!(chart.contains("<c:xVal><c:numRef><c:f>Sheet1!$A$2:$A$4</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"3\"/><c:pt idx=\"0\"><c:v>1.6</c:v></c:pt><c:pt idx=\"1\"><c:v>1.85</c:v></c:pt><c:pt idx=\"2\"><c:v>-0.5</c:v></c:pt>"), "{chart}");
+    // The missing weight is left out of the y values.
+    assert!(chart.contains("<c:yVal><c:numRef><c:f>Sheet1!$B$2:$B$4</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"3\"/><c:pt idx=\"0\"><c:v>55</c:v></c:pt><c:pt idx=\"2\"><c:v>90.5</c:v></c:pt></c:numCache>"), "{chart}");
+    assert_eq!(chart.matches("<c:xVal>").count(), 2, "{chart}");
+
+    // Excel reads the x values from number cells on the hidden sheet.
+    let book = xlsx(&[row(3, &[cell("B3", "inlineStr", SCATTER_TAG)])], &[]);
+    let out = render(Format::Xlsx, &book, points());
+    let data = part(&out, "xl/worksheets/richdata1.xml");
+    assert!(data.contains("<c r=\"A2\"><v>1.6</v></c>"), "{data}");
+    assert!(data.contains("<c r=\"A4\"><v>-0.5</v></c>"), "{data}");
+    assert!(!data.contains("<c r=\"A2\" t=\"inlineStr\">"), "{data}");
+}
+
+#[test]
+fn scatter_charts_refuse_an_x_that_is_not_a_number() {
+    let doc = docx(&p("{{ rows | chart(type=\"scatter\", x=\"m\", y=\"v\") }}"));
+    for (rows, expected) in [
+        (
+            json!([{"m": "Jan", "v": 1}]),
+            "row 1: \"m\" is not a number",
+        ),
+        (
+            json!([{"m": 1, "v": 1}, {"m": null, "v": 2}]),
+            "row 2: \"m\" is not a number",
+        ),
+        (json!([{"v": 1}]), "has no \"m\""),
+    ] {
+        let err = render_err(Format::Docx, &doc, json!({ "rows": rows }));
+        assert!(err.contains(expected), "{expected:?} not in {err}");
+    }
 }
 
 fn odf_chart_docs(tag: &str) -> [(Format, Vec<u8>); 3] {
@@ -1514,6 +1612,7 @@ fn odf_chart_kinds() {
     for (kind, class, vertical) in [
         ("column", "chart:bar", "false"),
         ("line", "chart:line", "false"),
+        ("area", "chart:area", "false"),
         ("pie", "chart:circle", "false"),
     ] {
         let tag = format!("{{{{ rows | chart(type=\"{kind}\", x=\"month\", y=\"sales\") }}}}");
@@ -1546,6 +1645,48 @@ fn odf_chart_kinds() {
         if kind == "line" {
             assert!(chart.contains("chart:symbol-type=\"automatic\""), "{chart}");
         }
+        if kind == "area" {
+            assert!(
+                chart.contains("draw:fill-color=\"#4472c4\" draw:opacity=\"75%\""),
+                "{chart}"
+            );
+            assert!(!chart.contains("chart:symbol-type"), "{chart}");
+        }
+    }
+}
+
+#[test]
+fn odf_scatter_charts_read_x_from_the_first_column() {
+    for (format, doc) in odf_chart_docs(SCATTER_TAG) {
+        let out = render(format, &doc, points());
+        let chart = part(&out, "Object 1/content.xml");
+        assert!(
+            chart.contains("chart:class=\"chart:scatter\""),
+            "{format:?}: {chart}"
+        );
+        assert!(
+            chart.contains("chart:data-source-has-labels=\"row\""),
+            "{chart}"
+        );
+        assert!(!chart.contains("<chart:categories"), "{chart}");
+        assert_eq!(
+            chart
+                .matches("<chart:domain table:cell-range-address=\"local-table.$A$2:.$A$4\"/>")
+                .count(),
+            2,
+            "{chart}"
+        );
+        assert!(chart.contains("chart:values-cell-range-address=\"local-table.$C$2:.$C$4\" chart:label-cell-address=\"local-table.$C$1\"><chart:domain"), "{chart}");
+        // x values are numbers in the local table, not labels.
+        assert!(
+            chart.contains("<table:table-row><table:table-cell office:value-type=\"float\" office:value=\"-0.5\">"),
+            "{chart}"
+        );
+        assert!(chart.contains("chart:symbol-type=\"automatic\""), "{chart}");
+        assert!(
+            chart.contains("draw:stroke=\"none\" svg:stroke-color=\"#4472c4\""),
+            "{chart}"
+        );
     }
 }
 

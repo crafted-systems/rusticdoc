@@ -51,7 +51,9 @@ pub enum Kind {
     Bar,
     Column,
     Line,
+    Area,
     Pie,
+    Scatter,
 }
 
 /// The filter's arguments, read before the value is looked at so that
@@ -78,8 +80,15 @@ impl Options {
             Some("bar") => Kind::Bar,
             Some("column") => Kind::Column,
             Some("line") => Kind::Line,
+            Some("area") => Kind::Area,
             Some("pie") => Kind::Pie,
-            _ => return Err(fail("chart", "type must be bar, column, line or pie")),
+            Some("scatter") => Kind::Scatter,
+            _ => {
+                return Err(fail(
+                    "chart",
+                    "type must be bar, column, line, area, pie or scatter",
+                ))
+            }
         };
         let x = required("x")?;
         let x = x
@@ -138,6 +147,8 @@ pub struct Chart {
     kind: Kind,
     title: Option<String>,
     categories: Vec<String>,
+    /// The x values of a scatter chart, one per category; empty otherwise.
+    xs: Vec<f64>,
     series: Vec<Series>,
     pub width_pt: f64,
     pub height_pt: f64,
@@ -161,7 +172,9 @@ impl Chart {
                 "the chart has {total} points; at most {MAX_POINTS} are allowed"
             ));
         }
+        let scatter = options.kind == Kind::Scatter;
         let mut categories = Vec::with_capacity(rows);
+        let mut xs = Vec::new();
         let mut label_bytes = 0;
         let mut escaped_bytes = 0;
         let mut series: Vec<Series> = options
@@ -180,7 +193,13 @@ impl Chart {
             if category.is_undefined() {
                 return Err(format!("row {} has no {:?}", i + 1, options.x));
             }
-            let label = if category.is_none() {
+            let label = if scatter {
+                // A scatter chart places each row by its x, so x must be a number.
+                let x = number(&category, &options.x, i)?
+                    .ok_or_else(|| format!("row {}: {:?} is not a number", i + 1, options.x))?;
+                xs.push(x);
+                x.to_string()
+            } else if category.is_none() {
                 String::new()
             } else {
                 category.to_string()
@@ -212,6 +231,7 @@ impl Chart {
             kind: options.kind,
             title: options.title,
             categories,
+            xs,
             series,
             width_pt: options.width_pt,
             height_pt: options.height_pt,
@@ -230,7 +250,10 @@ impl Chart {
         let _ = write!(out, "<row r=\"{first_row}\">{cells}</row>");
         for (i, category) in self.categories.iter().enumerate() {
             let r = first_row + 1 + i as u32;
-            cells = inline_cell(&format!("A{r}"), category);
+            cells = match self.xs.get(i) {
+                Some(x) => format!("<c r=\"A{r}\"><v>{x}</v></c>"),
+                None => inline_cell(&format!("A{r}"), category),
+            };
             for (k, s) in self.series.iter().enumerate() {
                 if let Some(v) = s.values[i] {
                     let col = num_to_col(k as u32 + 2);
@@ -283,6 +306,23 @@ impl Chart {
                     axes(false)
                 );
             }
+            Kind::Area => {
+                // The area starts and ends at the first and last category, not
+                // half a step inside them.
+                let _ = write!(
+                    plot,
+                    "<c:areaChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>\
+                     {series}{AX_IDS}</c:areaChart>{}",
+                    axes(false).replace("val=\"between\"", "val=\"midCat\"")
+                );
+            }
+            Kind::Scatter => {
+                let _ = write!(
+                    plot,
+                    "<c:scatterChart><c:scatterStyle val=\"lineMarker\"/>\
+                     <c:varyColors val=\"0\"/>{series}{AX_IDS}</c:scatterChart>{SCATTER_AXES}"
+                );
+            }
             Kind::Pie => {
                 let _ = write!(
                     plot,
@@ -319,9 +359,12 @@ impl Chart {
             Kind::Bar => ("chart:bar", true),
             Kind::Column => ("chart:bar", false),
             Kind::Line => ("chart:line", false),
+            Kind::Area => ("chart:area", false),
             Kind::Pie => ("chart:circle", false),
+            Kind::Scatter => ("chart:scatter", false),
         };
         let pie = self.kind == Kind::Pie;
+        let scatter = self.kind == Kind::Scatter;
         let mut styles = String::new();
         let mut style = |name: &str, body: &str| {
             let _ = write!(
@@ -340,8 +383,9 @@ impl Chart {
             "<style:text-properties fo:font-size=\"13pt\" fo:font-weight=\"bold\"/>",
         );
         style("chLegend", text);
-        // Markers on lines, and gaps where a value is missing, belong to the plot.
-        let symbol = if self.kind == Kind::Line {
+        // Markers on lines and points, and gaps where a value is missing,
+        // belong to the plot.
+        let symbol = if matches!(self.kind, Kind::Line | Kind::Scatter) {
             " chart:symbol-type=\"automatic\""
         } else {
             ""
@@ -379,16 +423,24 @@ impl Chart {
         };
         for k in 0..colours {
             let colour = PALETTE[k % PALETTE.len()];
-            let body = if self.kind == Kind::Line {
-                format!(
+            let body = match self.kind {
+                Kind::Line => format!(
                     "<style:graphic-properties svg:stroke-width=\"0.08cm\" \
                      svg:stroke-color=\"#{colour}\" draw:fill-color=\"#{colour}\"/>"
-                )
-            } else {
-                format!(
+                ),
+                // Points only: the line joining them is not drawn.
+                Kind::Scatter => format!(
+                    "<style:graphic-properties draw:stroke=\"none\" \
+                     svg:stroke-color=\"#{colour}\" draw:fill-color=\"#{colour}\"/>"
+                ),
+                Kind::Area => format!(
+                    "<style:graphic-properties draw:stroke=\"none\" draw:fill=\"solid\" \
+                     draw:fill-color=\"#{colour}\" draw:opacity=\"{AREA_ALPHA}%\"/>"
+                ),
+                _ => format!(
                     "<style:graphic-properties draw:stroke=\"none\" draw:fill=\"solid\" \
                      draw:fill-color=\"#{colour}\"/>"
-                )
+                ),
             };
             style(&format!("chS{k}"), &body);
         }
@@ -400,14 +452,19 @@ impl Chart {
             ),
             None => String::new(),
         };
+        // A scatter chart's first column holds x values, not labels.
+        let labels = if scatter { "row" } else { "both" };
         let mut plot = format!(
             "<chart:plot-area chart:style-name=\"chPlot\" \
              table:cell-range-address=\"local-table.$A$1:.${last_col}${last_row}\" \
-             chart:data-source-has-labels=\"both\">"
+             chart:data-source-has-labels=\"{labels}\">"
         );
-        let categories = format!(
-            "<chart:categories table:cell-range-address=\"local-table.$A$2:.$A${last_row}\"/>"
-        );
+        let first_col = "local-table.$A$2:.$A$";
+        let categories = if scatter {
+            String::new()
+        } else {
+            format!("<chart:categories table:cell-range-address=\"{first_col}{last_row}\"/>")
+        };
         if pie {
             // A pie draws no axes, but its slices take their names from the
             // categories of the x axis.
@@ -439,6 +496,12 @@ impl Chart {
                  chart:values-cell-range-address=\"local-table.${col}$2:.${col}${last_row}\" \
                  chart:label-cell-address=\"local-table.${col}$1\">"
             );
+            if scatter {
+                let _ = write!(
+                    plot,
+                    "<chart:domain table:cell-range-address=\"{first_col}{last_row}\"/>"
+                );
+            }
             if pie {
                 for i in 0..self.categories.len() {
                     let _ = write!(plot, "<chart:data-point chart:style-name=\"chS{i}\"/>");
@@ -474,16 +537,13 @@ impl Chart {
         table.push_str("</table:table-row></table:table-header-rows><table:table-rows>");
         for (i, category) in self.categories.iter().enumerate() {
             table.push_str("<table:table-row>");
-            table.push_str(&odf_text_cell(category));
+            match self.xs.get(i) {
+                Some(x) => table.push_str(&odf_float_cell(*x)),
+                None => table.push_str(&odf_text_cell(category)),
+            }
             for s in &self.series {
                 match s.values[i] {
-                    Some(v) => {
-                        let _ = write!(
-                            table,
-                            "<table:table-cell office:value-type=\"float\" office:value=\"{v}\">\
-                             <text:p>{v}</text:p></table:table-cell>"
-                        );
-                    }
+                    Some(v) => table.push_str(&odf_float_cell(v)),
                     // An empty cell is a gap, as a missing point is in OOXML.
                     None => table.push_str("<table:table-cell/>"),
                 }
@@ -507,40 +567,86 @@ impl Chart {
     fn series_xml(&self, k: usize, s: &Series, sheet: &str, first: u32, last: u32) -> String {
         let col = num_to_col(k as u32 + 2);
         let (head, start) = (first, first + 1);
-        let mut cats = String::new();
-        for (i, c) in self.categories.iter().enumerate() {
-            let _ = write!(cats, "<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", esc(c));
-        }
+        let count = self.categories.len();
         let mut vals = String::new();
         for (i, v) in s.values.iter().enumerate() {
             if let Some(v) = v {
                 let _ = write!(vals, "<c:pt idx=\"{i}\"><c:v>{v}</c:v></c:pt>");
             }
         }
-        let count = self.categories.len();
-        let line_extra = if self.kind == Kind::Line {
-            "<c:marker><c:symbol val=\"circle\"/></c:marker>"
-        } else {
-            ""
-        };
-        let smooth = if self.kind == Kind::Line {
-            "<c:smooth val=\"0\"/>"
-        } else {
-            ""
+        let vals = format!(
+            "<c:numRef><c:f>{sheet}!${col}${start}:${col}${last}</c:f><c:numCache>\
+             <c:formatCode>General</c:formatCode><c:ptCount val=\"{count}\"/>{vals}</c:numCache>\
+             </c:numRef>"
+        );
+        let accent = format!("accent{}", k % PALETTE.len() + 1);
+        let (look, x, y, smooth) = match self.kind {
+            Kind::Scatter => {
+                let mut xs = String::new();
+                for (i, x) in self.xs.iter().enumerate() {
+                    let _ = write!(xs, "<c:pt idx=\"{i}\"><c:v>{x}</c:v></c:pt>");
+                }
+                (
+                    // Points only: the line joining them is not drawn, so the
+                    // marker is given the theme's accent itself, which it would
+                    // otherwise take from the line.
+                    format!(
+                        "<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>\
+                         <c:marker><c:symbol val=\"circle\"/><c:size val=\"6\"/><c:spPr>\
+                         <a:solidFill><a:schemeClr val=\"{accent}\"/></a:solidFill><a:ln>\
+                         <a:solidFill><a:schemeClr val=\"{accent}\"/></a:solidFill></a:ln>\
+                         </c:spPr></c:marker>"
+                    ),
+                    format!(
+                        "<c:xVal><c:numRef><c:f>{sheet}!$A${start}:$A${last}</c:f><c:numCache>\
+                         <c:formatCode>General</c:formatCode><c:ptCount val=\"{count}\"/>{xs}\
+                         </c:numCache></c:numRef></c:xVal>"
+                    ),
+                    format!("<c:yVal>{vals}</c:yVal>"),
+                    "<c:smooth val=\"0\"/>",
+                )
+            }
+            kind => {
+                let mut cats = String::new();
+                for (i, c) in self.categories.iter().enumerate() {
+                    let _ = write!(cats, "<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", esc(c));
+                }
+                let look = match kind {
+                    Kind::Line => "<c:marker><c:symbol val=\"circle\"/></c:marker>".to_string(),
+                    // The theme's accent, see-through so that an area behind
+                    // another still shows.
+                    Kind::Area => format!(
+                        "<c:spPr><a:solidFill><a:schemeClr val=\"{accent}\">\
+                         <a:alpha val=\"{AREA_ALPHA}000\"/></a:schemeClr></a:solidFill></c:spPr>"
+                    ),
+                    _ => String::new(),
+                };
+                (
+                    look,
+                    format!(
+                        "<c:cat><c:strRef><c:f>{sheet}!$A${start}:$A${last}</c:f><c:strCache>\
+                         <c:ptCount val=\"{count}\"/>{cats}</c:strCache></c:strRef></c:cat>"
+                    ),
+                    format!("<c:val>{vals}</c:val>"),
+                    if kind == Kind::Line {
+                        "<c:smooth val=\"0\"/>"
+                    } else {
+                        ""
+                    },
+                )
+            }
         };
         format!(
             "<c:ser><c:idx val=\"{k}\"/><c:order val=\"{k}\"/><c:tx><c:strRef>\
              <c:f>{sheet}!${col}${head}</c:f><c:strCache><c:ptCount val=\"1\"/><c:pt idx=\"0\">\
-             <c:v>{name}</c:v></c:pt></c:strCache></c:strRef></c:tx>{line_extra}<c:cat><c:strRef>\
-             <c:f>{sheet}!$A${start}:$A${last}</c:f><c:strCache><c:ptCount val=\"{count}\"/>\
-             {cats}</c:strCache></c:strRef></c:cat><c:val><c:numRef>\
-             <c:f>{sheet}!${col}${start}:${col}${last}</c:f><c:numCache>\
-             <c:formatCode>General</c:formatCode><c:ptCount val=\"{count}\"/>{vals}</c:numCache>\
-             </c:numRef></c:val>{smooth}</c:ser>",
+             <c:v>{name}</c:v></c:pt></c:strCache></c:strRef></c:tx>{look}{x}{y}{smooth}</c:ser>",
             name = esc(&s.name)
         )
     }
 }
+
+/// How opaque an area is, in percent.
+const AREA_ALPHA: u32 = 75;
 
 const AX_IDS: &str = "<c:axId val=\"50010\"/><c:axId val=\"50020\"/>";
 
@@ -559,6 +665,25 @@ fn axes(horizontal: bool) -> String {
          <c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"out\"/>\
          <c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"50010\"/>\
          <c:crosses val=\"autoZero\"/><c:crossBetween val=\"between\"/></c:valAx>"
+    )
+}
+
+/// A scatter chart's two value axes: x along the bottom, y up the left.
+const SCATTER_AXES: &str = "<c:valAx><c:axId val=\"50010\"/><c:scaling>\
+     <c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/>\
+     <c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"out\"/>\
+     <c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"50020\"/>\
+     <c:crosses val=\"autoZero\"/><c:crossBetween val=\"midCat\"/></c:valAx>\
+     <c:valAx><c:axId val=\"50020\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling>\
+     <c:delete val=\"0\"/><c:axPos val=\"l\"/><c:majorGridlines/>\
+     <c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"out\"/>\
+     <c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"50010\"/>\
+     <c:crosses val=\"autoZero\"/><c:crossBetween val=\"midCat\"/></c:valAx>";
+
+fn odf_float_cell(v: f64) -> String {
+    format!(
+        "<table:table-cell office:value-type=\"float\" office:value=\"{v}\">\
+         <text:p>{v}</text:p></table:table-cell>"
     )
 }
 

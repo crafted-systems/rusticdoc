@@ -419,8 +419,8 @@ The value is a list of objects, and each object is one category.
 
 | Argument | Required | Meaning |
 |---|---|---|
-| `type` | Yes | `bar`, `column`, `line` or `pie` |
-| `x` | Yes | The key holding each category's label |
+| `type` | Yes | `bar`, `column`, `line`, `area`, `pie` or `scatter` |
+| `x` | Yes | The key holding each category's label. In a `scatter`, the key holding each point's x value |
 | `y` | Yes | A key, or a list of keys for several series. A `pie` takes one |
 | `title` | No | The chart's title |
 | `width`, `height` | No | Size in points. The default is 450 by 270 |
@@ -442,6 +442,8 @@ unzip -l out.docx | grep -o 'word/charts/chart1.xml'
 ```
 
 Values have to be numbers. A `null` or missing value is a gap, but a key with no value in any row is an error, because that's what a misspelt key looks like: `no row has a value for "nope"`. A string like `"12"` is refused, and so are an empty list and a row with no `x` key.
+
+A `scatter` places each point by its `x`, so `x` has to be a number in every row too, and both axes are value axes. Its points aren't joined by a line. An `area` fills the space under each series, at 75% opacity so that an area behind another still shows. A gap in an area drops it to zero.
 
 In DOCX and PPTX the chart carries its values inline and has no embedded workbook, so it renders but you can't edit its data in Word or PowerPoint. In PPTX it goes at the position of the shape that held the tag. A placeholder that PowerPoint hasn't moved has no position of its own, so the chart takes the one its layout or master gives it.
 
