@@ -539,7 +539,7 @@ The argument names the kind. Each takes an object, and unknown keys are refused,
 | `swiss` | `account`, `creditor`; `amount`, `currency`, `debtor`, `reference`, `message`, `billing`, `alt` | A Swiss QR-bill payload, for `barcode("swissqr")` |
 | `gs1` | An element string such as `(01)09506000134352(10)LOT7`, and `domain=` | A GS1 Digital Link, `https://id.gs1.org/01/09506000134352/10/LOT7` |
 
-`phone`, `email` and `to` take one value or a list. Phone numbers keep their digits and a leading `+`, and spaces, dots, dashes and brackets are dropped. An `address` in a vCard is text or an object with `street`, `city`, `region`, `postcode` and `country`. Dates are written `YYYY-MM-DD`.
+`phone`, `email` and `to` take one value or a list. An address with `?`, `&`, `=`, `%`, `#`, `/` or brackets is refused, so a value can't add recipients or a body to a `mailto:` link. Phone numbers keep their digits and a leading `+`, and spaces, dots, dashes and brackets are dropped. An `address` in a vCard is text or an object with `street`, `city`, `region`, `postcode` and `country`. Dates are written `YYYY-MM-DD`.
 
 An event's `start` and `end` are both dates, for an all-day event, or both times. A time with `Z` or an offset, such as `2026-12-01T18:00:00+01:00`, is written in UTC, and one without is local time wherever it's scanned.
 

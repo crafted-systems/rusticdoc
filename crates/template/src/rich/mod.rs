@@ -886,6 +886,19 @@ fn barcode_options(kwargs: &Kwargs) -> Result<(barcode::Options, Option<Fit>), E
             }
             let found = media::inspect(input.bytes, input.mime.as_deref())
                 .map_err(|e| fail(F, format!("logo: {e}")))?;
+            // A raster logo is decoded to draw the PNG, so its pixels count,
+            // not its bytes: a small file can unpack to gigabytes. An SVG's
+            // own pictures were checked when it was cleaned.
+            let pixels = u64::from(found.px.0) * u64::from(found.px.1);
+            if found.fallback.is_none() && pixels > svg::MAX_EMBEDDED_PIXELS {
+                return Err(fail(
+                    F,
+                    format!(
+                        "a logo has at most {} pixels, not {pixels}",
+                        svg::MAX_EMBEDDED_PIXELS
+                    ),
+                ));
+            }
             opts.logo = Some(barcode::Logo {
                 media: Arc::new(found),
                 share: share.unwrap_or(0.2),

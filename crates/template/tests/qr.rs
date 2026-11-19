@@ -263,6 +263,32 @@ fn logos_sit_in_a_hole_and_still_scan() {
 }
 
 #[test]
+fn a_logo_that_unpacks_to_too_many_pixels_is_refused() {
+    use image::ImageEncoder;
+    // 20 megapixels of one grey: a few kilobytes of PNG.
+    let (w, h) = (5000u32, 4000u32);
+    let mut bomb = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut bomb)
+        .write_image(
+            &vec![200u8; (w * h) as usize],
+            w,
+            h,
+            image::ExtendedColorType::L8,
+        )
+        .unwrap();
+    assert!(bomb.len() < 200_000, "{} bytes", bomb.len());
+    let err = render_err(
+        Format::Docx,
+        &docx(&p("{{ v | barcode(\"qr\", logo=l) }}")),
+        json!({ "v": "a", "l": b64(&bomb) }),
+    );
+    assert!(
+        err.contains("a logo has at most 16000000 pixels, not 20000000"),
+        "{err}"
+    );
+}
+
+#[test]
 fn a_logo_raises_the_version_until_it_fits_or_says_why() {
     // Version 1 has no room in the middle for a logo; the code grows.
     let (plain, _) = draw("{{ v | barcode(\"qr\", size=100) }}", json!({ "v": "a" }));
