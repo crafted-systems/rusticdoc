@@ -6,11 +6,11 @@ use std::sync::Arc;
 use crate::package::{self, Entry};
 use crate::rich::html;
 use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK};
-use crate::rich::{docx::framed_crop, placeholder};
 use crate::rich::{
-    emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, serialize, Rich,
-    Scope, Seg,
+    descr, emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, serialize,
+    Rich, Scope, Seg,
 };
+use crate::rich::{docx::framed_crop, placeholder};
 use crate::xml::{self, Elem, Node};
 use crate::TemplateError;
 
@@ -415,7 +415,8 @@ impl Pptx<'_, '_> {
                     let blip = placeholder::blip(self.pkg, self.part, "ppt/media", &picture.media)?;
                     let blip = format!("{blip}{}", framed_crop(picture));
                     let (cx, cy) = (emu(picture.width_pt), emu(picture.height_pt));
-                    added.push(Node::Raw(self.pic_xml(&blip, x, *y, cx, cy)));
+                    let descr = descr(picture);
+                    added.push(Node::Raw(self.pic_xml(&blip, &descr, x, *y, cx, cy)));
                     *y += cy;
                 }
                 Rich::Chart(chart) => {
@@ -480,10 +481,10 @@ impl Pptx<'_, '_> {
         id
     }
 
-    fn pic_xml(&mut self, blip: &str, x: i64, y: i64, cx: i64, cy: i64) -> String {
+    fn pic_xml(&mut self, blip: &str, descr: &str, x: i64, y: i64, cx: i64, cy: i64) -> String {
         let id = self.shape_id();
         format!(
-            "<p:pic><p:nvPicPr><p:cNvPr id=\"{id}\" name=\"Picture {id}\"/><p:cNvPicPr>\
+            "<p:pic><p:nvPicPr><p:cNvPr id=\"{id}\" name=\"Picture {id}\"{descr}/><p:cNvPicPr>\
              <a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill>\
              {blip}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>\
              <a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>\

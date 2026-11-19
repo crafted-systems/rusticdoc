@@ -1,12 +1,19 @@
-//! Barcodes: the symbol is encoded by rxing, then drawn here as a PNG with
-//! whole device pixels per module, an optional line of text, colours, a
-//! quiet zone and a quarter-turn rotation.
+//! Barcodes: the symbol is encoded by rxing, then drawn here as an SVG,
+//! with a PNG of it for readers without SVG. The PNG has whole device pixels
+//! per module, so square edges stay crisp. Around the symbol go an optional
+//! line of text, colours, a quiet zone and a quarter-turn rotation; QR codes
+//! also take module and finder shapes, gradients, a logo and a label.
 
-use resvg::tiny_skia::{self, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use base64::Engine as _;
 use rxing::{BarcodeFormat, EncodeHints, Writer};
 
 use crate::rich::font;
 use crate::rich::media::{self, Media, MAX_SIDE_PT};
+use crate::rich::qr::{self, Hole};
+use crate::rich::svg;
 
 /// The longest value a barcode accepts.
 pub const MAX_BARCODE_INPUT: usize = 4096;
@@ -19,12 +26,28 @@ pub const MAX_BARCODE_PIXELS: usize = 4_000_000;
 /// The widest quiet zone, in modules.
 pub const MAX_QUIET: u32 = 100;
 
-pub const SYMBOLOGIES: &str = "qr, datamatrix, pdf417, aztec, code128, gs1-128, code39, code93, \
-                               ean13, ean8, upca, upce, itf, itf14 or codabar";
+pub const SYMBOLOGIES: &str = "qr, gs1-qr, swissqr, datamatrix, pdf417, aztec, code128, gs1-128, \
+                               code39, code93, ean13, ean8, upca, upce, itf, itf14 or codabar";
+/// The smallest QR module printed, in points: 0.25 mm. Phone cameras miss
+/// finer ones at reading distance; GS1 asks for at least 0.396 mm.
+pub const MIN_QR_MODULE_PT: f64 = 0.25 / 25.4 * 72.0;
+/// The Swiss QR-bill's code, without its quiet zone: 46 mm.
+const SWISS_SIDE_PT: f64 = 46.0 / 25.4 * 72.0;
+/// The quiet zone around it: 5 mm.
+const SWISS_QUIET_PT: f64 = 5.0 / 25.4 * 72.0;
+/// The Swiss cross in its middle: 7 mm, white border included.
+const SWISS_CROSS_SHARE: f64 = 7.0 / 46.0;
+/// The lowest contrast accepted between bars and background, WCAG's for
+/// graphical objects.
+pub const MIN_CONTRAST: f64 = 3.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Qr,
+    /// QR with GS1 element strings: FNC1 in first position.
+    Gs1Qr,
+    /// The Swiss QR-bill's QR code, with its cross.
+    SwissQr,
     DataMatrix,
     Pdf417,
     Aztec,
@@ -45,6 +68,8 @@ impl Kind {
     fn parse(name: &str) -> Option<Kind> {
         Some(match name {
             "qr" => Kind::Qr,
+            "gs1-qr" | "gs1qr" => Kind::Gs1Qr,
+            "swissqr" | "swiss-qr" => Kind::SwissQr,
             "datamatrix" => Kind::DataMatrix,
             "pdf417" => Kind::Pdf417,
             "aztec" => Kind::Aztec,
@@ -66,18 +91,22 @@ impl Kind {
     fn is_matrix(self) -> bool {
         matches!(
             self,
-            Kind::Qr | Kind::DataMatrix | Kind::Pdf417 | Kind::Aztec
+            Kind::Qr | Kind::Gs1Qr | Kind::SwissQr | Kind::DataMatrix | Kind::Pdf417 | Kind::Aztec
         )
+    }
+
+    fn is_qr(self) -> bool {
+        matches!(self, Kind::Qr | Kind::Gs1Qr | Kind::SwissQr)
     }
 
     /// Whether the symbol must print square.
     fn is_square(self) -> bool {
-        matches!(self, Kind::Qr | Kind::DataMatrix | Kind::Aztec)
+        matches!(self, Kind::DataMatrix | Kind::Aztec) || self.is_qr()
     }
 
     fn format(self) -> BarcodeFormat {
         match self {
-            Kind::Qr => BarcodeFormat::QR_CODE,
+            Kind::Qr | Kind::Gs1Qr | Kind::SwissQr => BarcodeFormat::QR_CODE,
             Kind::DataMatrix => BarcodeFormat::DATA_MATRIX,
             Kind::Pdf417 => BarcodeFormat::PDF_417,
             Kind::Aztec => BarcodeFormat::AZTEC,
@@ -95,7 +124,7 @@ impl Kind {
 
     fn default_quiet(self) -> u32 {
         match self {
-            Kind::Qr => 4,
+            Kind::Qr | Kind::Gs1Qr | Kind::SwissQr => 4,
             Kind::DataMatrix | Kind::Aztec | Kind::Pdf417 => 2,
             _ => 10,
         }
@@ -116,10 +145,174 @@ pub struct Options {
     /// `RRGGBB`, or `None` for white; `transparent` for none at all.
     pub background: Option<String>,
     pub transparent: bool,
+    /// Light bars on a dark background: allowed, and the defaults swap.
+    pub invert: bool,
     pub quiet_zone: Option<u32>,
     pub rotate: u32,
     /// Error correction as given: a level for QR, a number for the others.
     pub ec: Option<String>,
+    /// QR only from here on.
+    pub style: qr::Style,
+    pub eye_color: Option<String>,
+    pub eye_center_color: Option<String>,
+    pub gradient: Option<Gradient>,
+    pub logo: Option<Logo>,
+    pub label: Option<String>,
+    pub version: Option<u32>,
+}
+
+/// A gradient across the symbol, from `color` to `end`.
+#[derive(Debug, Clone)]
+pub struct Gradient {
+    pub radial: bool,
+    /// `RRGGBB`.
+    pub end: String,
+    /// Degrees clockwise from left to right, for a linear one.
+    pub angle: f64,
+}
+
+/// A picture in the middle of a QR code.
+#[derive(Debug, Clone)]
+pub struct Logo {
+    pub media: Arc<Media>,
+    /// Its width as a share of the symbol's.
+    pub share: f64,
+}
+
+impl Options {
+    /// The QR-only options that are set, by their filter names.
+    fn qr_only(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        let s = &self.style;
+        if s.shape != qr::Shape::Square {
+            out.push("style");
+        }
+        if (s.scale - 1.0).abs() > 1e-9 {
+            out.push("module_scale");
+        }
+        if s.eye != qr::EyeShape::Square {
+            out.push("eye");
+        }
+        if s.eye_center != qr::EyeShape::Square {
+            out.push("eye_center");
+        }
+        for (set, name) in [
+            (self.eye_color.is_some(), "eye_color"),
+            (self.eye_center_color.is_some(), "eye_center_color"),
+            (self.gradient.is_some(), "gradient"),
+            (self.logo.is_some(), "logo"),
+            (self.label.is_some(), "label"),
+            (self.version.is_some(), "version"),
+        ] {
+            if set {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    /// Every option set, by filter name, for the Swiss QR-bill to refuse.
+    fn any_look(&self) -> Vec<&'static str> {
+        let mut out = self.qr_only();
+        for (set, name) in [
+            (self.size.is_some(), "size"),
+            (self.width.is_some(), "width"),
+            (self.height.is_some(), "height"),
+            (self.color.is_some(), "color"),
+            (self.background.is_some() || self.transparent, "background"),
+            (self.invert, "invert"),
+            (self.quiet_zone.is_some(), "quiet_zone"),
+            (self.ec.is_some(), "ec"),
+        ] {
+            if set {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    /// The bars' colour.
+    fn ink(&self) -> [u8; 3] {
+        self.color
+            .as_deref()
+            .map_or(if self.invert { [255; 3] } else { [0; 3] }, rgb)
+    }
+
+    /// The background's colour, `None` when transparent.
+    fn paper(&self) -> Option<[u8; 3]> {
+        if self.transparent {
+            return None;
+        }
+        Some(
+            self.background
+                .as_deref()
+                .map_or(if self.invert { [0; 3] } else { [255; 3] }, rgb),
+        )
+    }
+}
+
+/// WCAG relative luminance.
+fn luminance([r, g, b]: [u8; 3]) -> f64 {
+    let channel = |c: u8| {
+        let c = f64::from(c) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+/// WCAG contrast ratio, from 1 to 21.
+pub fn contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+fn hex([r, g, b]: [u8; 3]) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// Refuses colours a scanner cannot tell apart, and light bars on a dark
+/// background unless asked for. A transparent background is the page's,
+/// which is not known here.
+fn check_colours(opts: &Options) -> Result<(), String> {
+    let Some(paper) = opts.paper() else {
+        return Ok(());
+    };
+    let mut inks = vec![("color", opts.ink())];
+    for (name, c) in [
+        ("eye_color", &opts.eye_color),
+        ("eye_center_color", &opts.eye_center_color),
+    ] {
+        if let Some(c) = c {
+            inks.push((name, rgb(c)));
+        }
+    }
+    if let Some(g) = &opts.gradient {
+        inks.push(("the gradient's end", rgb(&g.end)));
+    }
+    for (name, ink) in inks {
+        let ratio = contrast(ink, paper);
+        if ratio < MIN_CONTRAST {
+            return Err(format!(
+                "{name} {} on background {} has a contrast of {ratio:.1}:1; scanners need at \
+                 least {MIN_CONTRAST}:1",
+                hex(ink),
+                hex(paper)
+            ));
+        }
+        if !opts.invert && luminance(ink) > luminance(paper) {
+            return Err(format!(
+                "{name} {} is lighter than background {}: light bars on a dark background do \
+                 not scan everywhere; pass invert=true to keep them",
+                hex(ink),
+                hex(paper)
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Where the text under a linear code goes.
@@ -144,6 +337,8 @@ struct Symbol {
     layout: Option<Layout>,
     /// Bearer bars above and below (ITF-14).
     bearers: bool,
+    /// Modules cleared for a logo or the Swiss cross.
+    hole: Option<Hole>,
 }
 
 fn rgb(hex: &str) -> [u8; 3] {
@@ -166,10 +361,10 @@ pub fn barcode(kind: &str, value: &str, opts: &Options) -> Result<(Media, (f64, 
     if opts.size.is_some() && opts.width.is_some() {
         return Err("give size or width, not both: they are the same thing".into());
     }
-    if kind.is_matrix() && (opts.text || opts.font_size.is_some()) {
-        return Err("text is drawn under linear codes only".into());
+    if kind.is_matrix() && opts.text {
+        return Err("text is drawn under linear codes only; a qr code takes a label".into());
     }
-    if !opts.text && opts.font_size.is_some() {
+    if !kind.is_matrix() && !opts.text && opts.font_size.is_some() {
         return Err("font_size needs text=true".into());
     }
     if kind.is_square() {
@@ -182,13 +377,103 @@ pub fn barcode(kind: &str, value: &str, opts: &Options) -> Result<(Media, (f64, 
             }
         }
     }
-    let symbol = encode(kind, value, opts.ec.as_deref())?;
+    if kind == Kind::SwissQr {
+        if let Some(first) = opts.any_look().first() {
+            return Err(format!(
+                "swissqr has the size, colours and error correction the QR-bill sets: {first} \
+                 cannot change them"
+            ));
+        }
+        if !(value.starts_with("SPC\n") || value.starts_with("SPC\r\n")) {
+            return Err(
+                "swissqr takes a QR-bill payload, which starts with SPC on its own line; \
+                 qrdata(\"swiss\") builds one"
+                    .into(),
+            );
+        }
+        if value.chars().count() > 997 {
+            return Err("a QR-bill payload holds at most 997 characters".into());
+        }
+    } else if !kind.is_qr() {
+        if let Some(first) = opts.qr_only().first() {
+            return Err(format!(
+                "{first} applies to qr and gs1-qr, not {}",
+                name(kind)
+            ));
+        }
+    }
+    if let Some(label) = &opts.label {
+        if opts.height.is_some() {
+            return Err("a label sets the height: give width or size".into());
+        }
+        if label.is_empty() || label.chars().count() > 200 {
+            return Err("a label holds 1 to 200 characters".into());
+        }
+        if let Some(bad) = label.chars().find(|c| !(' '..='~').contains(c)) {
+            return Err(format!(
+                "a label is printable ASCII, since it is drawn with the barcode's own font, \
+                 not {bad:?}"
+            ));
+        }
+    }
+    if opts.label.is_none() && opts.font_size.is_some() && kind.is_matrix() {
+        return Err("font_size needs a label".into());
+    }
+    check_colours(opts)?;
+    let ec = match (&opts.ec, kind) {
+        (_, Kind::SwissQr) => Some("M".to_string()),
+        (None, Kind::Qr | Kind::Gs1Qr) if opts.logo.is_some() => Some("H".to_string()),
+        (ec, _) => ec.clone(),
+    };
+    let mut symbol = encode(kind, value, ec.as_deref(), opts.version)?;
+    if let Some(logo) = &opts.logo {
+        let level = ec.as_deref().unwrap_or("M").to_ascii_uppercase();
+        let budget = qr::logo_budget(&level)
+            .ok_or("a logo needs error correction M, Q or H; H is the default with one")?;
+        loop {
+            let n = symbol.rows.len();
+            if qr::hole_fits(n, Hole::for_logo(n, logo.share), budget) {
+                symbol.hole = Some(Hole::for_logo(n, logo.share));
+                break;
+            }
+            let v = qr::version(n).unwrap_or(40);
+            if opts.version.is_some() || v >= 40 {
+                return Err(format!(
+                    "a logo {:.0}% wide hides too much of this version {v} code at error \
+                     correction {level}; use a smaller logo_size{}",
+                    logo.share * 100.0,
+                    if opts.version.is_some() {
+                        ", a higher version or more error correction"
+                    } else {
+                        " or more error correction"
+                    }
+                ));
+            }
+            symbol = encode(kind, value, ec.as_deref(), Some(v as u32 + 1))?;
+        }
+    }
+    if kind == Kind::SwissQr {
+        symbol.hole = Some(Hole::covering(symbol.rows.len(), SWISS_CROSS_SHARE));
+    }
     draw(kind, &symbol, opts)
+}
+
+/// What a barcode is, as alt text that reveals none of its value: a code
+/// may hold a password or an account.
+pub fn alt_text(kind: &str) -> Option<String> {
+    let kind = Kind::parse(kind)?;
+    Some(if kind.is_matrix() {
+        format!("{} code", name(kind))
+    } else {
+        format!("{} barcode", name(kind))
+    })
 }
 
 fn name(kind: Kind) -> &'static str {
     match kind {
         Kind::Qr => "QR",
+        Kind::Gs1Qr => "GS1 QR",
+        Kind::SwissQr => "Swiss QR",
         Kind::DataMatrix => "Data Matrix",
         Kind::Pdf417 => "PDF417",
         Kind::Aztec => "Aztec",
@@ -290,19 +575,19 @@ const GS1_FIXED: &[(&str, usize)] = &[
     ("41", 16),
 ];
 
-/// Reads `(01)09501101530003(10)ABC` into Code 128 input with FNC1, and
-/// the text to print.
-fn gs1(value: &str) -> Result<(String, String), String> {
-    const FNC1: char = '\u{f1}';
-    let mut encoded = String::from(FNC1);
+/// A GS1 element string, `(01)09501101530003(10)ABC`, read into its
+/// application identifiers and data, checked: lengths the GS1 tables fix,
+/// check digits of `(00)`, `(01)` and `(02)`, and the characters GS1 allows.
+/// The flag says whether the field has a fixed length.
+pub(crate) fn gs1_fields(value: &str) -> Result<Vec<(String, String, bool)>, String> {
     let mut rest = value;
-    let mut need_separator = false;
     if !rest.starts_with('(') {
         return Err(
             "gs1-128 takes application identifiers in parentheses, such as (01)09501101530003(10)ABC"
                 .into(),
         );
     }
+    let mut fields = Vec::new();
     while let Some(after) = rest.strip_prefix('(') {
         let close = after
             .find(')')
@@ -345,18 +630,30 @@ fn gs1(value: &str) -> Result<(String, String), String> {
         } else if data.len() > 90 {
             return Err(format!("({ai}) holds more than 90 characters"));
         }
-        if need_separator {
-            encoded.push(FNC1);
-        }
-        encoded.push_str(ai);
-        encoded.push_str(data);
-        need_separator = fixed.is_none();
+        fields.push((ai.to_string(), data.to_string(), fixed.is_some()));
         rest = &after[data_end..];
     }
     if !rest.is_empty() {
         return Err(format!(
             "unexpected {rest:?} after the last application identifier"
         ));
+    }
+    Ok(fields)
+}
+
+/// Reads `(01)09501101530003(10)ABC` into Code 128 input with FNC1, and
+/// the text to print.
+fn gs1(value: &str) -> Result<(String, String), String> {
+    const FNC1: char = '\u{f1}';
+    let mut encoded = String::from(FNC1);
+    let mut need_separator = false;
+    for (ai, data, fixed) in gs1_fields(value)? {
+        if need_separator {
+            encoded.push(FNC1);
+        }
+        encoded.push_str(&ai);
+        encoded.push_str(&data);
+        need_separator = !fixed;
     }
     Ok((encoded, value.to_string()))
 }
@@ -375,10 +672,7 @@ fn rxing_error(kind: Kind, e: rxing::Exceptions) -> String {
 
 fn ec_hint(kind: Kind, ec: Option<&str>) -> Result<Option<String>, String> {
     let Some(ec) = ec.map(str::trim) else {
-        return Ok(match kind {
-            Kind::Qr => Some("M".to_string()),
-            _ => None,
-        });
+        return Ok(kind.is_qr().then(|| "M".to_string()));
     };
     let number = |lo: u32, hi: u32, what: &str| {
         ec.parse::<u32>()
@@ -388,7 +682,7 @@ fn ec_hint(kind: Kind, ec: Option<&str>) -> Result<Option<String>, String> {
             .ok_or_else(|| format!("ec for {} is {what} from {lo} to {hi}", name(kind)))
     };
     match kind {
-        Kind::Qr => match ec.to_ascii_uppercase().as_str() {
+        Kind::Qr | Kind::Gs1Qr | Kind::SwissQr => match ec.to_ascii_uppercase().as_str() {
             l @ ("L" | "M" | "Q" | "H") => Ok(Some(l.to_string())),
             _ => Err("ec for QR is L, M, Q or H".into()),
         },
@@ -401,16 +695,31 @@ fn ec_hint(kind: Kind, ec: Option<&str>) -> Result<Option<String>, String> {
     }
 }
 
-fn encode(kind: Kind, value: &str, ec: Option<&str>) -> Result<Symbol, String> {
+fn encode(
+    kind: Kind,
+    value: &str,
+    ec: Option<&str>,
+    version: Option<u32>,
+) -> Result<Symbol, String> {
     let mut hints = EncodeHints {
         Margin: Some("0".to_string()),
         ErrorCorrection: ec_hint(kind, ec)?,
+        QrVersion: version.map(|v| v.to_string()),
         ..EncodeHints::default()
     };
     let mut layout = None;
     let mut bearers = false;
     let input: String = match kind {
-        Kind::Qr | Kind::DataMatrix | Kind::Pdf417 | Kind::Aztec => {
+        Kind::Gs1Qr => {
+            let (encoded, _) = gs1(value).map_err(|e| e.replace("gs1-128", "gs1-qr"))?;
+            hints.Gs1Format = Some(true);
+            // QR marks GS1 with its mode header; fields end with a group
+            // separator instead of FNC1.
+            encoded
+                .trim_start_matches('\u{f1}')
+                .replace('\u{f1}', "\u{1d}")
+        }
+        Kind::Qr | Kind::SwissQr | Kind::DataMatrix | Kind::Pdf417 | Kind::Aztec => {
             if !value.is_ascii() && kind != Kind::DataMatrix {
                 hints.CharacterSet = Some("UTF-8".to_string());
             }
@@ -547,7 +856,12 @@ fn encode(kind: Kind, value: &str, ec: Option<&str>) -> Result<Symbol, String> {
     };
     let matrix = encoder(kind)
         .encode_with_hints(&input, &kind.format(), 0, 0, &hints)
-        .map_err(|e| rxing_error(kind, e))?;
+        .map_err(|e| match version {
+            Some(v) if e.to_string().contains("requested version") => {
+                format!("the value does not fit a version {v} {} code", name(kind))
+            }
+            _ => rxing_error(kind, e),
+        })?;
     let (w, h) = (matrix.getWidth(), matrix.getHeight());
     if w == 0 || h == 0 {
         return Err(format!("the value gives an empty {} code", name(kind)));
@@ -565,13 +879,14 @@ fn encode(kind: Kind, value: &str, ec: Option<&str>) -> Result<Symbol, String> {
         linear,
         layout,
         bearers,
+        hole: None,
     })
 }
 
 fn encoder(kind: Kind) -> Box<dyn Writer> {
     use rxing::oned::*;
     match kind {
-        Kind::Qr => Box::<rxing::qrcode::QRCodeWriter>::default(),
+        Kind::Qr | Kind::Gs1Qr | Kind::SwissQr => Box::<rxing::qrcode::QRCodeWriter>::default(),
         Kind::DataMatrix => Box::<rxing::datamatrix::DataMatrixWriter>::default(),
         Kind::Pdf417 => Box::<rxing::pdf417::PDF417Writer>::default(),
         Kind::Aztec => Box::<rxing::aztec::AztecWriter>::default(),
@@ -748,10 +1063,18 @@ fn draw(kind: Kind, symbol: &Symbol, opts: &Options) -> Result<(Media, (f64, f64
     }
     // Two-dimensional symbols.
     let rows = symbol.rows.len();
-    let (tw, th) = (cols + left + right, rows + 2 * quiet);
+    let swiss = kind == Kind::SwissQr;
+    // The QR-bill's 5 mm quiet zone, in whole modules of its 46 mm code.
+    let quiet = if swiss {
+        (SWISS_QUIET_PT / (SWISS_SIDE_PT / rows as f64)).ceil() as usize
+    } else {
+        quiet
+    };
+    let (tw, th) = (cols + 2 * quiet, rows + 2 * quiet);
     let natural_h = |w: f64| w * th as f64 / tw as f64;
     let width = opts.width.or(opts.size);
     width_pt = match (width, opts.height) {
+        _ if swiss => SWISS_SIDE_PT * tw as f64 / rows as f64,
         (Some(w), _) => w,
         (None, Some(h)) => h * tw as f64 / th as f64,
         (None, None) => 144.0,
@@ -760,6 +1083,27 @@ fn draw(kind: Kind, symbol: &Symbol, opts: &Options) -> Result<(Media, (f64, f64
     if kind.is_square() {
         height_pt = width_pt;
     }
+    if kind.is_qr() {
+        let module_pt = width_pt / tw as f64;
+        if module_pt < MIN_QR_MODULE_PT {
+            return Err(format!(
+                "its modules would print {:.2} mm wide, and phones need at least 0.25 mm: make \
+                 it at least {:.0} points wide, or the value shorter",
+                module_pt * 25.4 / 72.0,
+                (MIN_QR_MODULE_PT * tw as f64).ceil()
+            ));
+        }
+    }
+    let font_pt = opts
+        .font_size
+        .unwrap_or_else(|| (width_pt / 12.0).clamp(6.0, 14.0));
+    let band_pt = if opts.label.is_some() {
+        font_pt * 1.5
+    } else {
+        0.0
+    };
+    let symbol_pt = height_pt;
+    height_pt += band_pt;
     if width_pt > MAX_SIDE_PT || height_pt > MAX_SIDE_PT {
         return Err(format!(
             "the barcode would print larger than {MAX_SIDE_PT} points"
@@ -770,36 +1114,113 @@ fn draw(kind: Kind, symbol: &Symbol, opts: &Options) -> Result<(Media, (f64, f64
     }
     let m = module_px(width_pt, tw, th);
     let w = tw * m;
+    let px_per_pt = w as f64 / width_pt;
     // Rows stretch when the height asked for is not the natural one.
-    let h = ((height_pt / width_pt * w as f64).round() as usize).max(1);
+    let sym_h = ((symbol_pt * px_per_pt).round() as usize).max(1);
+    let band_px = (band_pt * px_per_pt).round() as usize;
+    let h = sym_h + band_px;
     let mut canvas = Canvas::new(w, h, opts)?;
-    let row_px = |r: usize| ((r + quiet) * h) / th;
-    for (r, row) in symbol.rows.iter().enumerate() {
-        let (y0, y1) = (row_px(r), row_px(r + 1));
-        let mut x = 0;
-        while x < cols {
-            if !row[x] {
-                x += 1;
-                continue;
+    if kind.is_qr() {
+        qr_symbol(&mut canvas, symbol, opts, m, quiet, swiss)?;
+    } else {
+        let row_px = |r: usize| ((r + quiet) * sym_h) / th;
+        for (r, row) in symbol.rows.iter().enumerate() {
+            let (y0, y1) = (row_px(r), row_px(r + 1));
+            let mut x = 0;
+            while x < cols {
+                if !row[x] {
+                    x += 1;
+                    continue;
+                }
+                let start = x;
+                while x < cols && row[x] {
+                    x += 1;
+                }
+                canvas.rect((quiet + start) * m, y0, (x - start) * m, y1 - y0);
             }
-            let start = x;
-            while x < cols && row[x] {
-                x += 1;
-            }
-            canvas.rect((left + start) * m, y0, (x - start) * m, y1 - y0);
         }
     }
+    if let Some(label) = &opts.label {
+        let baseline = sym_h as f64 + band_px as f64 * 0.72;
+        canvas.text(
+            label,
+            w as f64 / 2.0,
+            baseline,
+            font_pt * px_per_pt,
+            w as f64 * 0.96,
+        );
+    }
     finish(canvas, opts.rotate, (width_pt, height_pt))
+}
+
+/// Draws a QR symbol: styled modules, the finder patterns, and the logo
+/// or Swiss cross in its hole.
+fn qr_symbol(
+    canvas: &mut Canvas,
+    symbol: &Symbol,
+    opts: &Options,
+    m: usize,
+    quiet: usize,
+    swiss: bool,
+) -> Result<(), String> {
+    let n = symbol.rows.len();
+    let mf = m as f64;
+    let origin = ((quiet * m) as f64, (quiet * m) as f64);
+    let side = n as f64 * mf;
+    let data = match &opts.gradient {
+        Some(g) => canvas.gradient(opts.ink(), g, origin, side),
+        None => canvas.ink.clone(),
+    };
+    let eye = opts
+        .eye_color
+        .as_deref()
+        .map_or_else(|| data.clone(), |c| hex(rgb(c)));
+    let centre = opts
+        .eye_center_color
+        .as_deref()
+        .map_or_else(|| eye.clone(), |c| hex(rgb(c)));
+    let hole = symbol.hole;
+    let hidden = |r: usize, c: usize| hole.is_some_and(|h| h.contains(r, c));
+    let (d, crisp) = qr::modules(&symbol.rows, &hidden, &opts.style, mf, origin);
+    canvas.path(&data, crisp, false, &d);
+    let (frame, middle, frame_crisp, middle_crisp) = qr::eyes(n, &opts.style, mf, origin);
+    canvas.path(&eye, frame_crisp, true, &frame);
+    canvas.path(&centre, middle_crisp, true, &middle);
+    match (hole, &opts.logo) {
+        (Some(h), Some(logo)) => {
+            let at = (h.start + 1) as f64 * mf;
+            let size = (h.size - 2) as f64 * mf;
+            canvas.logo(&logo.media, origin.0 + at, origin.1 + at, size)?;
+        }
+        _ if swiss => {
+            let mid = origin.0 + side / 2.0;
+            canvas.swiss_cross(mid, side * SWISS_CROSS_SHARE);
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn text_width(s: &str, font_px: f64) -> f64 {
     s.chars().count() as f64 * f64::from(font::ADVANCE) / 1000.0 * font_px
 }
 
+/// A drawing in device pixels, kept as SVG: the PNG is drawn from it.
 struct Canvas {
-    pixmap: Pixmap,
-    ink: [u8; 3],
+    w: usize,
+    h: usize,
+    /// The bars' fill.
+    ink: String,
     paper: Option<[u8; 3]>,
+    defs: String,
+    /// Rectangles in the ink, on the pixel grid.
+    bars: String,
+    /// Text outlines in the ink.
+    glyphs: String,
+    /// Further elements, drawn last.
+    shapes: String,
+    /// Whether drawing it needs the system fonts: an SVG logo with text.
+    fonts: bool,
 }
 
 impl Canvas {
@@ -807,40 +1228,161 @@ impl Canvas {
         let too_large = || "the barcode is too large to draw".to_string();
         if w.checked_mul(h)
             .is_none_or(|area| area > MAX_BARCODE_PIXELS * 2)
+            || u32::try_from(w).is_err()
+            || u32::try_from(h).is_err()
+            || w == 0
+            || h == 0
         {
             return Err(too_large());
         }
-        let (w, h) = (
-            u32::try_from(w).map_err(|_| too_large())?,
-            u32::try_from(h).map_err(|_| too_large())?,
-        );
-        let mut pixmap = Pixmap::new(w, h).ok_or_else(too_large)?;
-        let ink = opts.color.as_deref().map_or([0, 0, 0], rgb);
-        let paper = if opts.transparent {
-            None
-        } else {
-            Some(opts.background.as_deref().map_or([255, 255, 255], rgb))
-        };
-        if let Some([r, g, b]) = paper {
-            pixmap.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
-        }
-        Ok(Canvas { pixmap, ink, paper })
-    }
-
-    fn paint(&self) -> Paint<'static> {
-        let mut paint = Paint::default();
-        let [r, g, b] = self.ink;
-        paint.set_color_rgba8(r, g, b, 255);
-        paint
+        Ok(Canvas {
+            w,
+            h,
+            ink: hex(opts.ink()),
+            paper: opts.paper(),
+            defs: String::new(),
+            bars: String::new(),
+            glyphs: String::new(),
+            shapes: String::new(),
+            fonts: false,
+        })
     }
 
     fn rect(&mut self, x: usize, y: usize, w: usize, h: usize) {
-        if let Some(rect) = Rect::from_xywh(x as f32, y as f32, w as f32, h as f32) {
-            let mut paint = self.paint();
-            paint.anti_alias = false;
-            self.pixmap
-                .fill_rect(rect, &paint, Transform::identity(), None);
+        if w > 0 && h > 0 {
+            let _ = write!(self.bars, "M{x} {y}h{w}v{h}h-{w}z");
         }
+    }
+
+    fn path(&mut self, fill: &str, crisp: bool, evenodd: bool, d: &str) {
+        if d.is_empty() {
+            return;
+        }
+        let _ = write!(
+            self.shapes,
+            "<path fill=\"{fill}\"{}{} d=\"{d}\"/>",
+            if crisp {
+                " shape-rendering=\"crispEdges\""
+            } else {
+                ""
+            },
+            if evenodd {
+                " fill-rule=\"evenodd\""
+            } else {
+                ""
+            }
+        );
+    }
+
+    /// Defines a gradient over the square at `origin`, `side` wide, from
+    /// `start` to the gradient's end; returns the fill that uses it.
+    fn gradient(&mut self, start: [u8; 3], g: &Gradient, origin: (f64, f64), side: f64) -> String {
+        let id = "rusticdoc-gradient";
+        let (cx, cy) = (origin.0 + side / 2.0, origin.1 + side / 2.0);
+        let stops = format!(
+            "<stop offset=\"0\" stop-color=\"{}\"/><stop offset=\"1\" stop-color=\"{}\"/>",
+            hex(start),
+            hex(rgb(&g.end))
+        );
+        let n = qr::num;
+        if g.radial {
+            let _ = write!(
+                self.defs,
+                "<radialGradient id=\"{id}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" \
+                 cy=\"{}\" r=\"{}\">{stops}</radialGradient>",
+                n(cx),
+                n(cy),
+                n(side * std::f64::consts::FRAC_1_SQRT_2)
+            );
+        } else {
+            // LibreOffice draws nothing for a gradient at exactly 45, 135,
+            // 225 or 315 degrees; a tenth of a degree off, nobody can tell.
+            let angle = if (g.angle.rem_euclid(90.0) - 45.0).abs() < 1e-9 {
+                g.angle + 0.1
+            } else {
+                g.angle
+            };
+            let (dy, dx) = angle.to_radians().sin_cos();
+            // Far enough along the direction to reach both corners.
+            let half = side / 2.0 * (dx.abs() + dy.abs());
+            let _ = write!(
+                self.defs,
+                "<linearGradient id=\"{id}\" gradientUnits=\"userSpaceOnUse\" x1=\"{}\" \
+                 y1=\"{}\" x2=\"{}\" y2=\"{}\">{stops}</linearGradient>",
+                n(cx - dx * half),
+                n(cy - dy * half),
+                n(cx + dx * half),
+                n(cy + dy * half)
+            );
+        }
+        format!("url(#{id})")
+    }
+
+    /// Places a picture in the square at (`x`, `y`), `size` wide, keeping
+    /// its aspect. An SVG nests as it is: it was rebuilt when it was read.
+    fn logo(&mut self, media: &Media, x: f64, y: f64, size: f64) -> Result<(), String> {
+        let n = qr::num;
+        if media.mime == "image/svg+xml" {
+            let inner = std::str::from_utf8(&media.bytes).map_err(|_| "the logo is not UTF-8")?;
+            let (vw, vh) = (media.physical_pt.0 / 0.75, media.physical_pt.1 / 0.75);
+            let _ = write!(
+                self.shapes,
+                "<svg x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" \
+                 preserveAspectRatio=\"xMidYMid meet\">{inner}</svg>",
+                n(x),
+                n(y),
+                n(size),
+                n(size),
+                n(vw),
+                n(vh)
+            );
+            self.fonts = true;
+        } else {
+            let data = base64::engine::general_purpose::STANDARD.encode(&media.bytes);
+            let _ = write!(
+                self.shapes,
+                "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" \
+                 preserveAspectRatio=\"xMidYMid meet\" xlink:href=\"data:{};base64,{data}\"/>",
+                n(x),
+                n(y),
+                n(size),
+                n(size),
+                media.mime
+            );
+        }
+        Ok(())
+    }
+
+    /// The QR-bill's Swiss cross centred at (`mid`, `mid`): a black square
+    /// with a white cross, on a white square `side` wide.
+    fn swiss_cross(&mut self, mid: f64, side: f64) {
+        let n = qr::num;
+        let black = side * 6.0 / 7.0;
+        let (arm, long) = (black * 6.0 / 32.0, black * 20.0 / 32.0);
+        let _ = write!(
+            self.shapes,
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#ffffff\"/>\
+             <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#000000\"/>\
+             <path fill=\"#ffffff\" d=\"M{} {}h{}v{}h-{}zM{} {}h{}v{}h-{}z\"/>",
+            n(mid - side / 2.0),
+            n(mid - side / 2.0),
+            n(side),
+            n(side),
+            n(mid - black / 2.0),
+            n(mid - black / 2.0),
+            n(black),
+            n(black),
+            n(mid - arm / 2.0),
+            n(mid - long / 2.0),
+            n(arm),
+            n(long),
+            n(arm),
+            n(mid - long / 2.0),
+            n(mid - arm / 2.0),
+            n(long),
+            n(arm),
+            n(long),
+        );
     }
 
     /// Draws `s` centred on `cx` with its baseline at `y`, shrunk to fit
@@ -852,9 +1394,8 @@ impl Canvas {
         } else {
             font_px
         };
-        let scale = (font_px / 1000.0) as f32;
+        let scale = font_px / 1000.0;
         let start = cx - text_width(s, font_px) / 2.0;
-        let mut pb = PathBuilder::new();
         for (i, c) in s.chars().enumerate() {
             let Some(glyph) = (c as usize)
                 .checked_sub(32)
@@ -862,38 +1403,37 @@ impl Canvas {
             else {
                 continue;
             };
-            let ox = start as f32 + i as f32 * font::ADVANCE * scale;
-            glyph_path(glyph, ox, y as f32, scale, &mut pb);
-        }
-        if let Some(path) = pb.finish() {
-            let paint = self.paint();
-            self.pixmap.fill_path(
-                &path,
-                &paint,
-                FillRule::Winding,
-                Transform::identity(),
-                None,
-            );
+            let ox = start + i as f64 * f64::from(font::ADVANCE) * scale;
+            glyph_path(glyph, ox, y, scale, &mut self.glyphs);
         }
     }
 }
 
-/// Adds a glyph's outline from `font::GLYPHS`, flipping y.
-fn glyph_path(glyph: &str, ox: f32, oy: f32, scale: f32, pb: &mut PathBuilder) {
-    let mut nums = Vec::with_capacity(6);
+/// Adds a glyph's outline from `font::GLYPHS` as path data, flipping y.
+fn glyph_path(glyph: &str, ox: f64, oy: f64, scale: f64, d: &mut String) {
+    let mut nums: Vec<f64> = Vec::with_capacity(6);
     let mut op = ' ';
-    let flush = |op: char, nums: &mut Vec<f32>, pb: &mut PathBuilder| {
-        let p: Vec<(f32, f32)> = nums
+    let flush = |op: char, nums: &mut Vec<f64>, d: &mut String| {
+        let p: Vec<String> = nums
             .chunks(2)
             .filter(|c| c.len() == 2)
-            .map(|c| (ox + c[0] * scale, oy - c[1] * scale))
+            .map(|c| {
+                format!(
+                    "{} {}",
+                    qr::num(ox + c[0] * scale),
+                    qr::num(oy - c[1] * scale)
+                )
+            })
             .collect();
-        match (op, p.as_slice()) {
-            ('M', [a]) => pb.move_to(a.0, a.1),
-            ('L', [a]) => pb.line_to(a.0, a.1),
-            ('Q', [a, b]) => pb.quad_to(a.0, a.1, b.0, b.1),
-            ('C', [a, b, c]) => pb.cubic_to(a.0, a.1, b.0, b.1, c.0, c.1),
-            _ => {}
+        let want = match op {
+            'M' | 'L' => 1,
+            'Q' => 2,
+            'C' => 3,
+            _ => 0,
+        };
+        if want > 0 && p.len() == want {
+            d.push(op);
+            d.push_str(&p.join(" "));
         }
         nums.clear();
     };
@@ -907,28 +1447,72 @@ fn glyph_path(glyph: &str, ox: f32, oy: f32, scale: f32, pb: &mut PathBuilder) {
     {
         match token {
             "M" | "L" | "Q" | "C" => {
-                flush(op, &mut nums, pb);
+                flush(op, &mut nums, d);
                 op = token.chars().next().unwrap_or(' ');
             }
             "Z" => {
-                flush(op, &mut nums, pb);
-                pb.close();
+                flush(op, &mut nums, d);
+                d.push('Z');
                 op = ' ';
             }
             n => nums.push(n.parse().unwrap_or(0.0)),
         }
     }
-    flush(op, &mut nums, pb);
+    flush(op, &mut nums, d);
 }
 
-/// Rotates, encodes and wraps the drawing.
+/// Rotates the drawing, writes it as SVG and draws its PNG.
 fn finish(canvas: Canvas, rotate: u32, printed: (f64, f64)) -> Result<(Media, (f64, f64)), String> {
-    let (w, h) = (
-        canvas.pixmap.width() as usize,
-        canvas.pixmap.height() as usize,
-    );
-    let src: Vec<[u8; 4]> = canvas
-        .pixmap
+    let (w, h) = (canvas.w, canvas.h);
+    let (rw, rh) = if rotate % 180 == 90 { (h, w) } else { (w, h) };
+    let turn = match rotate {
+        90 => format!(" transform=\"translate({h} 0) rotate(90)\""),
+        180 => format!(" transform=\"translate({w} {h}) rotate(180)\""),
+        270 => format!(" transform=\"translate(0 {w}) rotate(270)\""),
+        _ => String::new(),
+    };
+    let mut body = String::new();
+    if !canvas.defs.is_empty() {
+        let _ = write!(body, "<defs>{}</defs>", canvas.defs);
+    }
+    if let Some(paper) = canvas.paper {
+        let _ = write!(
+            body,
+            "<rect width=\"{rw}\" height=\"{rh}\" fill=\"{}\"/>",
+            hex(paper)
+        );
+    }
+    let _ = write!(body, "<g{turn}>");
+    if !canvas.bars.is_empty() {
+        let _ = write!(
+            body,
+            "<path fill=\"{}\" shape-rendering=\"crispEdges\" d=\"{}\"/>",
+            canvas.ink, canvas.bars
+        );
+    }
+    if !canvas.glyphs.is_empty() {
+        let _ = write!(
+            body,
+            "<path fill=\"{}\" d=\"{}\"/>",
+            canvas.ink, canvas.glyphs
+        );
+    }
+    body.push_str(&canvas.shapes);
+    body.push_str("</g>");
+    let doc = |width: &str, height: &str| {
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+             xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{width}\" \
+             height=\"{height}\" viewBox=\"0 0 {rw} {rh}\">{body}</svg>"
+        )
+    };
+    let pixmap = svg::draw_own(
+        &doc(&rw.to_string(), &rh.to_string()),
+        rw as u32,
+        rh as u32,
+        canvas.fonts,
+    )?;
+    let pixels: Vec<[u8; 4]> = pixmap
         .pixels()
         .iter()
         .map(|p| {
@@ -936,47 +1520,37 @@ fn finish(canvas: Canvas, rotate: u32, printed: (f64, f64)) -> Result<(Media, (f
             [c.red(), c.green(), c.blue(), c.alpha()]
         })
         .collect();
-    let (rw, rh) = if rotate % 180 == 90 { (h, w) } else { (w, h) };
-    let mut out = vec![[0u8; 4]; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let (nx, ny) = match rotate {
-                90 => (h - 1 - y, x),
-                180 => (w - 1 - x, h - 1 - y),
-                270 => (y, w - 1 - x),
-                _ => (x, y),
-            };
-            out[ny * rw + nx] = src[y * w + x];
-        }
-    }
-    let gray = canvas.paper.is_some_and(|p| p[0] == p[1] && p[1] == p[2])
-        && canvas.ink[0] == canvas.ink[1]
-        && canvas.ink[1] == canvas.ink[2];
-    let (pixels, color): (Vec<u8>, _) = if canvas.paper.is_none() {
-        (out.concat(), image::ExtendedColorType::Rgba8)
+    let opaque = canvas.paper.is_some() && pixels.iter().all(|p| p[3] == 255);
+    let gray = pixels.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
+    let (bytes, color): (Vec<u8>, _) = if !opaque {
+        (pixels.concat(), image::ExtendedColorType::Rgba8)
     } else if gray {
         (
-            out.iter().map(|p| p[0]).collect(),
+            pixels.iter().map(|p| p[0]).collect(),
             image::ExtendedColorType::L8,
         )
     } else {
         (
-            out.iter().flat_map(|p| [p[0], p[1], p[2]]).collect(),
+            pixels.iter().flat_map(|p| [p[0], p[1], p[2]]).collect(),
             image::ExtendedColorType::Rgb8,
         )
     };
     let mut png = Vec::new();
     use image::ImageEncoder;
     image::codecs::png::PngEncoder::new(&mut png)
-        .write_image(&pixels, rw as u32, rh as u32, color)
+        .write_image(&bytes, rw as u32, rh as u32, color)
         .map_err(|e| format!("cannot encode the barcode: {e}"))?;
-    let media = media::inspect(png, Some("image/png"))?;
+    let png = media::inspect(png, Some("image/png"))?;
     let printed = if rotate % 180 == 90 {
         (printed.1, printed.0)
     } else {
         printed
     };
-    Ok((media, printed))
+    let svg = doc(
+        &format!("{}pt", qr::num(printed.0)),
+        &format!("{}pt", qr::num(printed.1)),
+    );
+    Ok((media::vector(svg, printed, png), printed))
 }
 
 #[cfg(test)]
@@ -985,6 +1559,12 @@ mod tests {
 
     fn plain(kind: &str, value: &str) -> Result<(Media, (f64, f64)), String> {
         barcode(kind, value, &Options::default())
+    }
+
+    /// The PNG drawn beside the SVG.
+    fn png(media: &Media) -> &Media {
+        assert_eq!(media.mime, "image/svg+xml");
+        media.fallback.as_deref().expect("a PNG")
     }
 
     #[test]
@@ -1096,14 +1676,18 @@ mod tests {
         let (media, printed) = barcode("ean13", "590123412345", &opts).unwrap();
         assert_eq!(printed, (80.0, 300.0));
         assert!(media.px.1 > media.px.0, "rotated: {:?}", media.px);
-        let img = image::load_from_memory(&media.bytes).unwrap().to_rgb8();
+        let img = image::load_from_memory(&png(&media).bytes)
+            .unwrap()
+            .to_rgb8();
         assert!(img.pixels().any(|p| p.0 == [204, 0, 0]));
         let transparent = Options {
             transparent: true,
             ..Options::default()
         };
         let (media, _) = barcode("qr", "x", &transparent).unwrap();
-        let img = image::load_from_memory(&media.bytes).unwrap().to_rgba8();
+        let img = image::load_from_memory(&png(&media).bytes)
+            .unwrap()
+            .to_rgba8();
         assert_eq!(img.get_pixel(0, 0).0[3], 0);
     }
 
@@ -1116,6 +1700,7 @@ mod tests {
                 ..Options::default()
             };
             let (media, printed) = barcode(kind, &value, &opts).unwrap();
+            let media = png(&media);
             let pixels = media.px.0 as usize * media.px.1 as usize;
             assert!(pixels <= MAX_BARCODE_PIXELS, "{kind}: {:?}", media.px);
             assert_eq!(printed.0, MAX_SIDE_PT, "the printed size is unaffected");
@@ -1146,7 +1731,7 @@ mod tests {
             o.font_size = Some(200.0);
         })
         .unwrap();
-        assert!(media.px.0 as usize * media.px.1 as usize <= MAX_BARCODE_PIXELS * 2);
+        assert!(png(&media).px.0 as usize * png(&media).px.1 as usize <= MAX_BARCODE_PIXELS * 2);
         assert_eq!(printed.0, 10.0);
 
         // A long value whose text-widened zones pass the module limit.
@@ -1158,11 +1743,11 @@ mod tests {
             o.width = Some(1.0);
         });
         assert!(
-            err.as_ref()
-                .is_ok_and(|(m, _)| m.px.0 as usize * m.px.1 as usize <= MAX_BARCODE_PIXELS * 2)
-                || err
-                    .as_ref()
-                    .is_err_and(|e| e.contains("too") || e.contains("taller")),
+            err.as_ref().is_ok_and(
+                |(m, _)| png(m).px.0 as usize * png(m).px.1 as usize <= MAX_BARCODE_PIXELS * 2
+            ) || err
+                .as_ref()
+                .is_err_and(|e| e.contains("too") || e.contains("taller")),
             "{:?}",
             err.as_ref().err()
         );
@@ -1174,7 +1759,10 @@ mod tests {
             });
             match result {
                 Ok((media, _)) => {
-                    assert!(media.px.0 as usize * media.px.1 as usize <= MAX_BARCODE_PIXELS * 2)
+                    assert!(
+                        png(&media).px.0 as usize * png(&media).px.1 as usize
+                            <= MAX_BARCODE_PIXELS * 2
+                    )
                 }
                 Err(e) => assert!(e.contains("too large") || e.contains("taller"), "{e}"),
             }
@@ -1192,6 +1780,6 @@ mod tests {
         };
         let (media, _) = barcode("qr", "a", &opts).unwrap();
         // Version 1 is 21 modules plus an 8 module quiet zone.
-        assert_eq!(media.px.0 % 29, 0);
+        assert_eq!(png(&media).px.0 % 29, 0);
     }
 }

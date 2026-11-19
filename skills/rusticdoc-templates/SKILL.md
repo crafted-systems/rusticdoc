@@ -73,7 +73,8 @@ Follow these steps in order. Don't render a template that hasn't validated.
 | Filter | Example |
 |---|---|
 | `image` | `{{ logo \| image(width=120) }}`. The value is base64, a data URL or `{"data": "…", "mime": "image/png"}`. **A URL is refused**: rusticdoc never fetches images |
-| `barcode` | `{{ sku \| barcode("code128") }}`, `{{ url \| barcode("qr", size=90) }}`. Also `ean13`, `ean8`, `upca`, `code39`, `code93`, `itf14`, `gs1-128`, `datamatrix`, `pdf417`, `aztec` and more |
+| `barcode` | `{{ sku \| barcode("code128") }}`, `{{ url \| barcode("qr", size=90) }}`. Also `ean13`, `ean8`, `upca`, `code39`, `code93`, `itf14`, `gs1-128`, `gs1-qr`, `swissqr`, `datamatrix`, `pdf417`, `aztec` and more. QR codes take `style="dots"` or `"rounded"`, `eye="circle"`, `color`, `gradient`, `logo` and `label`. Colours under 3:1 contrast are refused |
+| `qrdata` | `{{ net \| qrdata("wifi") \| barcode("qr") }}` builds checked QR text for `wifi`, `vcard`, `email`, `tel`, `sms`, `geo`, `event`, `epc` (SEPA), `swiss` and `gs1`. Plain text, so it works in every template |
 | `link` | `{{ url \| link("Pay now") }}` |
 | `color` | `{{ status \| color("#c00") }}`, `color(background="#eee")` |
 | `html` | `{{ body \| html }}`: a safe subset, native in DOCX and ODT, plain text elsewhere |

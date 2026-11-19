@@ -335,6 +335,27 @@ fn from_svg(bytes: &[u8]) -> Result<Media, String> {
     })
 }
 
+/// A drawing made here, such as a barcode: the SVG as it is, since nothing
+/// outside wrote it, and a PNG of it for readers without SVG.
+pub fn vector(svg: String, physical_pt: (f64, f64), png: Media) -> Media {
+    let px = (
+        ((physical_pt.0 / PT_PER_PX).round() as u32).max(1),
+        ((physical_pt.1 / PT_PER_PX).round() as u32).max(1),
+    );
+    let fallback = Media { physical_pt, ..png };
+    let bytes = svg.into_bytes();
+    let hash = Sha256::digest(&bytes).into();
+    Media {
+        bytes,
+        ext: "svg",
+        mime: "image/svg+xml",
+        hash,
+        px,
+        physical_pt,
+        fallback: Some(Box::new(fallback)),
+    }
+}
+
 /// The printed size in points: as asked, keeping the aspect when one side is
 /// given, otherwise the natural size capped at the text width.
 pub fn fit(px: (u32, u32), width: Option<f64>, height: Option<f64>) -> Result<(f64, f64), String> {
