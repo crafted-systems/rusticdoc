@@ -433,18 +433,27 @@ pub fn request_id(headers: &HeaderMap) -> String {
         .to_string()
 }
 
-/// A file download with the pipeline timings in a header.
+/// A file download with the pipeline timings in a header. A PDF also says
+/// which fonts it names and how many pages it has.
 pub async fn download(out: Output) -> Response {
-    // Bytes are cheap to clone. Very large files skip the font scan, and the rest
-    // are scanned off the async threads.
-    let fonts = if out.content_type == "application/pdf" && out.bytes.len() <= 32 * 1024 * 1024 {
-        let scanned = out.bytes.clone();
-        tokio::task::spawn_blocking(move || rusticdoc_core::fonts::pdf_font_names(&scanned))
+    // Bytes are cheap to clone. Very large files skip the font scan and the
+    // page count, and the rest are read off the async threads.
+    let (fonts, pages) =
+        if out.content_type == "application/pdf" && out.bytes.len() <= 32 * 1024 * 1024 {
+            let scanned = out.bytes.clone();
+            let name = out.name.clone();
+            tokio::task::spawn_blocking(move || {
+                let fonts = rusticdoc_core::fonts::pdf_font_names(&scanned);
+                // A PDF that cannot be read back is still the caller's file: it
+                // goes out without a count rather than failing here.
+                let pages = rusticdoc_core::pdfops::page_count(&Document::new(name, scanned)).ok();
+                (fonts, pages)
+            })
             .await
             .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+        } else {
+            (Vec::new(), None)
+        };
     let mut res = Response::new(Body::from(out.bytes));
     *res.status_mut() = StatusCode::OK;
     let headers = res.headers_mut();
@@ -460,6 +469,11 @@ pub async fn download(out: Output) -> Response {
         && let Ok(v) = HeaderValue::from_str(&fonts.join(", "))
     {
         headers.insert("x-fonts-used", v);
+    }
+    // The same header a preview carries, so a caller that meters by length
+    // reads one name everywhere.
+    if let Some(pages) = pages.filter(|n| *n > 0) {
+        headers.insert("x-page-count", HeaderValue::from(pages));
     }
     let timings: Vec<String> = out
         .timings

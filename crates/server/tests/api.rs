@@ -1257,6 +1257,56 @@ async fn underlay_lays_the_template_over_a_base_pdf() {
 }
 
 #[tokio::test]
+async fn a_pdf_response_says_how_many_pages_it_has() {
+    use rusticdoc_core::pdfops::fixtures;
+    let router = app(AppState::new(config()));
+    // Through the render route.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                ("template", Some("in.pdf"), fixtures::pages(3)),
+                ("steps", None, b"rotate".to_vec()),
+                ("rotateAngle", None, b"90".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    assert_eq!(res.headers()["x-page-count"], "3");
+
+    // And from a PDF operation, where the count is the result's, not the input's.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/pdf/merge",
+            &[
+                ("files", Some("a.pdf"), fixtures::pages(3)),
+                ("files", Some("b.pdf"), fixtures::pages(2)),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{}", text(res).await);
+    assert_eq!(res.headers()["x-page-count"], "5");
+
+    // A file that is not a PDF has no pages to count.
+    let res = router
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("hello.txt"), "Hello {{ name }}"),
+                ("data", None, r#"{"name":"Ada"}"#),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.headers().get("x-page-count").is_none());
+}
+
+#[tokio::test]
 async fn signatures_land_at_exact_coordinates() {
     use rusticdoc_core::pdfops::fixtures;
     let router = app(AppState::new(config()));
