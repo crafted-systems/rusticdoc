@@ -1,3 +1,11 @@
+# Security was a page of its own before it joined the docs. Status has left
+# the site for docs/STATUS.md in the repository, so its address goes to the
+# known limits.
+/security /docs/project/security-overview/ 301
+/security/ /docs/project/security-overview/ 301
+/status /docs/project/known-limits/ 301
+/status/ /docs/project/known-limits/ 301
+
 /docs/project/roadmap /docs/project/known-limits/ 301
 /docs/project/roadmap/ /docs/project/known-limits/ 301
 /docs/project/status /docs/project/known-limits/ 301

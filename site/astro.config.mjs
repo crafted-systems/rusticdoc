@@ -12,13 +12,9 @@ export default defineConfig({
   site: 'https://rusticdoc.com',
   trailingSlash: 'always',
   devToolbar: { enabled: false },
-  // Security was a page of its own before it joined the docs. Status has left
-  // the site for docs/STATUS.md in the repository, so its address goes to the
-  // known limits.
-  redirects: {
-    '/security/': '/docs/project/security-overview/',
-    '/status/': '/docs/project/known-limits/',
-  },
+  // Moved pages redirect in public/_redirects, not in Astro's `redirects`: on a
+  // static build those become 200 pages with a canonical tag, which Google
+  // reports as alternates instead of following them as moves.
   // Keep small fonts as files: the site's CSP has no data: in font-src.
   vite: { build: { assetsInlineLimit: 0 } },
   integrations: [
