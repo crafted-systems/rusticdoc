@@ -753,6 +753,61 @@ pub fn pdf_links(dir: &str, file: &str) -> Vec<String> {
 }
 
 /// The page count `pdfinfo` reports.
+/// The text of every barcode on a PDF's pages, read with rxing from a
+/// 200 dpi rendering by pdftoppm. Office suites draw an SVG barcode as
+/// vectors, so it is not among the PDF's images.
+pub fn pdf_barcodes(dir: &str, file: &str) -> Vec<String> {
+    let mount = format!("{dir}:/w");
+    let stem = file.replace('.', "_");
+    let input = format!("/w/{file}");
+    let output = format!("/w/{stem}-page");
+    let args = [
+        "run",
+        "--rm",
+        "--platform",
+        "linux/arm64",
+        "-v",
+        &mount,
+        TOOLS_IMAGE,
+        "pdftoppm",
+        "-r",
+        "200",
+        "-png",
+        &input,
+        &output,
+    ];
+    let (ok, text) = run("docker", &args).unwrap();
+    assert!(ok, "pdftoppm failed: {text}");
+    let mut found = Vec::new();
+    let mut pages: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(&format!("{stem}-page")) && n.ends_with(".png"))
+        })
+        .collect();
+    pages.sort();
+    for page in pages {
+        let img = image::open(&page).unwrap().to_luma8();
+        let (w, h) = img.dimensions();
+        let mut hints = rxing::DecodeHints {
+            TryHarder: Some(true),
+            ..rxing::DecodeHints::default()
+        };
+        if let Ok(results) =
+            rxing::helpers::detect_multiple_in_luma_with_hints(img.into_raw(), w, h, &mut hints)
+        {
+            found.extend(results.iter().map(|r| r.getText().to_string()));
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
 pub fn pdf_pages(dir: &str, file: &str) -> u32 {
     pdf_tool(dir, &["pdfinfo"], file)
         .lines()

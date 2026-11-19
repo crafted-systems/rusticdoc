@@ -13,6 +13,7 @@ Filters format numbers, money and dates, translate labels, sum or sort lists, sh
 | `currency`, `number`, `date`, `excel_date`, `t` | Yes | Yes | Yes |
 | `image`, `barcode`, `link`, `color`, `html`, `chart`, `pagebreak` | Yes | No | No |
 | [Text](#text-helpers), [number](#number-helpers) and [date](#date-helpers) helpers: `truncate`, `unaccent`, `pad_left`, `pad_right`, `avg`, `ceil`, `floor`, `words`, `date_add`, `date_sub`, `start_of`, `end_of`, `date_diff`, `duration` | Yes | Yes | Yes |
+| [`qrdata`](#qrdata) | Yes | Yes | Yes |
 | [Built-in filters](#built-in-filters) | Yes | Yes | Yes |
 
 `currency`, `number`, `date`, `excel_date` and `t` read the same settings everywhere: the request's `lang`, `timezone`, `currency` and `translations` fields, then the template's `{% settings %}` and document properties. See [Translations and settings](translations.md).
@@ -509,6 +510,91 @@ test "$(cat out.txt)" = "$(printf '2028-02-29\n2028-01-31\n7\n2 hours')"
 `duration` takes milliseconds, or an ISO 8601 duration like `P1Y2M3DT4H5M6S` or `PT1H30M`. With no argument, or with `"human"`, it prints words: `a few seconds`, `a minute`, `5 minutes`, `an hour`, `3 hours`, `a day`, `12 days`, `a month`, `4 months`, `a year`, `2 years`. The words are in English and ignore the sign.
 
 With a unit, which is one of `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` or `milliseconds` (`ms`), it prints a number, with decimals when needed, so `5400000 | duration("hours")` is `1.5`. A month counts as 30 days and a year as 365. Text that isn't an ISO duration, like `"2 hours"`, is an error.
+
+## qrdata
+
+```text
+{{ guest_wifi | qrdata("wifi") | barcode("qr") }}
+{{ invoice.payment | qrdata("epc") | barcode("qr") }}
+{{ bill | qrdata("swiss") | barcode("swissqr") }}
+```
+
+`qrdata` builds the text a QR code carries for Wi-Fi, a contact, a payment and the rest. Each format has its own escaping and fields, and a payload that's nearly right scans as plain text or not at all, so it's built and checked here rather than written by hand. The result is ordinary text: send it to [`barcode`](rich-content.md#barcode), or print it.
+
+The argument names the kind. Each takes an object, and unknown keys are refused, so a misspelt one isn't dropped without a word. Empty fields are left out.
+
+| Kind | Keys | Gives |
+|---|---|---|
+| `wifi` | `ssid`; `password`, `security` (`WPA`, `WEP` or `nopass`; `WPA` with a password, `nopass` without), `hidden` | `WIFI:T:WPA;S:Guest;P:coffee\;2041;;` |
+| `vcard` | `name`, or `first` and `last`; `org`, `title`, `phone`, `email`, `url`, `address`, `note`, `birthday` | A vCard 3.0 |
+| `mecard` | `name`; `phone`, `email`, `url`, `address`, `note`, `birthday` | `MECARD:N:Doe,John;TEL:5551234;;`, shorter than a vCard |
+| `email` | `to`; `cc`, `bcc`, `subject`, `body`. Or the address alone | `mailto:billing@example.com?subject=Invoice%2042` |
+| `tel` | `number`, or the number alone | `tel:+41446681800` |
+| `sms` | `number`; `body` | `SMSTO:+15550109999:STOP` |
+| `geo` | `lat`, `lon`; `alt` | `geo:46.948,7.4474` |
+| `event` | `title`, `start`; `end`, `location`, `description` | An iCalendar `VEVENT` |
+| `epc` | `name`, `iban`; `bic`, `amount`, `purpose`, `reference` or `text`, `info` | A SEPA credit transfer, the EPC's `BCD` format |
+| `swiss` | `account`, `creditor`; `amount`, `currency`, `debtor`, `reference`, `message`, `billing`, `alt` | A Swiss QR-bill payload, for `barcode("swissqr")` |
+| `gs1` | An element string such as `(01)09506000134352(10)LOT7`, and `domain=` | A GS1 Digital Link, `https://id.gs1.org/01/09506000134352/10/LOT7` |
+
+`phone`, `email` and `to` take one value or a list. An address with `?`, `&`, `=`, `%`, `#`, `/` or brackets is refused, so a value can't add recipients or a body to a `mailto:` link. Phone numbers keep their digits and a leading `+`, and spaces, dots, dashes and brackets are dropped. An `address` in a vCard is text or an object with `street`, `city`, `region`, `postcode` and `country`. Dates are written `YYYY-MM-DD`.
+
+An event's `start` and `end` are both dates, for an all-day event, or both times. A time with `Z` or an offset, such as `2026-12-01T18:00:00+01:00`, is written in UTC, and one without is local time wherever it's scanned.
+
+```bash
+cat > wifi.txt <<'EOF'
+{{ net | qrdata("wifi") }}
+{{ "+41 44 668 18 00" | qrdata("tel") }}
+EOF
+curl -F template=@wifi.txt \
+  -F 'data={"net":{"ssid":"Guest","password":"coffee:2041"}}' \
+  http://localhost:9027/v1/render -o out.txt
+test "$(cat out.txt)" = "$(printf 'WIFI:T:WPA;S:Guest;P:coffee\\:2041;;\ntel:+41446681800')"
+```
+
+### Payments
+
+`epc` writes version 002 of the European Payments Council's QR code for SEPA credit transfers, which many banking apps in the euro area read. `iban` is checked with its check digits, and `bic` is optional. `amount` is in euros, from 0.01 to 999,999,999.99, with at most two decimals. A transfer carries a `reference` (an ISO 11649 creditor reference, `RF` and two check digits, is checked) or a free `text` of up to 140 characters, not both. The whole payload holds at most 331 bytes. Draw it with `barcode("qr")`, whose default error correction, `M`, is the one the EPC asks for.
+
+```json
+{
+  "payment": {
+    "name": "Mawingu Coffee GmbH",
+    "iban": "DE89 3704 0044 0532 0130 00",
+    "amount": 363.00,
+    "text": "INV-2041"
+  }
+}
+```
+
+`swiss` writes version 2.0 of the Swiss QR-bill payload, with structured addresses, as the guidelines have required since November 2025. `account` is a Swiss or Liechtenstein IBAN. `creditor` and `debtor` are objects with `name`, `postcode`, `city` and `country`, and optionally `street` and `number`. `currency` is `CHF` (the default) or `EUR`.
+
+The reference follows the account. A QR-IBAN, whose institution number is 30000 to 31999, needs a QR reference of 27 digits, whose check digit is verified. An ordinary IBAN takes a creditor reference (`RF…`) or none. `message` and `billing`, the structured bill information, hold 140 characters together, and `alt` holds up to two alternative schemes.
+
+```json
+{
+  "bill": {
+    "account": "CH44 3199 9123 0008 8901 2",
+    "creditor": {"name": "Robert Schneider AG", "street": "Rue du Lac", "number": "1268",
+                 "postcode": "2501", "city": "Biel", "country": "CH"},
+    "amount": 1949.75,
+    "reference": "210000000003139471430009017",
+    "message": "Order of 15 June 2020"
+  }
+}
+```
+
+`qrdata` builds the QR code's data only. The rest of the payment part, its receipt and the scissors line are for the template to lay out.
+
+### GS1 Digital Link
+
+`gs1` turns an element string into a GS1 Digital Link address: the primary key first, such as `(01)` for a GTIN or `(414)` for a location, then the qualifiers GS1 allows after it in the path, such as batch `(10)` and serial `(21)`, and every other identifier in the query. Data is checked as for [`gs1-128`](rich-content.md#barcode) and percent-encoded. `domain=` sets your own resolver; the default is `https://id.gs1.org`.
+
+```text
+{{ "(01)09506000134352(17)261231(10)AB/12" | qrdata("gs1", domain="https://example.com") }}
+```
+
+That prints `https://example.com/01/09506000134352/10/AB%2F12?17=261231`.
 
 ## Tests
 

@@ -15,7 +15,7 @@ use regex::Regex;
 
 use crate::rich::media::{self, Fit, Media, Placement};
 use crate::rich::pkg::{Pkg, REL_IMAGE};
-use crate::rich::{has_mark, max_id, misplaced, segments, Picture, Rich, Seg};
+use crate::rich::{has_mark, max_id, misplaced, segments, set_alt, Picture, Rich, Seg};
 use crate::xml::{self, Elem, Node};
 use crate::{Format, TemplateError};
 
@@ -235,6 +235,9 @@ impl Ctx<'_, '_> {
                 extent.set_attr("cy", &cy.to_string());
             }
         }
+        if let Some(doc_pr) = drawing.child_mut("wp:docPr") {
+            set_alt(doc_pr, picture);
+        }
         // Copies made by a loop share the template's ids; Word wants each
         // drawing's to be its own.
         let id = drawing
@@ -335,6 +338,9 @@ impl Ctx<'_, '_> {
         place: &str,
     ) -> Result<Option<i64>, TemplateError> {
         let prefix = pic.name.split(':').next().unwrap_or("pic").to_string();
+        if let Some(carrier) = pic.find_mut(&format!("{prefix}:cNvPr")) {
+            set_alt(carrier, picture);
+        }
         let fill_name = format!("{prefix}:blipFill");
         let sppr_name = format!("{prefix}:spPr");
         let (cx, cy) = pic

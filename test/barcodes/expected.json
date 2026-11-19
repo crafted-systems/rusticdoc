@@ -28,5 +28,45 @@
     "ean8",
     "ean8",
     "96385074"
+  ],
+  [
+    "qr",
+    "qr_dots",
+    "https://pay.example.com/dots/INV-2041"
+  ],
+  [
+    "qr",
+    "qr_rounded",
+    "https://pay.example.com/rounded/INV-2041"
+  ],
+  [
+    "qr",
+    "qr_gradient",
+    "https://pay.example.com/gradient/INV-2041"
+  ],
+  [
+    "qr",
+    "qr_logo",
+    "https://pay.example.com/logo/INV-2041"
+  ],
+  [
+    "qr",
+    "qr_label",
+    "https://pay.example.com/label/INV-2041"
+  ],
+  [
+    "qr",
+    "wifi",
+    "WIFI:T:WPA;S:Mawingu Guest;P:kahawa\\;2041;;"
+  ],
+  [
+    "qr",
+    "epc",
+    "BCD\n002\n1\nSCT\n\nMawingu Coffee GmbH\nDE89370400440532013000\nEUR363.00\n\n\nINV-2041"
+  ],
+  [
+    "swissqr",
+    "bill",
+    "SPC\n0200\n1\nCH4431999123000889012\nS\nRobert Schneider AG\nRue du Lac\n1268\n2501\nBiel\nCH\n\n\n\n\n\n\n\n1949.75\nCHF\n\n\n\n\n\n\n\nQRR\n210000000003139471430009017\nOrder of 15 June 2020\nEPD"
   ]
 ]
