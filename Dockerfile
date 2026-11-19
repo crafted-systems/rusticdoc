@@ -12,7 +12,7 @@
 # ----------------------------------------------
 # pdfcpu, a static Go binary, verified through the Go checksum database.
 # ----------------------------------------------
-FROM golang:1-trixie@sha256:c47c3fda018d13d43a6bf5ebac3e5bba8a23a35782aa4faf531afaf47c64c39f AS pdfcpu
+FROM golang:1-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d AS pdfcpu
 ARG PDFCPU_VERSION=v0.16.4
 RUN CGO_ENABLED=0 GOBIN=/out go install -ldflags "-s -w -X 'main.version=$PDFCPU_VERSION' -X 'github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model.VersionStr=$PDFCPU_VERSION'" \
     github.com/pdfcpu/pdfcpu/cmd/pdfcpu@$PDFCPU_VERSION
