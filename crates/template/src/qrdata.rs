@@ -1101,7 +1101,8 @@ mod tests {
                    "currency": "EUR"}),
         )
         .unwrap();
-        assert!(out.ends_with("\nNON\n\n\nEPD"), "{out}");
+        // No payload in the message: test output is no place for one.
+        assert!(out.ends_with("\nNON\n\n\nEPD"), "no reference, then EPD");
         for bad in [
             json!({"account": "CH44 3199 9123 0008 8901 2", "creditor": creditor}),
             json!({"account": "CH93 0076 2011 6238 5295 7", "creditor": creditor,
