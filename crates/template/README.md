@@ -84,15 +84,28 @@ What each becomes:
 **`image`** takes a data URI, raw base64, or an object
 `{"data": base64, "mime": ..., "width": ..., "height": ...}`. The value must
 carry the bytes: this crate never fetches a URL, so the caller resolves those
-first. PNG and JPEG only, checked by their magic bytes. `width` and `height`
+first. PNG, JPEG, GIF, WebP (turned into PNG) and SVG (rebuilt from an
+allowlist, with a PNG beside it), checked by their bytes. `width` and `height`
 are in points, and the aspect is kept when one is given. Arguments win over the
 object's sizes. The default is the natural size at 96 dpi, capped at the page
-text width (450 pt). Identical bytes share one media part.
+text width (450 pt). Identical bytes share one media part. `alt` sets the
+picture's alt text.
 
-**`barcode`** takes `qr`, `code128` (printable ASCII), `code39`, `ean13` or
-`ean8` (with or without the check digit, which is verified when present). It
-draws a PNG with a whole number of pixels per module and places it like an
-image. `size` is the printed width in points. No human-readable text is drawn.
+**`barcode`** takes `qr`, `gs1-qr`, `swissqr`, `datamatrix`, `pdf417`, `aztec`,
+`code128`, `gs1-128`, `code39`, `code93`, `ean13`, `ean8`, `upca`, `upce`,
+`itf`, `itf14` or `codabar`, with check digits added or verified. The symbol
+is encoded by rxing and drawn here as an SVG with a PNG beside it, placed like
+an SVG image. `size` is the printed width in points; `text=true` prints the
+value under a linear code. Colours are checked for a contrast of at least 3:1.
+QR codes also take `style` (`square`, `dots`, `rounded`), `eye` and
+`eye_center` shapes, `eye_color`, `gradient`, a `logo` in a hole cut from the
+modules, a `label` and a `version`. Alt text defaults to the kind of code,
+never its value.
+
+**`qrdata`** is not a rich filter: it returns the text a QR code carries for
+`wifi`, `vcard`, `mecard`, `email`, `tel`, `sms`, `geo`, `event`, `epc` (SEPA),
+`swiss` (QR-bill) and `gs1` (Digital Link), escaped and checked, and works in
+every template.
 
 **`link`** shows its argument, or the address without one. Only `http`, `https`
 and `mailto` are allowed; anything else, such as `javascript:` or `file:`, is

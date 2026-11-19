@@ -24,6 +24,7 @@ mod locale_data;
 mod package;
 mod program;
 mod properties;
+mod qrdata;
 mod rich;
 mod sanitize;
 mod sheet;

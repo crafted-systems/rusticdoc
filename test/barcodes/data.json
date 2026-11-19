@@ -4,5 +4,35 @@
   "c128": "INV-2041/abc-xyz",
   "c39": "INV-2041",
   "ean13": "590123412345",
-  "ean8": "9638507"
+  "ean8": "9638507",
+  "qr_dots": "https://pay.example.com/dots/INV-2041",
+  "qr_rounded": "https://pay.example.com/rounded/INV-2041",
+  "qr_gradient": "https://pay.example.com/gradient/INV-2041",
+  "qr_logo": "https://pay.example.com/logo/INV-2041",
+  "qr_label": "https://pay.example.com/label/INV-2041",
+  "logo": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABTUlEQVR4nO2bTVKEMBSEO98FxoWe1DmGnlQXegJdWTVFZZgE8t9+OyDVrzsvwAIi/eNNaFns6+35J3Xs0/WzibcwSuBeExJGD157IsIMoWtOBrOGL1U39DbQezWwQvgzfmhZrDZHfNGiSEty/VFTvBc5PqkhOgKpfikpNhopvkMJkT0urx86y/f7S7VXJCt2PicHMofVu/8oDzmDZyeWC5mDzMFl+d/Lh8zBqfuxnMgcZA4yB7f7f5sXmYPMQeYgc5A5yBxkDjIHmYPMofU/OaPwlxeZg8xB5nB74PIcuM2JzGF7YvVVsM2HzEHmEDu56m0Qy0XO4Jm5lweZw97FVVbBXo6QIjDzN4NHTaSEyKik+Kak2Eik+qWGaG9yfFJTvAe5/mhRpBVHfNGyWE2O+gklivd8TZ5tBCOY6Fk3qAKW+wZj2O4cnWnvsNz5BVpel3BblWnLAAAAAElFTkSuQmCC",
+  "wifi": {
+    "ssid": "Mawingu Guest",
+    "password": "kahawa;2041"
+  },
+  "epc": {
+    "name": "Mawingu Coffee GmbH",
+    "iban": "DE89 3704 0044 0532 0130 00",
+    "amount": 363.0,
+    "text": "INV-2041"
+  },
+  "bill": {
+    "account": "CH44 3199 9123 0008 8901 2",
+    "creditor": {
+      "name": "Robert Schneider AG",
+      "street": "Rue du Lac",
+      "number": "1268",
+      "postcode": "2501",
+      "city": "Biel",
+      "country": "CH"
+    },
+    "amount": 1949.75,
+    "reference": "210000000003139471430009017",
+    "message": "Order of 15 June 2020"
+  }
 }
