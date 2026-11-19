@@ -253,6 +253,20 @@ fn logos_sit_in_a_hole_and_still_scan() {
             }
         }
     }
+    // Excel flattens the curves of an SVG that holds a raster picture until
+    // rounded modules stop scanning, so with a PNG logo curves are lines.
+    // An SVG logo nests as vectors and keeps them.
+    let curves = |svg: &str| {
+        svg.split(" d=\"")
+            .skip(1)
+            .any(|d| d.split('"').next().unwrap_or("").contains('C'))
+    };
+    let tag = "{{ v | barcode(\"qr\", logo=l, style=\"rounded\", eye=\"circle\") }}";
+    let (_, svg) = scans(tag, json!({ "v": URL, "l": png_logo }), URL);
+    assert!(!curves(&svg), "a raster logo: lines only");
+    let (_, svg) = scans(tag, json!({ "v": URL, "l": svg_logo }), URL);
+    assert!(curves(&svg), "an SVG logo keeps curves");
+
     // Styled, coloured and with a logo, all at once.
     scans(
         "{{ v | barcode(\"qr\", logo=l, style=\"rounded\", eye=\"circle\", \
@@ -622,4 +636,76 @@ fn styled_codes_scan_after_libreoffice_draws_them() {
         codes.iter().any(|c| c.starts_with("SPC\n0200")),
         "{codes:?}"
     );
+}
+
+/// Writes a DOCX, PPTX and XLSX holding every QR style, a logo, a label,
+/// the Swiss QR-bill code and linear codes, for opening in Word,
+/// PowerPoint and Excel by hand: `QR_OFFICE=<folder> cargo test -p
+/// rusticdoc-template --test qr office_samples -- --ignored`.
+#[test]
+#[ignore]
+fn office_samples() {
+    let dir = std::env::var("QR_OFFICE").expect("QR_OFFICE names a folder");
+    let cases: &[(&str, &str)] = &[
+        ("square", "{{ u.square | barcode(\"qr\", size=110, alt=\"Square QR\") }}"),
+        ("dots", "{{ u.dots | barcode(\"qr\", style=\"dots\", eye=\"circle\", size=110) }}"),
+        ("rounded", "{{ u.rounded | barcode(\"qr\", style=\"rounded\", eye=\"rounded\", color=\"#c2185b\", size=110) }}"),
+        ("gradient45", "{{ u.gradient45 | barcode(\"qr\", gradient=\"linear\", color=\"#123a6b\", gradient_color=\"#6a1b9a\", gradient_angle=45, size=110) }}"),
+        ("radial", "{{ u.radial | barcode(\"qr\", gradient=\"radial\", color=\"#004d40\", gradient_color=\"#1b5e20\", style=\"dots\", size=110) }}"),
+        ("logo", "{{ u.logo | barcode(\"qr\", logo=png, style=\"rounded\", color=\"#2a7a6f\", size=110) }}"),
+        ("svglogo", "{{ u.svglogo | barcode(\"qr\", logo=svg, eye=\"circle\", size=110) }}"),
+        ("label", "{{ u.label | barcode(\"qr\", label=\"Scan to pay\", size=110) }}"),
+        ("invert", "{{ u.invert | barcode(\"qr\", invert=true, size=110) }}"),
+        ("swiss", "{{ bill | qrdata(\"swiss\") | barcode(\"swissqr\") }}"),
+        ("ean13", "{{ \"590123412345\" | barcode(\"ean13\", text=true, width=150) }}"),
+        ("code128", "{{ \"INV-2041/abc\" | barcode(\"code128\", text=true, width=170, color=\"#123a6b\") }}"),
+        ("datamatrix", "{{ \"Lot 42/7\" | barcode(\"datamatrix\", size=70) }}"),
+    ];
+    let urls: serde_json::Map<String, Value> = cases
+        .iter()
+        .map(|(k, _)| (k.to_string(), json!(format!("https://example.com/{k}"))))
+        .collect();
+    let data = json!({
+        "u": urls, "png": b64(&logo_png()), "svg": b64(LOGO_SVG.as_bytes()),
+        "bill": swiss_payload()
+    });
+    let body: String = cases
+        .iter()
+        .map(|(k, t)| format!("{}{}", p(k), p(t)))
+        .collect();
+    std::fs::write(
+        format!("{dir}/qr-styles.docx"),
+        render(Format::Docx, &docx(&body), data.clone()),
+    )
+    .unwrap();
+    // The logo code first, so a slide or a printed sheet doesn't cut it off.
+    let short: Vec<String> = [5, 6, 0, 1, 2, 3]
+        .iter()
+        .map(|&i| cases[i].1.replace("size=110", "size=60"))
+        .collect();
+    let slide = short.clone();
+    let refs: Vec<&str> = slide.iter().map(String::as_str).collect();
+    std::fs::write(
+        format!("{dir}/qr-styles.pptx"),
+        render(Format::Pptx, &pptx(&[&shape(&refs)]), data.clone()),
+    )
+    .unwrap();
+    // Two columns of three, so no page break cuts a code.
+    let rows: Vec<String> = (0..3)
+        .map(|i| {
+            let r = (i * 9 + 1) as u32;
+            row(
+                r,
+                &[
+                    cell(&format!("A{r}"), "inlineStr", &short[i]),
+                    cell(&format!("E{r}"), "inlineStr", &short[i + 3]),
+                ],
+            )
+        })
+        .collect();
+    std::fs::write(
+        format!("{dir}/qr-styles.xlsx"),
+        render(Format::Xlsx, &xlsx(&rows, &[]), data),
+    )
+    .unwrap();
 }

@@ -426,6 +426,16 @@ pub fn barcode(kind: &str, value: &str, opts: &Options) -> Result<(Media, (f64, 
         (ec, _) => ec.clone(),
     };
     let mut symbol = encode(kind, value, ec.as_deref(), opts.version)?;
+    // Excel loses the curves of an SVG that holds a raster picture.
+    let mut opts = std::borrow::Cow::Borrowed(opts);
+    if opts
+        .logo
+        .as_ref()
+        .is_some_and(|l| l.media.mime != "image/svg+xml")
+    {
+        opts.to_mut().style.lines = true;
+    }
+    let opts = opts.as_ref();
     if let Some(logo) = &opts.logo {
         let level = ec.as_deref().unwrap_or("M").to_ascii_uppercase();
         let budget = qr::logo_budget(&level)

@@ -179,6 +179,10 @@ pub struct Style {
     pub scale: f64,
     pub eye: EyeShape,
     pub eye_center: EyeShape,
+    /// Curves as short straight lines. Excel flattens the curves of an SVG
+    /// that holds a raster picture so coarsely that rounded modules lose
+    /// their shape and the code stops scanning; lines it keeps.
+    pub lines: bool,
 }
 
 impl Default for Style {
@@ -188,6 +192,7 @@ impl Default for Style {
             scale: 1.0,
             eye: EyeShape::Square,
             eye_center: EyeShape::Square,
+            lines: false,
         }
     }
 }
@@ -203,56 +208,98 @@ pub fn num(v: f64) -> String {
     }
 }
 
+/// How far a cubic Bézier's control points sit along the tangents, as a
+/// share of the radius, to draw a quarter circle.
+const KAPPA: f64 = 0.552_284_749_8;
+/// The lines a quarter circle becomes when curves are drawn as lines.
+const CORNER_LINES: u32 = 6;
+
 /// A rectangle with its own radius at each corner: top left, top right,
-/// bottom right, bottom left.
-pub fn round_rect(d: &mut String, x: f64, y: f64, w: f64, h: f64, r: [f64; 4]) {
+/// bottom right, bottom left. Corners are cubic Béziers rather than arcs,
+/// which every renderer draws alike, or short lines when `lines` is set.
+#[allow(clippy::too_many_arguments)]
+pub fn round_rect(d: &mut String, x: f64, y: f64, w: f64, h: f64, r: [f64; 4], lines: bool) {
     let [tl, tr, br, bl] = r;
+    let k = KAPPA;
+    let corner =
+        |d: &mut String, from: (f64, f64), c1: (f64, f64), c2: (f64, f64), to: (f64, f64)| {
+            if !lines {
+                let _ = write!(
+                    d,
+                    "C{} {} {} {} {} {}",
+                    num(c1.0),
+                    num(c1.1),
+                    num(c2.0),
+                    num(c2.1),
+                    num(to.0),
+                    num(to.1)
+                );
+                return;
+            }
+            for step in 1..=CORNER_LINES {
+                let t = f64::from(step) / f64::from(CORNER_LINES);
+                let u = 1.0 - t;
+                let at = |a: f64, b: f64, c: f64, e: f64| {
+                    u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c + t * t * t * e
+                };
+                let _ = write!(
+                    d,
+                    "L{} {}",
+                    num(at(from.0, c1.0, c2.0, to.0)),
+                    num(at(from.1, c1.1, c2.1, to.1))
+                );
+            }
+        };
     let _ = write!(d, "M{} {}H{}", num(x + tl), num(y), num(x + w - tr));
     if tr > 0.0 {
-        let _ = write!(
+        let from = (x + w - tr, y);
+        corner(
             d,
-            "A{0} {0} 0 0 1 {1} {2}",
-            num(tr),
-            num(x + w),
-            num(y + tr)
+            from,
+            (from.0 + k * tr, y),
+            (x + w, y + tr - k * tr),
+            (x + w, y + tr),
         );
     }
     let _ = write!(d, "V{}", num(y + h - br));
     if br > 0.0 {
-        let _ = write!(
+        let from = (x + w, y + h - br);
+        corner(
             d,
-            "A{0} {0} 0 0 1 {1} {2}",
-            num(br),
-            num(x + w - br),
-            num(y + h)
+            from,
+            (x + w, from.1 + k * br),
+            (x + w - br + k * br, y + h),
+            (x + w - br, y + h),
         );
     }
     let _ = write!(d, "H{}", num(x + bl));
     if bl > 0.0 {
-        let _ = write!(
+        let from = (x + bl, y + h);
+        corner(
             d,
-            "A{0} {0} 0 0 1 {1} {2}",
-            num(bl),
-            num(x),
-            num(y + h - bl)
+            from,
+            (x + bl - k * bl, y + h),
+            (x, y + h - bl + k * bl),
+            (x, y + h - bl),
         );
     }
     let _ = write!(d, "V{}", num(y + tl));
     if tl > 0.0 {
-        let _ = write!(d, "A{0} {0} 0 0 1 {1} {2}", num(tl), num(x + tl), num(y));
+        let from = (x, y + tl);
+        corner(
+            d,
+            from,
+            (x, y + tl - k * tl),
+            (x + tl - k * tl, y),
+            (x + tl, y),
+        );
     }
     d.push('Z');
 }
 
-pub fn circle(d: &mut String, cx: f64, cy: f64, r: f64) {
-    let _ = write!(
-        d,
-        "M{} {}A{2} {2} 0 1 0 {3} {1}A{2} {2} 0 1 0 {0} {1}Z",
-        num(cx - r),
-        num(cy),
-        num(r),
-        num(cx + r)
-    );
+/// A circle as four cubic Béziers, or short lines.
+pub fn circle(d: &mut String, cx: f64, cy: f64, r: f64, lines: bool) {
+    round_rect(d, cx - r, cy - r, 2.0 * r, 2.0 * r, [r; 4], lines);
 }
 
 /// The data modules as path data, in pixels: `m` per module, the symbol's
@@ -322,7 +369,13 @@ pub fn modules(
                         num(size)
                     );
                 }
-                Shape::Dots => circle(&mut d, x + size / 2.0, y + size / 2.0, size / 2.0),
+                Shape::Dots => circle(
+                    &mut d,
+                    x + size / 2.0,
+                    y + size / 2.0,
+                    size / 2.0,
+                    style.lines,
+                ),
                 Shape::Rounded => {
                     let up = r > 0 && drawn(r - 1, c);
                     let down = drawn(r + 1, c);
@@ -342,6 +395,7 @@ pub fn modules(
                             corner(down, right),
                             corner(down, left),
                         ],
+                        style.lines,
                     );
                 }
             }
@@ -359,23 +413,47 @@ pub fn eyes(n: usize, style: &Style, m: f64, origin: (f64, f64)) -> (String, Str
         let y = origin.1 + r as f64 * m;
         match style.eye {
             EyeShape::Square => {
-                round_rect(&mut frame, x, y, 7.0 * m, 7.0 * m, [0.0; 4]);
-                round_rect(&mut frame, x + m, y + m, 5.0 * m, 5.0 * m, [0.0; 4]);
+                round_rect(&mut frame, x, y, 7.0 * m, 7.0 * m, [0.0; 4], style.lines);
+                round_rect(
+                    &mut frame,
+                    x + m,
+                    y + m,
+                    5.0 * m,
+                    5.0 * m,
+                    [0.0; 4],
+                    style.lines,
+                );
             }
             EyeShape::Rounded => {
-                round_rect(&mut frame, x, y, 7.0 * m, 7.0 * m, [2.0 * m; 4]);
-                round_rect(&mut frame, x + m, y + m, 5.0 * m, 5.0 * m, [1.2 * m; 4]);
+                round_rect(
+                    &mut frame,
+                    x,
+                    y,
+                    7.0 * m,
+                    7.0 * m,
+                    [2.0 * m; 4],
+                    style.lines,
+                );
+                round_rect(
+                    &mut frame,
+                    x + m,
+                    y + m,
+                    5.0 * m,
+                    5.0 * m,
+                    [1.2 * m; 4],
+                    style.lines,
+                );
             }
             EyeShape::Circle => {
-                circle(&mut frame, x + 3.5 * m, y + 3.5 * m, 3.5 * m);
-                circle(&mut frame, x + 3.5 * m, y + 3.5 * m, 2.5 * m);
+                circle(&mut frame, x + 3.5 * m, y + 3.5 * m, 3.5 * m, style.lines);
+                circle(&mut frame, x + 3.5 * m, y + 3.5 * m, 2.5 * m, style.lines);
             }
         }
         let (cx, cy, cs) = (x + 2.0 * m, y + 2.0 * m, 3.0 * m);
         match style.eye_center {
-            EyeShape::Square => round_rect(&mut centre, cx, cy, cs, cs, [0.0; 4]),
-            EyeShape::Rounded => round_rect(&mut centre, cx, cy, cs, cs, [0.9 * m; 4]),
-            EyeShape::Circle => circle(&mut centre, x + 3.5 * m, y + 3.5 * m, 1.5 * m),
+            EyeShape::Square => round_rect(&mut centre, cx, cy, cs, cs, [0.0; 4], style.lines),
+            EyeShape::Rounded => round_rect(&mut centre, cx, cy, cs, cs, [0.9 * m; 4], style.lines),
+            EyeShape::Circle => circle(&mut centre, x + 3.5 * m, y + 3.5 * m, 1.5 * m, style.lines),
         }
     }
     let grid = m.fract() == 0.0 && origin.0.fract() == 0.0 && origin.1.fract() == 0.0;
