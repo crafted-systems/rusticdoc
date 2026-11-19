@@ -433,17 +433,33 @@ pub fn request_id(headers: &HeaderMap) -> String {
         .to_string()
 }
 
-/// A file download with the pipeline timings in a header.
+/// How long a finished PDF may take to have its pages counted. The count is
+/// a courtesy to the caller: past this the file goes out without it.
+const PAGE_COUNT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A file download with the pipeline timings in a header. A PDF also says
+/// which fonts it names and how many pages it has.
 pub async fn download(out: Output) -> Response {
-    // Bytes are cheap to clone. Very large files skip the font scan, and the rest
-    // are scanned off the async threads.
-    let fonts = if out.content_type == "application/pdf" && out.bytes.len() <= 32 * 1024 * 1024 {
+    // Bytes are cheap to clone. Very large files skip the font scan and the
+    // page count, and the rest are read off the async threads.
+    let (fonts, pages) = if out.content_type == "application/pdf"
+        && out.bytes.len() <= 32 * 1024 * 1024
+    {
         let scanned = out.bytes.clone();
-        tokio::task::spawn_blocking(move || rusticdoc_core::fonts::pdf_font_names(&scanned))
-            .await
-            .unwrap_or_default()
+        let fonts =
+            tokio::task::spawn_blocking(move || rusticdoc_core::fonts::pdf_font_names(&scanned));
+        // Counting pages parses the file, so it goes where every other PDF
+        // parse goes: behind the blocking permits and under a deadline. A
+        // burst of downloads cannot take the runtime's blocking threads, and
+        // a file that is slow to read cannot hold a response.
+        let doc = Document::new(out.name.clone(), out.bytes.clone());
+        let pages = rusticdoc_core::pdfops::page_count_off_thread(&doc, PAGE_COUNT_TIMEOUT);
+        let (fonts, pages) = tokio::join!(fonts, pages);
+        // A PDF that cannot be read back, or not in time, is still the
+        // caller's file: it goes out without a count rather than failing here.
+        (fonts.unwrap_or_default(), pages.ok())
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
     let mut res = Response::new(Body::from(out.bytes));
     *res.status_mut() = StatusCode::OK;
@@ -460,6 +476,11 @@ pub async fn download(out: Output) -> Response {
         && let Ok(v) = HeaderValue::from_str(&fonts.join(", "))
     {
         headers.insert("x-fonts-used", v);
+    }
+    // The same header a preview carries, so a caller that meters by length
+    // reads one name everywhere.
+    if let Some(pages) = pages.filter(|n| *n > 0) {
+        headers.insert("x-page-count", HeaderValue::from(pages));
     }
     let timings: Vec<String> = out
         .timings
