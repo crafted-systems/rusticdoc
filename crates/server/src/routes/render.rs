@@ -338,7 +338,8 @@ pub struct RenderJson {
         ("Prefer" = Option<String>, Header, description = "`respond-async` to run in the background and answer 202"),
     ),
     responses(
-        (status = 200, description = "The rendered file", content_type = "application/octet-stream", body = BinaryFile),
+        (status = 200, description = "The rendered file", content_type = "application/octet-stream", body = BinaryFile,
+            headers(("X-Page-Count" = u32, description = "How many pages the file has, when it is a PDF of up to 32 MB"))),
         (status = 202, description = "Accepted as a background job (`Prefer: respond-async`)", body = crate::routes::jobs::JobSchema),
         (status = 204, description = "Accepted; the result goes to the webhook"),
         (status = 400, description = "The request is wrong", body = ErrorBody), (status = 401, description = "Credentials required", body = ErrorBody), (status = 422, description = "The template failed to render", body = ErrorBody),
