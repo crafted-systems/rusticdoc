@@ -350,7 +350,9 @@ Bars lighter than their background are refused too, unless you pass `invert=true
 
 How much a logo may hide depends on the error correction: at most 7.5% of the data modules at `M`, 12.5% at `Q` and 15% at `H`, which is half of what each level restores. The hole also stays clear of the corner squares and the timing patterns. If a logo doesn't fit, the service picks a larger version until it does, so a short value makes a denser code. With `version` set, it says what to change instead: `a logo 25% wide hides too much of this version 1 code at error correction H`.
 
-PNG, JPEG, GIF, WebP and SVG logos work. An SVG is cleaned as for `image` and stays a vector in the code. A logo holds at most 2 MB, since a copy goes into each code that uses it, and at most 16 megapixels, since it is decoded to draw the PNG.
+PNG, JPEG, GIF, WebP and SVG logos work. An SVG is cleaned as for `image` and stays a vector in the code.
+
+With a PNG, JPEG, GIF or WebP logo, the code's curves are written as short straight lines. Excel flattens the curves of any SVG that holds a raster picture so coarsely that rounded modules and round eyes stop scanning. Lines scan, though in Excel a small code's rounded corners look cut off. An SVG logo has no such problem, so use one if your documents open in Excel. A logo holds at most 2 MB, since a copy goes into each code that uses it, and at most 16 megapixels, since it is decoded to draw the PNG.
 
 ### GS1 Digital Link and GS1 QR codes
 
@@ -374,7 +376,7 @@ ZXing and rxing read it, and so do banking apps. ZBar finds nothing, because it 
 
 ### How the codes are drawn
 
-A barcode is an SVG, with a PNG of the same drawing for readers that don't show SVG. They're stored the way an SVG image is: DOCX, XLSX and PPTX show the PNG and carry the SVG as Office's SVG extension, and ODF frames list the SVG first and the PNG after it. Office and LibreOffice draw the SVG, so a code stays sharp at any print size, and LibreOffice's PDF of the document has it as vectors.
+A barcode is an SVG, with a PNG of the same drawing for readers that don't show SVG. They're stored the way an SVG image is: DOCX, XLSX and PPTX show the PNG and carry the SVG as Office's SVG extension, and ODF frames list the SVG first and the PNG after it. Office and LibreOffice draw the SVG, so a code stays sharp at any print size, and the PDFs Word, Excel and LibreOffice make have it as vectors. Curves are cubic Béziers rather than SVG arcs, which every renderer draws the same way.
 
 The PNG has a whole number of pixels per module. Square codes in one colour are drawn without anti-aliasing, so their edges stay sharp. Dots, rounded shapes, gradients and logos are anti-aliased.
 
@@ -385,6 +387,8 @@ A `quiet_zone` below 4 is allowed for QR codes, for a code inside a frame you dr
 ### Which decoders read them
 
 Every symbology decodes to its exact value with rxing, a port of ZXing. That holds for the PNG the service makes, with and without text, colours, a wider quiet zone and rotation, and for LibreOffice's PDF of the document at 300 dpi. ZBar reads the same PNGs for every linear code and QR, but it has no Data Matrix or Aztec reader. EAN and UPC codes come back with the check digit the service adds. Codabar comes back without its start and stop letters from rxing, and with them from ZBar.
+
+Every style, a logo of each kind, a label, gradients, the Swiss QR-bill code and the linear codes were checked in Word, PowerPoint and Excel 16.115 for Mac. Each draws them from the SVG, and every code scans from the PDF each one exports. Word shows the alt text.
 
 QR styles, colours, gradients, logos and labels are read back with rxing for every combination of `style`, `eye`, `eye_center`, `module_scale` and error correction, and from LibreOffice's PDF. ZXing reads them from the pictures and from the PDF at 150 and 300 dpi, and ZBar reads them all apart from the exceptions above.
 
