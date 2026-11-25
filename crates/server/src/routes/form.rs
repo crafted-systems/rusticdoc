@@ -8,10 +8,13 @@ use axum::body::Body;
 use axum::extract::{FromRequest as _, Multipart, Request};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
+use rusticdoc_core::assets::SentAssets;
+use rusticdoc_core::libraries::LibraryError;
 use rusticdoc_core::limits::MAX_TEXT_PARTS;
 use rusticdoc_core::{Document, Output};
 use serde::Deserialize;
 
+use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::webhook;
@@ -32,6 +35,7 @@ const SPECIAL_FIELDS: &[&str] = &[
     "facturxXml",
     "fonts",
     "assets",
+    "assetLibrary",
 ];
 
 #[derive(Debug, Default)]
@@ -44,6 +48,9 @@ pub struct Form {
     pub fields: BTreeMap<String, String>,
     /// Every value of every text part, in order, for fields that repeat.
     pub multi: BTreeMap<String, Vec<String>>,
+    /// The library in `assetLibrary` or `assetLibraryHash`, once
+    /// [`Form::open_library`] has read it.
+    pub library: Option<SentAssets>,
 }
 
 /// One entry of the `downloadFrom` field.
@@ -289,6 +296,56 @@ impl Form {
             };
             self.add_file(&field, Document::new(sanitize(&name), bytes));
         }
+        Ok(())
+    }
+
+    /// Reads `assetLibrary`, the ZIP of assets a request brings, or finds the one
+    /// `assetLibraryHash` names. What the form's options and steps are read after
+    /// this see it.
+    pub async fn open_library(&mut self, state: &AppState, caller: &Principal) -> ApiResult<()> {
+        let mut files = self.take_field("assetLibrary");
+        let hash = self
+            .field("assetLibraryHash")
+            .map(str::trim)
+            .filter(|hash| !hash.is_empty());
+        if files.len() + usize::from(hash.is_some()) > 1 {
+            return Err(ApiError::bad_request(
+                "send one 'assetLibrary' or one 'assetLibraryHash'",
+            ));
+        }
+        // Stateless by contract, as for a template: a miss is a 404 and the client
+        // sends the ZIP again.
+        if let Some(hash) = hash {
+            let found = state.libraries.recall(&caller.0, hash);
+            self.library = Some(found.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "asset_library_not_cached",
+                    "no asset library with that hash is cached; send the ZIP",
+                )
+            })?);
+            return Ok(());
+        }
+        let Some(zip) = files.pop() else {
+            if self.fields.contains_key("assetLibrary") {
+                return Err(ApiError::bad_request("'assetLibrary' is a file"));
+            }
+            return Ok(());
+        };
+        let (libraries, scope) = (state.libraries.clone(), caller.0.clone());
+        let unpacked =
+            rusticdoc_core::pdfops::blocking(state.config.api_timeout, move |deadline| {
+                Ok(libraries.add(&scope, &zip, &deadline))
+            })
+            .await?;
+        self.library = Some(unpacked.map_err(|e| match e {
+            LibraryError::Full => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "busy",
+                "the asset libraries in use have all the disk they may take; try again later",
+            ),
+            LibraryError::Failed(e) => e.into(),
+        })?);
         Ok(())
     }
 

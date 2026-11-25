@@ -109,7 +109,7 @@ Every text field of the form becomes a member with the same name, the same meani
 | `steps` | A list like `["convert","pdfa"]`, or the form's comma-separated text |
 | Anything else, like `to`, `pdfa`, `outputFilename`, `splitBy`, `flatten` | A string, number or boolean |
 
-A JSON body can't carry files, so a member named `template`, `files`, `assets`, `embeds`, `watermark` or `stamp` gets a `400`, and so does a body that isn't an object or isn't valid JSON. The body limit and the limit of 2000 fields apply as they do for a form. Without a store, JSON still works with a `templateHash`.
+A JSON body can't carry files, so a member named `template`, `files`, `assets`, `assetLibrary`, `embeds`, `watermark` or `stamp` gets a `400`, and so does a body that isn't an object or isn't valid JSON. The body limit and the limit of 2000 fields apply as they do for a form. Without a store, JSON still works with a `templateHash`.
 
 ## List
 

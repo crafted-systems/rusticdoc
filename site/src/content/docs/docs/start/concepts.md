@@ -94,7 +94,7 @@ By default the service stores nothing, and each request carries its own template
 
 Set `RUSTICDOC_STORE` to a bucket or a shared volume and the service can hold templates and fonts for you. That store is the only thing replicas share. [Many containers](/docs/operate/many-containers/) explains how it behaves.
 
-One thing does outlast a request without a store. An in-memory cache lets the same caller send `templateHash`, the hex SHA-256 of a template it sent recently, in place of the file. A restart clears the cache, and other replicas don't have it.
+Two things do outlast a request without a store. An in-memory cache lets the same caller send `templateHash`, the hex SHA-256 of a template it sent recently, in place of the file, and a cache in the temp directory does the same for an [asset library](/docs/guides/assets/#send-a-library) with `assetLibraryHash`. Neither survives a restart, and other replicas don't have them.
 
 ## Synchronous, or by webhook
 

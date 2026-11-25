@@ -4,15 +4,16 @@
 
 Mount or upload logos, images and stylesheets once, and name them from any template or HTML page instead of sending them with every request.
 
-An asset is an image or a stylesheet the service holds, so a template can name your logo instead of every request carrying it. There are three ways to provide one, and none of them needs a rebuild.
+An asset is an image or a stylesheet the service holds, so a template can name your logo instead of every request carrying it. There are four ways to provide one, and none of them needs a rebuild.
 
 | Way | Needs | Applies to | Survives a restart |
 |---|---|---|---|
 | Upload to the store | `RUSTICDOC_STORE` | Every caller and replica | Yes |
 | Mount at `/assets` | A volume | This replica, for every caller | As long as the mount does |
-| Send with a request, as [`assets`](html.md#assets) | Nothing | HTML in that request | No |
+| Send a [library](#send-a-library) with a request | Nothing | Templates and HTML in that request | No |
+| Send files with a request, as [`assets`](html.md#assets) | Nothing | HTML in that request | No |
 
-When more than one has the same name, the file sent with the request wins, then the mounted one, then the stored one.
+When more than one has the same name, a file sent as `assets` wins, then the one in the request's library, then the mounted one, then the stored one.
 
 Fonts aren't assets. They have [ways of their own](https://rusticdoc.com/docs/guides/fonts/).
 
@@ -79,6 +80,43 @@ A ZIP can be at most 128 MB, expand to at most 256 MB and hold at most 2,000 ent
 
 The store holds at most `RUSTICDOC_MAX_STORED_ASSETS` assets (default `2000`) and `RUSTICDOC_MAX_ASSET_STORAGE` bytes (default `1GB`), and an upload past either gets `403 quota_exceeded`. Without a store, you get `501 store_not_configured`.
 
+## Send a library
+
+A request can bring the assets its template names, as a ZIP in `assetLibrary`. No other request sees them, so one service can render for several customers who each have a `logo.png`, and it needs no store to do it.
+
+```bash
+mkdir -p brand && cp logo.png brand/logo.png
+zip -q library.zip brand/logo.png
+cat > letter.html <<'EOF'
+<img src="{{ asset('brand/logo.png') }}" width="120" height="40">
+<p>Dear {{ name }},</p>
+EOF
+curl -F template=@letter.html -F 'data={"name":"Amani"}' -F steps=convert \
+  -F assetLibrary=@library.zip http://localhost:9027/v1/render -o letter.pdf
+grep -aq '/Subtype */Image' letter.pdf
+```
+
+`/v1/render`, `/v1/render/batch`, `/v1/convert`, `/v1/templates/validate` and the template previews take it. The ZIP follows the rules of an upload: each file's path is its name, one that isn't what its name says fails the request, and anything that isn't an image or a stylesheet is left out. The request has to fit `RUSTICDOC_BODY_LIMIT`.
+
+To save sending the same ZIP again, send `assetLibraryHash`, the hex SHA-256 of one this caller sent recently, in its place. This works in a JSON body too.
+
+```bash
+echo 'p { color: #1f4e79 }' > page.css && zip -q library.zip page.css
+echo '<link rel="stylesheet" href="{{ asset("page.css") }}"><p>{{ name }}</p>' > note.html
+curl -F template=@note.html -F 'data={"name":"Amani"}' \
+  -F assetLibrary=@library.zip http://localhost:9027/v1/render -o first.html
+curl -F template=@note.html -F 'data={"name":"Amani"}' \
+  -F "assetLibraryHash=$(openssl dgst -sha256 -r library.zip | cut -d' ' -f1)" \
+  http://localhost:9027/v1/render -o second.html
+cmp first.html second.html
+```
+
+On a miss you get `404 asset_library_not_cached` and send the ZIP. A hit is never guaranteed, because each replica remembers only what it was sent, and forgets it on a restart or when it needs the room.
+
+Libraries are unpacked to the temp directory, where all of them together take at most `RUSTICDOC_MAX_ASSET_LIBRARY_SPACE`, 512 MB by default. The ones nothing uses are removed to make room, the one used longest ago first. A library that takes more than the limit gets a `400`, and one that finds the room taken by others in use gets `503 busy`.
+
+A library adds to the mounted and stored assets and doesn't hide them, so a service shared by customers who mustn't see each other's assets should hold none of its own.
+
 ## What reaches other replicas
 
 | | This replica | Other replicas |
@@ -122,7 +160,7 @@ A page that names an asset nobody has shows nothing there, with no error. To get
 <img src="{{ asset('brand/logo.png') }}" width="120" height="40">
 ```
 
-`asset` only looks at the mounted and stored assets, not at files sent with the request. This is for pages Fulgur lays out, so [`htmlEngine=libreoffice`](html.md#choose-libreoffice-instead) and PDF/A ignore assets.
+`asset` looks in the request's library and at the mounted and stored assets, not at files sent as `assets`. This is for pages Fulgur lays out, so [`htmlEngine=libreoffice`](html.md#choose-libreoffice-instead) and PDF/A ignore assets.
 
 ## Use one in an Office template
 

@@ -120,6 +120,6 @@ Then test with your largest documents and your busiest hour before you rely on i
 
 ## Disk and temporary space
 
-Conversions use `/tmp`, and each one can write up to `RUSTICDOC_LIBREOFFICE_MAX_DISK`, 512 MB by default, before it's stopped. Allow `RUSTICDOC_WORKERS` times that, plus the files being converted. The Compose default of 2 GB is enough for two workers.
+Conversions use `/tmp`, and each one can write up to `RUSTICDOC_LIBREOFFICE_MAX_DISK`, 512 MB by default, before it's stopped. Allow `RUSTICDOC_WORKERS` times that, plus the files being converted. Add `RUSTICDOC_MAX_ASSET_LIBRARY_SPACE`, 512 MB by default, if requests bring [asset libraries](/docs/guides/assets/#send-a-library). The Compose default of 2 GB is enough for two workers and the libraries.
 
 Every replica with a store also keeps a copy of all stored fonts in `RUSTICDOC_FONT_CACHE_DIR`, and `RUSTICDOC_MAX_FONT_STORAGE`, 1 GiB by default, bounds that copy. Stored assets are copied the same way to `RUSTICDOC_ASSET_CACHE_DIR`, bounded by `RUSTICDOC_MAX_ASSET_STORAGE`, also 1 GiB by default.

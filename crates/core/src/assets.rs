@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 use std::io::Read as _;
 
 pub use rusticdoc_template::assets::{
-    AssetDirs, AssetKind, MAX_ASSET_BYTES, MountedAsset, check_content, check_name, kind_of,
+    AssetDirs, AssetKind, MAX_ASSET_BYTES, MountedAsset, SentAssets, check_content, check_name,
+    kind_of,
 };
 
 use crate::error::{Error, Result};
@@ -18,7 +19,8 @@ use crate::job::Document;
 const MAX_ZIP_ENTRIES: usize = 2_000;
 /// Largest ZIP accepted.
 const MAX_ZIP_BYTES: u64 = 128 * 1024 * 1024;
-/// Most bytes one ZIP may expand to, however small it is. This is memory.
+/// Most bytes one ZIP may expand to, however small it is. For an upload this is
+/// memory.
 const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
 
 /// What an upload held, each asset under its checked name.
@@ -35,10 +37,7 @@ fn checked(name: &str, bytes: bytes::Bytes) -> Result<Document> {
 }
 
 /// Reads an upload: one image or stylesheet, under `name` when it is given, or a
-/// ZIP of them, where each keeps its path. A file named as an asset that is not
-/// one fails the upload, so a broken package is noticed; anything else in a ZIP,
-/// such as a licence, is reported as skipped. Sizes are counted as bytes come out
-/// rather than taken from the archive's headers.
+/// ZIP of them, as [`each_in_zip`] reads it.
 pub fn unpack_upload(doc: &Document, name: Option<&str>) -> Result<AssetUpload> {
     if !doc.bytes.starts_with(b"PK") {
         return Ok(AssetUpload {
@@ -51,10 +50,27 @@ pub fn unpack_upload(doc: &Document, name: Option<&str>) -> Result<AssetUpload> 
             "'name' is for one file; in a ZIP each file's path is its name".into(),
         ));
     }
+    let mut assets = Vec::new();
+    let skipped = each_in_zip(doc, |asset| {
+        assets.push(asset);
+        Ok::<_, Error>(())
+    })?;
+    Ok(AssetUpload { assets, skipped })
+}
+
+/// Hands each asset in a ZIP to `take` as it is read, under its path. A file named
+/// as an asset that is not one fails the whole, so a broken package is noticed;
+/// anything else, such as a licence, is returned as skipped. Sizes are counted as
+/// bytes come out rather than taken from the archive's headers.
+pub fn each_in_zip<E: From<Error>>(
+    doc: &Document,
+    mut take: impl FnMut(Document) -> std::result::Result<(), E>,
+) -> std::result::Result<Vec<SkippedFile>, E> {
     if doc.bytes.len() as u64 > MAX_ZIP_BYTES {
         return Err(Error::InvalidRequest(format!(
             "the upload is larger than {MAX_ZIP_BYTES} bytes"
-        )));
+        ))
+        .into());
     }
     let invalid =
         |e: zip::result::ZipError| Error::InvalidRequest(format!("the ZIP cannot be read: {e}"));
@@ -63,9 +79,10 @@ pub fn unpack_upload(doc: &Document, name: Option<&str>) -> Result<AssetUpload> 
     if archive.len() > MAX_ZIP_ENTRIES {
         return Err(Error::InvalidRequest(format!(
             "the ZIP has more than {MAX_ZIP_ENTRIES} entries"
-        )));
+        ))
+        .into());
     }
-    let mut upload = AssetUpload::default();
+    let mut skipped = Vec::new();
     let mut seen = BTreeSet::new();
     let mut total = 0u64;
     for index in 0..archive.len() {
@@ -83,19 +100,17 @@ pub fn unpack_upload(doc: &Document, name: Option<&str>) -> Result<AssetUpload> 
             reason: reason.to_string(),
         };
         if entry.is_symlink() {
-            upload.skipped.push(skip("a link, not a file"));
+            skipped.push(skip("a link, not a file"));
             continue;
         }
         if kind_of(&path).is_none() {
             let lower = path.to_ascii_lowercase();
             let font = [".ttf", ".otf", ".ttc", ".woff", ".woff2"];
-            upload
-                .skipped
-                .push(skip(if font.iter().any(|e| lower.ends_with(e)) {
-                    "a font; upload fonts to /v1/fonts"
-                } else {
-                    "not an image or a stylesheet"
-                }));
+            skipped.push(skip(if font.iter().any(|e| lower.ends_with(e)) {
+                "a font; upload fonts to /v1/fonts"
+            } else {
+                "not an image or a stylesheet"
+            }));
             continue;
         }
         // Before the bytes: nothing is read for a name that will be refused.
@@ -111,21 +126,23 @@ pub fn unpack_upload(doc: &Document, name: Option<&str>) -> Result<AssetUpload> 
         if total > MAX_UPLOAD_BYTES {
             return Err(Error::InvalidRequest(format!(
                 "the ZIP expands to more than {MAX_UPLOAD_BYTES} bytes"
-            )));
+            ))
+            .into());
         }
         if !seen.insert(path.clone()) {
-            return Err(Error::InvalidRequest(format!(
-                "the ZIP holds '{path}' more than once"
-            )));
+            return Err(
+                Error::InvalidRequest(format!("the ZIP holds '{path}' more than once")).into(),
+            );
         }
-        upload.assets.push(checked(&path, bytes.into())?);
+        take(checked(&path, bytes.into())?)?;
     }
-    if upload.assets.is_empty() {
+    if seen.is_empty() {
         return Err(Error::InvalidRequest(
             "the ZIP holds no images (PNG, JPEG, GIF, SVG, WebP) or stylesheets (CSS)".into(),
-        ));
+        )
+        .into());
     }
-    Ok(upload)
+    Ok(skipped)
 }
 
 #[cfg(test)]
