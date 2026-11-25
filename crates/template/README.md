@@ -128,9 +128,10 @@ carry over. PPTX, XLSX, ODS and ODP keep no structure: the text is flattened
 with a line break per paragraph, item or row (`•` and `1.` stay, table cells
 are separated by tabs), and XLSX sets wrap text on the cell.
 
-**`chart`** takes a list of objects. `type` is `bar`, `column`, `line` or `pie`
-(one `y`); `x` and `y` name keys; `title`, `width` and `height` (points, default
-450 by 270) are optional. A `null` or missing value is a gap, while a series
+**`chart`** takes a list of objects. `type` is `bar`, `column`, `line`, `area`,
+`pie` (one `y`) or `scatter` (`x` a number in every row, two value axes, points
+with no line); `x` and `y` name keys; `title`, `width` and `height` (points,
+default 450 by 270) are optional. Area series are filled at 75% opacity. A `null` or missing value is a gap, while a series
 with no value at all is an error. DOCX and PPTX charts carry their values
 inline in `c:strCache` and `c:numCache` with no embedded workbook: the chart
 renders, but its data cannot be edited in Word or PowerPoint. Excel reads a chart

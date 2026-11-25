@@ -78,7 +78,7 @@ Follow these steps in order. Don't render a template that hasn't validated.
 | `link` | `{{ url \| link("Pay now") }}` |
 | `color` | `{{ status \| color("#c00") }}`, `color(background="#eee")` |
 | `html` | `{{ body \| html }}`: a safe subset, native in DOCX and ODT, plain text elsewhere |
-| `chart` | `{{ rows \| chart(type="column", x="month", y=["sales"]) }}`, with `bar`, `column`, `line` or `pie`. Values must be numbers |
+| `chart` | `{{ rows \| chart(type="column", x="month", y=["sales"]) }}`, with `bar`, `column`, `line`, `area`, `pie` or `scatter`. Values must be numbers, and so must `x` in a `scatter` |
 | `pagebreak` | `{{ "" \| pagebreak }}` (DOCX, ODT) |
 | `drop` | `{{ drop("column") if not show_discount }}` removes the element holding the tag: a `paragraph`, `row`, `column`, `table`, `picture`, `chart`, `shape`, `slide` or `sheet` (`references/office.md`) |
 
