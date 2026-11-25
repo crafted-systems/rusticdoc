@@ -9,7 +9,9 @@ sidebar:
 
 rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults and may add features, without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
-## Unreleased
+## 0.3.1
+
+Released on 25 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.3.1`, for amd64 and arm64. Nothing that worked in 0.3.0 changes.
 
 - A request can bring the [assets](/docs/guides/assets/#send-a-library) its template and pages name, as a ZIP in `assetLibrary`, or name one it sent recently with `assetLibraryHash`. `asset()` finds them, no other request sees them, and no store is needed. `RUSTICDOC_MAX_ASSET_LIBRARY_SPACE`, 512 MB by default, bounds the disk they take.
 
