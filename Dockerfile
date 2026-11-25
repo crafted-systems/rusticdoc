@@ -65,7 +65,7 @@ LABEL org.opencontainers.image.title="rusticdoc" \
 COPY deploy/dpkg-excludes /etc/dpkg/dpkg.cfg.d/rusticdoc
 RUN groupadd --gid 1001 rusticdoc \
     && useradd --uid 1001 --gid rusticdoc --shell /usr/sbin/nologin --home /home/rusticdoc --no-create-home rusticdoc \
-    && mkdir -p /home/rusticdoc /fonts \
+    && mkdir -p /home/rusticdoc /fonts /assets \
     && echo "deb http://deb.debian.org/debian trixie-backports main" >> /etc/apt/sources.list \
     && apt-get update -qq \
     && apt-get upgrade -yqq \
@@ -82,8 +82,8 @@ RUN groupadd --gid 1001 rusticdoc \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     # Arbitrary user IDs, as on OpenShift: group 0 owns the home directory.
     && usermod -aG root rusticdoc \
-    && chgrp -R 0 /home/rusticdoc /fonts \
-    && chmod -R g=u /home/rusticdoc /fonts
+    && chgrp -R 0 /home/rusticdoc /fonts /assets \
+    && chmod -R g=u /home/rusticdoc /fonts /assets
 
 # LibreOffice has no setting that stops its HTML loader fetching stylesheets, so
 # beside the dead proxy in its profile, its HTTP, WebDAV and CMIS providers go.
@@ -98,11 +98,12 @@ ENV RUSTICDOC_LIBREOFFICE_BIN=/usr/lib/libreoffice/program/soffice.bin \
     RUSTICDOC_QPDF_BIN=/usr/bin/qpdf \
     RUSTICDOC_PDFCPU_BIN=/usr/bin/pdfcpu \
     RUSTICDOC_FONTS_DIR=/fonts \
+    RUSTICDOC_ASSETS_DIR=/assets \
     RUSTICDOC_LOG_FORMAT=json
 
 USER rusticdoc
 WORKDIR /home/rusticdoc
-VOLUME ["/fonts"]
+VOLUME ["/fonts", "/assets"]
 EXPOSE 9027
 HEALTHCHECK --interval=30s --timeout=6s --start-period=20s --retries=3 CMD ["/usr/bin/rusticdoc", "health"]
 # As PID 1 it reaps and forwards signals itself, so that /proc/1/environ, which holds

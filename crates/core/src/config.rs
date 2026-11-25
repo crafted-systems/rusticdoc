@@ -26,6 +26,9 @@ pub struct Config {
     pub pdfcpu_bin: Option<PathBuf>,
     /// Directory of extra fonts, mounted at runtime.
     pub fonts_dir: PathBuf,
+    /// Directory of images and stylesheets that templates and pages name,
+    /// mounted at runtime. It need not exist.
+    pub assets_dir: PathBuf,
     /// `<lang>.json` translation dictionaries for `t`, when set.
     pub translations_dir: Option<PathBuf>,
     /// Where uploaded templates and fonts live: `file:///path` or
@@ -45,7 +48,14 @@ pub struct Config {
     pub max_font_storage: u64,
     /// This replica's copy of the stored fonts, on its own disk.
     pub font_cache_dir: PathBuf,
-    /// How often a replica looks for fonts added or deleted elsewhere.
+    /// Most assets the store may hold.
+    pub max_stored_assets: usize,
+    /// Most bytes of assets the store may hold. Every replica copies them to disk.
+    pub max_asset_storage: u64,
+    /// This replica's copy of the stored assets, on its own disk.
+    pub asset_cache_dir: PathBuf,
+    /// How often a replica looks for fonts and assets added, changed or deleted
+    /// elsewhere.
     pub store_sync_interval: Duration,
     /// The API key, for `Authorization: Bearer` or `X-Api-Key`. `None` means
     /// no key is required.
@@ -246,6 +256,7 @@ impl Default for Config {
                 "/usr/local/bin/pdfcpu",
             ]),
             fonts_dir: PathBuf::from("/fonts"),
+            assets_dir: PathBuf::from("/assets"),
             translations_dir: None,
             store: None,
             max_template_bytes: 50 * 1024 * 1024,
@@ -255,6 +266,9 @@ impl Default for Config {
             max_stored_fonts: 2_000,
             max_font_storage: 1024 * 1024 * 1024,
             font_cache_dir: std::env::temp_dir().join("rusticdoc-stored-fonts"),
+            max_stored_assets: 2_000,
+            max_asset_storage: 1024 * 1024 * 1024,
+            asset_cache_dir: std::env::temp_dir().join("rusticdoc-stored-assets"),
             store_sync_interval: Duration::from_secs(30),
             api_key: None,
             job_ttl: Duration::from_secs(3600),
@@ -382,6 +396,9 @@ impl Config {
         if let Some(v) = get("FONTS_DIR") {
             c.fonts_dir = PathBuf::from(v);
         }
+        if let Some(v) = get("ASSETS_DIR") {
+            c.assets_dir = PathBuf::from(v);
+        }
         c.store = get("STORE");
         if let Some(v) = get("MAX_TEMPLATE_BYTES") {
             match parse_bytes(&v) {
@@ -433,6 +450,25 @@ impl Config {
         }
         if let Some(v) = get("FONT_CACHE_DIR") {
             c.font_cache_dir = PathBuf::from(v);
+        }
+        if let Some(v) = get("MAX_STORED_ASSETS") {
+            match v.parse::<usize>() {
+                Ok(n) if n > 0 => c.max_stored_assets = n,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_STORED_ASSETS: bad count '{v}'")),
+            }
+        }
+        if let Some(v) = get("MAX_ASSET_STORAGE") {
+            match parse_bytes(&v) {
+                Some(n) if n > 0 => c.max_asset_storage = n as u64,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_ASSET_STORAGE: bad size '{v}'")),
+            }
+        }
+        if let Some(v) = get("ASSET_CACHE_DIR") {
+            c.asset_cache_dir = PathBuf::from(v);
         }
         if let Some(v) = get("STORE_SYNC_INTERVAL") {
             match parse_duration(&v) {
@@ -640,6 +676,15 @@ impl Config {
             _ => return Err("RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT go together".into()),
         };
         crate::pdfops::sign::Signing::load(default, &self.signing)
+    }
+
+    /// Where templates and pages find the assets they name: the mounted
+    /// directory, then the copy of the stored ones when there is a store.
+    pub fn asset_dirs(&self) -> rusticdoc_template::assets::AssetDirs {
+        rusticdoc_template::assets::AssetDirs {
+            mounted: Some(self.assets_dir.clone()),
+            stored: self.store.as_ref().map(|_| self.asset_cache_dir.clone()),
+        }
     }
 
     /// Settings the service refuses to start with.

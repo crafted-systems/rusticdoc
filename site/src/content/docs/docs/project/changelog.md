@@ -11,6 +11,12 @@ rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. 
 
 ## Unreleased
 
+Images and stylesheets can be [assets](/docs/guides/assets/) the service holds, so a logo no longer has to travel with every request.
+
+- Mount a directory at `/assets`, or wherever `RUSTICDOC_ASSETS_DIR` points. Changes in it need no reload.
+- Upload one file or a ZIP to `POST /v1/assets` when there's a store, and list, download and delete with `GET` and `DELETE`. Every replica gets a copy, `/ready` waits for it, and `RUSTICDOC_MAX_STORED_ASSETS`, `RUSTICDOC_MAX_ASSET_STORAGE` and `RUSTICDOC_ASSET_CACHE_DIR` bound and place it.
+- HTML pages name an asset in `src`, `url()` or `<link rel="stylesheet">`, and Office templates with `{{ asset("logo.png") | image }}` or `barcode`'s `logo`.
+
 Barcodes are drawn as SVG, with the PNG they used to be beside it. Office and LibreOffice draw the SVG, so codes stay sharp when printed large and LibreOffice's PDF has them as vectors. A DOCX, XLSX or PPTX now holds `richN.svg` next to each barcode's `richN.png`.
 
 - QR codes take [styles](/docs/templates/rich-content/#qr-code-styles): `style` (`square`, `dots`, `rounded`), `module_scale`, `eye` and `eye_center` shapes, `eye_color`, `eye_center_color` and linear or radial `gradient`s.

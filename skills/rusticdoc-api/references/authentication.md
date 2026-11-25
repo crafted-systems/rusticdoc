@@ -27,7 +27,7 @@ curl -H "Authorization: Bearer $KEY" -F files=@report.docx \
 
 `Bearer` needs its capital letter, and `bearer` gets a `401`. If a request has both headers, the service tries the `Authorization` one. The key is the only credential, so basic auth and tokens from an identity provider get a `401`.
 
-The key can use every route, including uploading and deleting [fonts](fonts.md#who-can-change-fonts).
+The key can use every route, including uploading and deleting [fonts](fonts.md#who-can-change-fonts) and [assets](assets.md#who-can-change-assets).
 
 Nothing else depends on the key. Stored templates, aliases, background jobs and the [webhook signing key](webhooks.md#the-signing-key) all stay as they are when you replace it.
 

@@ -853,12 +853,13 @@ mod tests {
             "{{ row('a', amount) }}",
             "{{ range(3) }}",
             "{{ 'text' ~ suffix }}",
+            "{{ asset(brand ~ '.png') | image }}",
             "{{ when | date(format='short') }}",
             "{% if vip is defined %}",
         ]);
         let paths: Vec<&str> = found.iter().map(|(p, _)| p.as_str()).collect();
         for absent in [
-            "net", "first", "row", "label", "value", "range", "format", "defined", "short",
+            "net", "first", "row", "label", "value", "range", "format", "defined", "short", "asset",
         ] {
             assert!(!paths.contains(&absent), "{absent} in {paths:?}");
         }
@@ -868,6 +869,7 @@ mod tests {
             "items[].name",
             "amount",
             "suffix",
+            "brand",
             "when",
             "vip",
         ] {

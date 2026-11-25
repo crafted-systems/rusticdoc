@@ -514,6 +514,7 @@ pub(crate) fn render_options(
         currency,
         translations,
         dictionary,
+        assets: state.assets.clone(),
     })
 }
 

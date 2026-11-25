@@ -1,4 +1,4 @@
-# Runs rusticdoc hardened, with a fonts directory mounted. From the project root:
+# Runs rusticdoc hardened, with fonts and assets directories mounted. From the project root:
 #   docker compose -f deploy/compose.yaml up -d --build
 name: rusticdoc
 
@@ -33,7 +33,7 @@ services:
       RUSTICDOC_LOG_LEVEL: ${RUSTICDOC_LOG_LEVEL:-info}
       RUSTICDOC_RENDER_MEMORY: ${RUSTICDOC_RENDER_MEMORY:-1GB}
       RUSTICDOC_RENDER_WORKERS: ${RUSTICDOC_RENDER_WORKERS:-4}
-      # Where uploaded templates and fonts live: s3://bucket/prefix with the AWS_*
+      # Where uploaded templates, fonts and assets live: s3://bucket/prefix with the AWS_*
       # variables below, or file:///data with a volume mounted there. Empty stores
       # nothing, and those routes answer 501.
       RUSTICDOC_STORE: ${RUSTICDOC_STORE:-}
@@ -45,6 +45,8 @@ services:
       AWS_SECRET_ACCESS_KEY:
     volumes:
       - ${RUSTICDOC_FONTS:-./fonts}:/fonts:ro
+      # Images and stylesheets templates name.
+      - ${RUSTICDOC_ASSETS:-./assets}:/assets:ro
     tmpfs:
       - /tmp:size=${RUSTICDOC_TMP_SIZE:-2g}
       - /home/rusticdoc:uid=1001,gid=1001,size=${RUSTICDOC_HOME_SIZE:-512m}

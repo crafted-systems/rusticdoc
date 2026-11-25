@@ -12,6 +12,7 @@ use image::{ImageEncoder, ImageFormat, ImageReader, Limits};
 use minijinja::value::{Value, ValueKind};
 use sha2::{Digest, Sha256};
 
+use crate::assets::Asset;
 use crate::rich::svg;
 
 /// The most bytes one image may hold.
@@ -122,8 +123,15 @@ fn side(object: &Value, key: &str) -> Result<Option<f64>, String> {
     Ok(Some(n))
 }
 
-/// Reads a data URI, raw base64, or a `{data, mime, width, height}` object.
+/// Reads a data URI, raw base64, a `{data, mime, width, height}` object, or
+/// what `asset` found.
 pub fn decode(value: &Value) -> Result<Input, String> {
+    if let Some(asset) = value.downcast_object_ref::<Asset>() {
+        return Ok(Input {
+            bytes: asset.read()?,
+            ..Input::default()
+        });
+    }
     if let Some(text) = value.as_str() {
         return from_text(text);
     }

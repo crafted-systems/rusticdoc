@@ -134,6 +134,15 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Where the command line finds assets: the mounted directory only, since the copy
+/// of the stored ones is a service's.
+pub fn asset_dirs(config: &Config) -> rusticdoc_template::assets::AssetDirs {
+    rusticdoc_template::assets::AssetDirs {
+        stored: None,
+        ..config.asset_dirs()
+    }
+}
+
 /// The template stage's language options, as the service builds them from
 /// `lang`, `translations` and `timezone`, with the dictionaries in
 /// `RUSTICDOC_TRANSLATIONS_DIR`.
@@ -170,6 +179,7 @@ pub fn render_options(
         timezone: timezone.map(str::to_string),
         translations,
         dictionary: dictionaries.for_lang(lang.as_deref()),
+        assets: asset_dirs(config),
         ..Default::default()
     })
 }

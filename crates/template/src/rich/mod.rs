@@ -1143,6 +1143,8 @@ pub fn add_filters(env: &mut Environment<'static>, mode: Mode) {
         }
         Mode::Check(format) | Mode::Render(format) => format,
     };
+    // With nowhere to look until a render says where.
+    crate::assets::add_function(env, &crate::assets::AssetDirs::default(), true);
     env.add_filter("image", image);
     env.add_filter("barcode", barcode_filter);
     env.add_filter("link", link);

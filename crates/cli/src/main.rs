@@ -441,6 +441,7 @@ fn pipeline(config: &Config) -> Pipeline {
     }
     Pipeline::new(std::sync::Arc::new(engines), config.api_timeout)
         .with_max_output(config.max_render_bytes)
+        .with_assets(translate::asset_dirs(config))
 }
 
 fn read_doc(path: &std::path::Path) -> anyhow::Result<Document> {

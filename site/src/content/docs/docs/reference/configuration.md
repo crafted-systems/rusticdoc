@@ -18,14 +18,14 @@ An empty variable counts as unset.
 
 A bad value doesn't always stop the service. These do stop it from starting, with a message that names the problem:
 
-- A bad value in `RUSTICDOC_STORE`, `RUSTICDOC_API_KEY`, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_JOB_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE` or `RUSTICDOC_STORE_SYNC_INTERVAL`.
+- A bad value in `RUSTICDOC_STORE`, `RUSTICDOC_API_KEY`, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_JOB_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE`, `RUSTICDOC_MAX_STORED_ASSETS`, `RUSTICDOC_MAX_ASSET_STORAGE` or `RUSTICDOC_STORE_SYNC_INTERVAL`.
 - A [removed setting](#removed-settings).
 - A `RUSTICDOC_PDF_ENGINES_*` list that names an unknown engine.
 - An invalid regular expression in an allow or deny list.
 
 Any other number, size or duration that the service can't parse is ignored without a warning, and the default stays in place. `RUSTICDOC_RENDER_MEMORY=2g`, for example, leaves the limit at 1 GiB.
 
-The image sets `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN`, `RUSTICDOC_PDFCPU_BIN`, `RUSTICDOC_FONTS_DIR` and `RUSTICDOC_LOG_FORMAT` for you, along with `TZ=UTC`, `LANG=C.UTF-8` and `LC_ALL=C.UTF-8`.
+The image sets `RUSTICDOC_LIBREOFFICE_BIN`, `RUSTICDOC_QPDF_BIN`, `RUSTICDOC_PDFCPU_BIN`, `RUSTICDOC_FONTS_DIR`, `RUSTICDOC_ASSETS_DIR` and `RUSTICDOC_LOG_FORMAT` for you, along with `TZ=UTC`, `LANG=C.UTF-8` and `LC_ALL=C.UTF-8`.
 
 [`deploy/compose.yaml`](https://github.com/crafted-systems/rusticdoc/blob/main/deploy/compose.yaml) has variables of its own that shape the container. They're listed under [Docker](/docs/operate/docker/).
 
@@ -112,6 +112,7 @@ See [sizing](/docs/operate/sizing/) for how these add up.
 | `RUSTICDOC_PDFCPU_BIN` | The first of `/usr/bin/pdfcpu`, `/opt/homebrew/bin/pdfcpu`, `/usr/local/bin/pdfcpu` | Path to pdfcpu. `none` disables it |
 | `RUSTICDOC_PDFTOPPM_BIN` | The first of `/usr/bin/pdftoppm`, `/opt/homebrew/bin/pdftoppm`, `/usr/local/bin/pdftoppm` | Path to poppler's pdftoppm, which draws template previews. `none` disables previews |
 | `RUSTICDOC_FONTS_DIR` | `/fonts` | Mounted fonts, which LibreOffice picks up |
+| `RUSTICDOC_ASSETS_DIR` | `/assets` | Mounted images and stylesheets that templates and HTML pages name. It need not exist, and changes in it need no reload. See [assets](/docs/guides/assets/) |
 
 The service doesn't search your `PATH` for engines.
 
@@ -141,16 +142,19 @@ Each of these takes a comma-separated list from `lopdf`, `qpdf`, `pdfcpu` and `q
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RUSTICDOC_STORE` | None | Where stored templates and uploaded fonts live, as `s3://bucket/prefix` or `file:///path`. Without one, those routes return `501`. See [many containers](/docs/operate/many-containers/) |
+| `RUSTICDOC_STORE` | None | Where stored templates and uploaded fonts and assets live, as `s3://bucket/prefix` or `file:///path`. Without one, those routes return `501`. See [many containers](/docs/operate/many-containers/) |
 | `RUSTICDOC_MAX_TEMPLATE_BYTES` | `50MB` | Largest template that can be stored |
 | `RUSTICDOC_MAX_TEMPLATES` | `10000` | Maximum number of templates in one scope. Aliases have the same limit, counted separately. Replicas that store at the same moment can go over it by whatever is in flight |
 | `RUSTICDOC_MAX_TEMPLATE_STORAGE` | `5GB` | Maximum bytes of templates in one scope, with the same caveat |
 | `RUSTICDOC_MAX_STORED_FONTS` | `2000` | Maximum number of fonts in the store |
 | `RUSTICDOC_MAX_FONT_STORAGE` | `1GB` | Maximum bytes of fonts in the store. Every replica copies them all to disk |
 | `RUSTICDOC_FONT_CACHE_DIR` | `rusticdoc-stored-fonts` in the temp directory | This replica's copy of the stored fonts. It's local, and it's rebuilt when the replica starts |
+| `RUSTICDOC_MAX_STORED_ASSETS` | `2000` | Maximum number of assets in the store |
+| `RUSTICDOC_MAX_ASSET_STORAGE` | `1GB` | Maximum bytes of assets in the store. Every replica copies them all to disk |
+| `RUSTICDOC_ASSET_CACHE_DIR` | `rusticdoc-stored-assets` in the temp directory | This replica's copy of the stored assets, rebuilt when the replica starts. It has to belong to the service's user, and no one else may write to it |
 | `RUSTICDOC_JOB_TTL` | `1h` | How long a background job and its result are kept after it ends. Every replica removes expired jobs from the store |
 | `RUSTICDOC_MAX_JOB_STORAGE` | `5GB` | Maximum bytes of background-job results in one scope at a time. A job whose result would go past it fails with `quota_exceeded`. Replicas storing at the same moment can go over by whatever is in flight |
-| `RUSTICDOC_STORE_SYNC_INTERVAL` | `30s` | How often a replica looks for fonts added or deleted elsewhere |
+| `RUSTICDOC_STORE_SYNC_INTERVAL` | `30s` | How often a replica looks for fonts and assets added, replaced or deleted elsewhere |
 
 ## S3 credentials and endpoint
 

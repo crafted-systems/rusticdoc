@@ -77,6 +77,7 @@ async fn status(state: &AppState) -> Health {
     if let Some(store) = &state.store {
         details["store"] = serde_json::json!({
             "fontsSynced": state.fonts_synced.load(Ordering::Acquire),
+            "assetsSynced": state.assets_synced.load(Ordering::Acquire),
             "location": store.description(),
         });
     }
@@ -93,12 +94,15 @@ async fn status(state: &AppState) -> Health {
 
 /// Readiness
 ///
-/// Readiness: liveness, and with a store, this replica's copy of the stored fonts
-/// being complete. A load balancer should send no documents here before that,
-/// because they would quietly come out in a fallback font.
+/// Readiness: liveness, and with a store, this replica's copies of the stored
+/// fonts and assets being complete. A load balancer should send no documents here
+/// before that, because they would quietly come out in a fallback font or without
+/// their images.
 #[utoipa::path(get, path = "/ready", tag = "service", responses((status = 200, description = "Service status", body = Health)))]
 pub async fn ready(state: State<AppState>, headers: HeaderMap) -> Response {
-    if state.store.is_some() && !state.fonts_synced.load(Ordering::Acquire) {
+    let synced =
+        state.fonts_synced.load(Ordering::Acquire) && state.assets_synced.load(Ordering::Acquire);
+    if state.store.is_some() && !synced {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "status": "syncing" })),
