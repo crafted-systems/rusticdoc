@@ -12,8 +12,8 @@ use crate::rich::pkg::{
     REL_WORKSHEET,
 };
 use crate::rich::{
-    docx::framed_crop, emu, ensure_ns, esc, has_mark, html, insert_ordered, max_id, misplaced,
-    placeholder, segments, text_node, Rich, Scope, Seg,
+    descr, docx::framed_crop, emu, ensure_ns, esc, has_mark, html, insert_ordered, max_id,
+    misplaced, placeholder, segments, text_node, Rich, Scope, Seg,
 };
 use crate::sheet::{col_to_num, split_ref};
 use crate::xml::{self, Elem, Node};
@@ -586,7 +586,7 @@ fn place_all(
                 let blip = placeholder::blip(pkg, &drawing, "xl/media", &p.media)?;
                 let blip = format!("{blip}{}", framed_crop(p));
                 let (cx, cy) = (emu(p.width_pt), emu(p.height_pt));
-                (pic_xml(id, &blip, cx, cy), cx, cy)
+                (pic_xml(id, &blip, &descr(p), cx, cy), cx, cy)
             }
             Rich::Chart(chart) => {
                 let xml = book.chart_xml(pkg, chart);
@@ -611,9 +611,9 @@ fn place_all(
     Ok(())
 }
 
-fn pic_xml(id: u64, blip: &str, cx: i64, cy: i64) -> String {
+fn pic_xml(id: u64, blip: &str, descr: &str, cx: i64, cy: i64) -> String {
     format!(
-        "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {id}\"/><xdr:cNvPicPr>\
+        "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {id}\"{descr}/><xdr:cNvPicPr>\
          <a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill>\
          {blip}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>\
          <a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>\

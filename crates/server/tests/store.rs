@@ -1,4 +1,4 @@
-//! Stored templates and fonts over the router, with a store in a temporary
+//! Stored templates, fonts and assets over the router, with a store in a temporary
 //! directory. Two `AppState`s on the same directory stand in for two replicas: they
 //! share nothing else, as containers would not.
 
@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use rusticdoc_core::Config;
-use rusticdoc_server::{AppState, app, fontsync};
+use rusticdoc_server::{AppState, app, assetsync, fontsync};
 use tower::ServiceExt;
 
 const BOUNDARY: &str = "rusticdoc-store-boundary";
@@ -27,6 +27,8 @@ fn replica(store: &tempfile::TempDir, cache: &tempfile::TempDir) -> Config {
         store: Some(format!("file://{}", store.path().display())),
         fonts_dir: cache.path().join("mounted"),
         font_cache_dir: cache.path().join("copy"),
+        assets_dir: cache.path().join("mounted-assets"),
+        asset_cache_dir: cache.path().join("asset-copy"),
         store_sync_interval: Duration::from_secs(3600),
         ..Config::default()
     }
@@ -990,7 +992,7 @@ async fn the_font_quota_holds() {
 }
 
 #[tokio::test]
-async fn a_replica_is_not_ready_until_its_fonts_are_in_hand() {
+async fn a_replica_is_not_ready_until_its_fonts_and_assets_are_in_hand() {
     let pair = two_replicas(|_| {});
     assert_eq!(
         status(&pair.a, call("GET", "/ready", None)).await,
@@ -1001,6 +1003,11 @@ async fn a_replica_is_not_ready_until_its_fonts_are_in_hand() {
         StatusCode::OK
     );
     fontsync::run_once(&pair.state_a).await.unwrap();
+    assert_eq!(
+        status(&pair.a, call("GET", "/ready", None)).await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assetsync::run_once(&pair.state_a).await.unwrap();
     assert_eq!(
         status(&pair.a, call("GET", "/ready", None)).await,
         StatusCode::OK
@@ -1033,6 +1040,7 @@ async fn a_corrupt_font_is_left_out_and_the_rest_still_arrive() {
     )
     .unwrap();
 
+    assetsync::run_once(&pair.state_b).await.unwrap();
     fontsync::run_once(&pair.state_b).await.unwrap();
     let families = font_families(&pair.b).await;
     assert!(families.contains(&"Good".to_string()), "{families:?}");
@@ -2083,4 +2091,371 @@ async fn health_says_where_the_store_is_to_a_caller_with_a_key() {
     let seen = store_of(Some("alice-key")).await;
     assert_eq!(seen["fontsSynced"], false);
     assert!(seen["location"].as_str().unwrap().starts_with("file://"));
+}
+
+/// A 1x1 PNG.
+const DOT: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+async fn asset_names(router: &Router) -> Vec<(String, bool)> {
+    let res = router
+        .clone()
+        .oneshot(call("GET", "/v1/assets", None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    json(res)
+        .await
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["name"].as_str().unwrap().to_string(),
+                a["mounted"].as_bool().unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// What a text template that names an asset renders to, or its status.
+async fn rendered(router: &Router, name: &str) -> Result<String, StatusCode> {
+    let template = format!("{{{{ asset('{name}') }}}}");
+    let parts: &[Part<'_>] = &[("template", Some("t.html"), template.as_bytes())];
+    let res = router
+        .clone()
+        .oneshot(post("/v1/render", parts))
+        .await
+        .unwrap();
+    match res.status() {
+        StatusCode::OK => Ok(String::from_utf8(bytes(res).await).unwrap()),
+        status => Err(status),
+    }
+}
+
+fn pdf_has_image(pdf: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(pdf);
+    text.contains("/Subtype /Image") || text.contains("/Subtype/Image")
+}
+
+async fn page_has_image(router: &Router, src: &str) -> bool {
+    let html = format!("<img src=\"{src}\" width=\"40\" height=\"40\">");
+    let parts: &[Part<'_>] = &[("files", Some("p.html"), html.as_bytes())];
+    let res = router
+        .clone()
+        .oneshot(post("/v1/convert", parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    pdf_has_image(&bytes(res).await)
+}
+
+#[tokio::test]
+async fn a_zip_of_assets_reaches_the_other_replica_and_its_documents_and_leaves_with_a_delete() {
+    let pair = two_replicas(|_| {});
+    let zip = zip_of(&[
+        ("brand/logo.png", DOT),
+        ("page.css", b"p { color: red }"),
+        ("LICENSE.txt", b"terms"),
+        ("__MACOSX/._page.css", b"junk"),
+    ]);
+    let parts: &[Part<'_>] = &[("file", Some("pack.zip"), &zip)];
+    let res = pair
+        .a
+        .clone()
+        .oneshot(post("/v1/assets", parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let stored = json(res).await;
+    assert_eq!(stored["assets"][0]["name"], "brand/logo.png");
+    assert_eq!(stored["assets"][0]["type"], "image");
+    assert_eq!(stored["assets"][1]["type"], "stylesheet");
+    assert_eq!(stored["skipped"][0]["file"], "LICENSE.txt");
+    assert_eq!(stored["syncIntervalSeconds"], 3600);
+
+    // In use where it was uploaded, and not yet where it has not synced, though
+    // every replica lists and serves it.
+    assert!(page_has_image(&pair.a, "brand/logo.png").await);
+    assert!(!page_has_image(&pair.b, "brand/logo.png").await);
+    assert_eq!(
+        rendered(&pair.b, "brand/logo.png").await,
+        Err(StatusCode::UNPROCESSABLE_ENTITY)
+    );
+    assert_eq!(asset_names(&pair.b).await.len(), 2);
+    assetsync::run_once(&pair.state_b).await.unwrap();
+    assert!(page_has_image(&pair.b, "brand/logo.png").await);
+    assert_eq!(
+        rendered(&pair.b, "brand/logo.png").await.as_deref(),
+        Ok("brand/logo.png")
+    );
+    // Filled and laid out in one request, with a name from the data.
+    let parts: &[Part<'_>] = &[
+        (
+            "template",
+            Some("t.html"),
+            b"<img src=\"{{ logo }}\" width=\"40\" height=\"40\">",
+        ),
+        ("data", None, br#"{"logo":"brand/logo.png"}"#),
+        ("steps", None, b"convert"),
+    ];
+    let res = pair
+        .b
+        .clone()
+        .oneshot(post("/v1/render", parts))
+        .await
+        .unwrap();
+    assert!(pdf_has_image(&bytes(res).await));
+
+    // Its folder may be written as it is or percent-encoded.
+    for path in ["/v1/assets/brand/logo.png", "/v1/assets/brand%2Flogo.png"] {
+        let res = pair
+            .b
+            .clone()
+            .oneshot(call("GET", path, None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"logo.png\""
+        );
+        assert_eq!(
+            res.headers()[header::CONTENT_TYPE],
+            "application/octet-stream"
+        );
+        assert_eq!(bytes(res).await, DOT);
+    }
+
+    let delete = || call("DELETE", "/v1/assets/brand/logo.png", None);
+    assert_eq!(status(&pair.b, delete()).await, StatusCode::NO_CONTENT);
+    assert!(!page_has_image(&pair.b, "brand/logo.png").await);
+    assert!(page_has_image(&pair.a, "brand/logo.png").await);
+    assetsync::run_once(&pair.state_a).await.unwrap();
+    assert!(!page_has_image(&pair.a, "brand/logo.png").await);
+    assert_eq!(
+        asset_names(&pair.a).await,
+        [("page.css".to_string(), false)]
+    );
+    assert_eq!(status(&pair.b, delete()).await, StatusCode::NOT_FOUND);
+    assert_eq!(
+        status(&pair.b, call("GET", "/v1/assets/brand/logo.png", None)).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn an_asset_stored_again_replaces_the_old_one_on_every_replica() {
+    let pair = two_replicas(|_| {});
+    let store = |css: &'static [u8]| {
+        let parts: &[Part<'_>] = &[
+            ("file", Some("upload.css"), css),
+            ("name", None, b"brand/page.css"),
+        ];
+        status(&pair.a, post("/v1/assets", parts))
+    };
+    let width = |router: Router| async move {
+        let html = b"<link rel=\"stylesheet\" href=\"brand/page.css\"><p>x</p>";
+        let parts: &[Part<'_>] = &[("files", Some("p.html"), html)];
+        let res = router.oneshot(post("/v1/convert", parts)).await.unwrap();
+        let pdf = String::from_utf8_lossy(&bytes(res).await).into_owned();
+        let at = pdf.find("/MediaBox").unwrap();
+        pdf[at..at + 40].contains("300")
+    };
+    assert_eq!(
+        store(b"@page { size: 200pt 400pt }").await,
+        StatusCode::CREATED
+    );
+    assetsync::run_once(&pair.state_b).await.unwrap();
+    assert!(!width(pair.b.clone()).await);
+    assert_eq!(
+        store(b"@page { size: 300pt 400pt }").await,
+        StatusCode::CREATED
+    );
+    assert!(width(pair.a.clone()).await);
+    assert!(!width(pair.b.clone()).await);
+    assetsync::run_once(&pair.state_b).await.unwrap();
+    assert!(width(pair.b.clone()).await);
+    assert_eq!(asset_names(&pair.a).await.len(), 1);
+}
+
+#[tokio::test]
+async fn mounted_assets_need_no_store_and_no_reload_and_win_over_stored_ones() {
+    let pair = two_replicas(|_| {});
+    let mount = pair.state_a.config.assets_dir.clone();
+    std::fs::create_dir_all(mount.join("brand")).unwrap();
+    std::fs::write(mount.join("brand/logo.png"), DOT).unwrap();
+    std::fs::write(mount.join("notes.txt"), "not an asset").unwrap();
+    assert_eq!(
+        asset_names(&pair.a).await,
+        [("brand/logo.png".to_string(), true)]
+    );
+    assert!(page_has_image(&pair.a, "brand/logo.png").await);
+
+    // The name is taken here, so an upload that could never be used is refused.
+    let parts: &[Part<'_>] = &[
+        ("file", Some("logo.png"), DOT),
+        ("name", None, b"brand/logo.png"),
+    ];
+    let res = pair
+        .a
+        .clone()
+        .oneshot(post("/v1/assets", parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(json(res).await["error"], "asset_mounted");
+    assert_eq!(
+        status(&pair.a, call("DELETE", "/v1/assets/brand/logo.png", None)).await,
+        StatusCode::NOT_FOUND
+    );
+    // A replica without the mount stores it, and then both are listed.
+    assert_eq!(
+        status(&pair.b, post("/v1/assets", parts)).await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        asset_names(&pair.a).await,
+        [
+            ("brand/logo.png".to_string(), true),
+            ("brand/logo.png".to_string(), false)
+        ]
+    );
+    std::fs::remove_file(mount.join("brand/logo.png")).unwrap();
+    assert!(!page_has_image(&pair.a, "brand/logo.png").await);
+}
+
+#[tokio::test]
+async fn without_a_store_mounted_assets_work_and_uploads_are_501() {
+    let mount = tempfile::tempdir().unwrap();
+    std::fs::write(mount.path().join("logo.png"), DOT).unwrap();
+    let router = app(AppState::new(Config {
+        libreoffice_bin: None,
+        assets_dir: mount.path().to_path_buf(),
+        ..Config::default()
+    }));
+    assert!(page_has_image(&router, "logo.png").await);
+    assert_eq!(
+        rendered(&router, "logo.png").await.as_deref(),
+        Ok("logo.png")
+    );
+    assert_eq!(
+        status(&router, call("GET", "/v1/assets/logo.png", None)).await,
+        StatusCode::OK
+    );
+    for name in ["gone.png", "..%2Fsecret.png", "%2Fetc%2Fpasswd"] {
+        assert_eq!(
+            status(&router, call("GET", &format!("/v1/assets/{name}"), None)).await,
+            StatusCode::NOT_FOUND,
+            "{name}"
+        );
+    }
+    let parts: &[Part<'_>] = &[("file", Some("a.png"), DOT)];
+    assert_eq!(
+        status(&router, post("/v1/assets", parts)).await,
+        StatusCode::NOT_IMPLEMENTED
+    );
+    assert_eq!(
+        status(&router, call("DELETE", "/v1/assets/logo.png", None)).await,
+        StatusCode::NOT_IMPLEMENTED
+    );
+    // No such directory is no assets.
+    let router = app(AppState::new(Config {
+        libreoffice_bin: None,
+        assets_dir: mount.path().join("missing"),
+        ..Config::default()
+    }));
+    assert!(asset_names(&router).await.is_empty());
+}
+
+#[tokio::test]
+async fn bad_asset_uploads_are_refused_and_store_nothing() {
+    let pair = two_replicas(|c| {
+        c.max_stored_assets = 2;
+        c.max_asset_storage = 200;
+    });
+    let zip = zip_of(&[("a.css", b"p {}"), ("bad.png", b"not a png")]);
+    let cases: &[&[Part<'_>]] = &[
+        &[],
+        &[("file", Some("script.js"), b"alert(1)")],
+        &[("file", Some("logo.png"), b"<svg/>")],
+        &[("file", Some("pack.zip"), &zip)],
+        &[("file", Some("a.css"), b""), ("name", None, b"../a.css")],
+        &[("file", Some("a.css"), b""), ("file", Some("b.css"), b"")],
+    ];
+    for parts in cases {
+        assert_eq!(
+            status(&pair.a, post("/v1/assets", parts)).await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert!(asset_names(&pair.a).await.is_empty());
+
+    let upload = |name: &'static str, css: Vec<u8>| {
+        let router = pair.a.clone();
+        async move {
+            let parts: &[Part<'_>] = &[("file", Some(name), &css)];
+            status(&router, post("/v1/assets", parts)).await
+        }
+    };
+    assert_eq!(upload("a.css", vec![b' '; 150]).await, StatusCode::CREATED);
+    assert_eq!(upload("b.css", vec![b' '; 51]).await, StatusCode::FORBIDDEN);
+    // A replacement counts once.
+    assert_eq!(upload("a.css", vec![b' '; 190]).await, StatusCode::CREATED);
+    assert_eq!(upload("b.css", vec![b' '; 5]).await, StatusCode::CREATED);
+    assert_eq!(upload("c.css", vec![]).await, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn assets_need_the_key() {
+    let pair = two_replicas(|c| c.api_key = Some("key".into()));
+    let parts: &[Part<'_>] = &[("file", Some("a.css"), b"")];
+    for req in [
+        post("/v1/assets", parts),
+        call("GET", "/v1/assets", None),
+        call("GET", "/v1/assets/a.css", None),
+        call("DELETE", "/v1/assets/a.css", None),
+    ] {
+        assert_eq!(status(&pair.a, req).await, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(
+        status(&pair.a, post_as("/v1/assets", parts, Some("key"))).await,
+        StatusCode::CREATED
+    );
+}
+
+#[tokio::test]
+async fn a_corrupt_asset_is_left_out_and_an_asset_sync_touches_only_what_it_wrote() {
+    let pair = two_replicas(|_| {});
+    for name in ["good.png", "bad.png"] {
+        let parts: &[Part<'_>] = &[("file", Some(name), DOT)];
+        assert_eq!(
+            status(&pair.a, post("/v1/assets", parts)).await,
+            StatusCode::CREATED
+        );
+    }
+    std::fs::write(pair.store.path().join("assets/bad.png"), b"forged").unwrap();
+    std::fs::write(pair.store.path().join("assets/notes.txt"), b"stray").unwrap();
+    let copy = pair.state_b.config.asset_cache_dir.clone();
+    let theirs = copy.join("someone-elses.png");
+    std::fs::write(&theirs, b"keep me").unwrap();
+    assetsync::run_once(&pair.state_b).await.unwrap();
+    assert!(theirs.exists());
+    assert!(page_has_image(&pair.b, "good.png").await);
+    assert!(rendered(&pair.b, "bad.png").await.is_err());
+    // Nothing changed, so nothing is fetched again but the one left out.
+    let written = |dir: &std::path::Path| -> Vec<_> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().metadata().unwrap().modified().unwrap())
+            .collect()
+    };
+    let before = written(&copy);
+    assetsync::run_once(&pair.state_b).await.unwrap();
+    assert_eq!(written(&copy), before);
 }

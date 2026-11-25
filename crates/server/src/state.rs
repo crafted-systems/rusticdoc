@@ -31,6 +31,13 @@ pub struct AppState {
     /// what `/ready` waits for: documents rendered before it would silently use
     /// a fallback font.
     pub fonts_synced: Arc<std::sync::atomic::AtomicBool>,
+    /// Where templates and pages find the assets they name.
+    pub assets: rusticdoc_core::assets::AssetDirs,
+    /// True once this replica's copy of the stored assets is complete, which
+    /// `/ready` waits for too: without it documents would lack their logos.
+    pub assets_synced: Arc<std::sync::atomic::AtomicBool>,
+    /// One asset upload at a time, for the same reason as fonts.
+    pub asset_uploads: Arc<tokio::sync::Semaphore>,
     /// One font upload at a time: unpacking holds a whole package in memory.
     pub font_uploads: Arc<tokio::sync::Semaphore>,
     /// The translation dictionaries in `RUSTICDOC_TRANSLATIONS_DIR`.
@@ -71,9 +78,17 @@ impl AppState {
                 renderer
             }
         };
+        let mut assets = config.asset_dirs();
+        if let Some(dir) = &assets.stored
+            && let Err(e) = rusticdoc_core::store::prepare_asset_copy(dir)
+        {
+            tracing::error!(dir = %dir.display(), error = %e, "stored assets are not used");
+            assets.stored = None;
+        }
         let pipeline = Pipeline::new(engines.clone(), config.api_timeout)
             .with_max_output(config.max_render_bytes)
-            .with_renderer(renderer);
+            .with_renderer(renderer)
+            .with_assets(assets.clone());
         Self {
             url_policies: crate::webhook::UrlPolicies::from_config(&config)
                 .expect("patterns are checked before the service starts"),
@@ -86,6 +101,9 @@ impl AppState {
                 )
             }),
             fonts_synced: Default::default(),
+            assets,
+            assets_synced: Default::default(),
+            asset_uploads: Arc::new(tokio::sync::Semaphore::new(1)),
             font_uploads: Arc::new(tokio::sync::Semaphore::new(1)),
             dictionaries: Arc::new(
                 rusticdoc_core::dictionaries::Dictionaries::open(config.translations_dir.clone())

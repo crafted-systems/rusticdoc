@@ -5,6 +5,7 @@
 //! signature; `/openapi.json` describes the API for SDK generation.
 
 pub mod admission;
+pub mod assetsync;
 pub mod auth;
 pub mod error;
 pub mod fontsync;
@@ -189,7 +190,7 @@ pub fn startup_warnings(config: &rusticdoc_core::Config) -> Vec<String> {
     }
     if config.store.is_some() && !config.auth_configured() {
         warnings.push(
-            "RUSTICDOC_STORE is set and no credentials are, so anyone who can reach this service can store, read and delete templates and fonts"
+            "RUSTICDOC_STORE is set and no credentials are, so anyone who can reach this service can store, read and delete templates, fonts and assets"
                 .to_string(),
         );
     }
@@ -249,6 +250,7 @@ pub async fn serve(state: AppState) -> std::io::Result<()> {
     let fonts_first = state.clone();
     if state.store.is_some() {
         fontsync::spawn(state.clone());
+        assetsync::spawn(state.clone());
         jobs::spawn_cleanup(state.clone());
     }
     if let Some(lo) = state.engines.libreoffice.clone() {

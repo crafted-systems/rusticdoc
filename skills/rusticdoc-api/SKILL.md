@@ -178,5 +178,6 @@ In code: set a client timeout longer than the service's (`RUSTICDOC_API_TIMEOUT`
 | `references/webhooks.md` | Webhook headers, retries, URL rules, signatures |
 | `references/authentication.md` | Keys, which routes stay open |
 | `references/fonts.md` | Fonts per request, stored fonts, finding missing ones |
+| `references/assets.md` | Mounting and uploading images and stylesheets templates name |
 | `references/errors.md` | Every error code |
 | `references/cli.md` | Every CLI command and option |

@@ -86,6 +86,20 @@ fonts_used() { # replica, template id
         "http://$(url "$1")/v1/render" | tr -d '\r' | grep -i '^x-fonts-used:'
 }
 
+# Whether a page that names an asset comes out with a picture, polled until it is
+# what is wanted.
+asset_drawn() { # replica, wanted (yes/no)
+    local got
+    for _ in $(seq 1 30); do
+        got=no
+        curl -s -m 60 -H 'x-api-key: alice-key' -F "files=@$WORK/page.html" \
+            "http://$(url "$1")/v1/convert" | grep -aq '/Subtype */Image' && got=yes
+        [ "$got" = "$2" ] && break
+        sleep 1
+    done
+    echo "$got"
+}
+
 # The scenario both kinds of store have to pass.
 exercise() {
     local a=$1 b=$2
@@ -125,10 +139,20 @@ exercise() {
     holds "and renders with it at once" "Probe" "$(fonts_used "$a" "$id")"
     check "the other replica picks it up unprompted" yes "$(font_listed "$b" yes)"
     holds "and renders with it" "Probe" "$(fonts_used "$b" "$id")"
+    echo " assets"
+    local assets
+    assets=http://$(url "$a")/v1/assets
+    check "no credential cannot upload assets" 401 "$(code -F "file=@$WORK/assets.zip" "$assets")"
+    out=$(curl -s -m 60 -H 'x-api-key: alice-key' -F "file=@$WORK/assets.zip" "$assets")
+    check "the key can, and the ZIP's folders are kept" brand/dot.png "$(echo "$out" | json "['assets'][0]['name']")"
+    check "the uploading replica draws it" yes "$(asset_drawn "$a" yes)"
+    check "the other replica picks it up unprompted" yes "$(asset_drawn "$b" yes)"
+
     # shellcheck disable=SC2086
     replica late ${REPLICA_ARGS:-}
     until_ready late
     holds "a replica started later has it from its first document" "Probe" "$(fonts_used late "$id")"
+    check "and the assets too" yes "$(asset_drawn late yes)"
     docker rm -f "$RUN-late" >/dev/null
 
     echo " deletes"
@@ -138,6 +162,8 @@ exercise() {
     check "no credential cannot delete a font" 401 "$(code -X DELETE "http://$(url "$a")/v1/fonts/$font")"
     check "the key can" 204 "$(code -X DELETE -H 'x-api-key: alice-key' "http://$(url "$a")/v1/fonts/$font")"
     check "the other replica drops it unprompted" no "$(font_listed "$b" no)"
+    check "the key can delete an asset" 204 "$(code -X DELETE -H 'x-api-key: alice-key' "$assets/brand/dot.png")"
+    check "the other replica stops drawing it" no "$(asset_drawn "$b" no)"
 }
 
 docker network create "$NET" >/dev/null
@@ -145,6 +171,15 @@ docker run --rm --entrypoint sh "$IMAGE" -c 'cat /usr/share/fonts/truetype/dejav
 docker run --rm -v "$WORK:/work" -v "$HERE:/script:ro" python:3.13-slim sh -c \
     'pip install -q --disable-pip-version-check --root-user-action=ignore fonttools && python /script/make_fixtures.py /work/source.ttf /work' \
     || { echo "could not make the fixtures"; exit 1; }
+
+python3 - "$WORK" <<'PY'
+import base64, sys, zipfile
+work = sys.argv[1]
+dot = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAMBAQAY3Y2wAAAAAElFTkSuQmCC")
+with zipfile.ZipFile(f"{work}/assets.zip", "w") as z:
+    z.writestr("brand/dot.png", dot)
+open(f"{work}/page.html", "w").write('<img src="brand/dot.png" width="40" height="40">')
+PY
 
 echo "== an S3-compatible bucket"
 docker volume create "$VOLUME-s3" >/dev/null

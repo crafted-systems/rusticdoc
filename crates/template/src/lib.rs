@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use minijinja::value::Value;
 use serde::{Deserialize, Serialize};
 
+pub mod assets;
 pub mod compute;
 pub mod filters;
 mod formats;
@@ -24,6 +25,7 @@ mod locale_data;
 mod package;
 mod program;
 mod properties;
+mod qrdata;
 mod rich;
 mod sanitize;
 mod sheet;
@@ -195,11 +197,15 @@ pub struct RenderOptions {
     /// template's own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dictionary: Translations,
+    /// Where `asset` finds the files a template names.
+    #[serde(default, skip_serializing_if = "assets::AssetDirs::is_empty")]
+    pub assets: assets::AssetDirs,
 }
 
 impl RenderOptions {
     /// True when nothing here changes how the template's filters behave, so
-    /// the environment compiled with the template serves as it is.
+    /// the environment compiled with the template serves as it is. A template
+    /// that names assets also needs them put in.
     pub fn is_plain(&self) -> bool {
         !self.undefined_as_empty
             && self.lang.is_none()
@@ -289,7 +295,9 @@ impl Compiled {
         data: &serde_json::Value,
         options: &RenderOptions,
     ) -> Result<Vec<u8>> {
-        let (rendered, table) = if options.is_plain() {
+        let plain = options.is_plain()
+            && (options.assets.is_empty() || !self.source.text.contains("asset"));
+        let (rendered, table) = if plain {
             self.render_text(&self.env, &self.source, data)?
         } else {
             let env = self.env_with(options);
@@ -308,6 +316,7 @@ impl Compiled {
         } else {
             filters::localize(&mut env, ctx);
         }
+        assets::add_function(&mut env, &options.assets, true);
         // `words` follows the request's language too.
         compute::add_filters(
             &mut env,
@@ -754,6 +763,7 @@ fn validate_within(
     let source = program::emit(&compiled.parts, &compiled.table, Mode::Probe);
     let mut env = format.environment(&compiled.settings);
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
+    assets::add_function(&mut env, &options.assets, true);
     // A filter that refuses undefined input would end the probe at the first
     // missing value, so these pass it on for `__probe` to record.
     env.add_filter(
@@ -910,6 +920,7 @@ pub fn add_filters(
     let ctx = filters::Context::new(settings, options);
     filters::add_document_filters(env, std::sync::Arc::new(ctx), options.undefined_as_empty);
     compute::add_filters(env, options.lang.as_deref().or(settings.lang.as_deref()));
+    assets::add_function(env, &options.assets, false);
 }
 
 /// The expression environment with working rich filters for this format, for

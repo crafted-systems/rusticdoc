@@ -17,6 +17,7 @@ docker run -d --name rusticdoc --restart unless-stopped \
   --tmpfs /tmp:size=2g --tmpfs /home/rusticdoc:uid=1001,gid=1001,size=512m \
   --env-file rusticdoc.env \
   -v "$PWD/fonts:/fonts:ro" \
+  -v "$PWD/assets:/assets:ro" \
   -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.2.0
 ```
 
@@ -29,6 +30,7 @@ docker run -d --name rusticdoc --restart unless-stopped \
 | `--tmpfs ...size=` | Temporary files live in memory and count against `--memory`, so writing 300 MB to `/tmp` raises the container's memory use by about 300 MiB |
 | `--env-file` | Keeps secrets out of your shell history and off the command line |
 | `-v .../fonts:/fonts:ro` | Lets you add fonts without a rebuild. See [fonts](/docs/guides/fonts/) |
+| `-v .../assets:/assets:ro` | Images and stylesheets that templates name. See [assets](/docs/guides/assets/) |
 
 Do not add `--init`. It puts a process at PID 1 whose environment, including your keys, can be read from inside the container. Without it, reading `/proc/1/environ` as the service's user gives `Permission denied`.
 
@@ -54,7 +56,7 @@ curl http://localhost:9027/health
 curl http://localhost:9027/ready
 ```
 
-`/health` tells you the service is responding. `/ready` also waits until the replica has its copy of the stored fonts, if there's a store. Once credentials are configured, a caller without them sees only the status. [Observability](/docs/operate/observability/) covers both routes, along with logs and metrics.
+`/health` tells you the service is responding. `/ready` also waits until the replica has its copies of the stored fonts and assets, if there's a store. Once credentials are configured, a caller without them sees only the status. [Observability](/docs/operate/observability/) covers both routes, along with logs and metrics.
 
 ## Compose
 
@@ -74,6 +76,7 @@ To run an image you already have, set `RUSTICDOC_IMAGE` and use `--no-build`. Th
 | `RUSTICDOC_MEM_LIMIT` | `6g` | `mem_limit` |
 | `RUSTICDOC_PIDS_LIMIT` | `512` | `pids_limit` |
 | `RUSTICDOC_FONTS` | `./fonts` | The fonts directory, relative to `deploy/compose.yaml` |
+| `RUSTICDOC_ASSETS` | `./assets` | The assets directory, relative to `deploy/compose.yaml` |
 | `RUSTICDOC_TMP_SIZE` | `2g` | The size of the `/tmp` tmpfs |
 | `RUSTICDOC_HOME_SIZE` | `512m` | The size of the home tmpfs |
 

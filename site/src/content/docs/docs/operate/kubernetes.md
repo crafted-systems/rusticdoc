@@ -64,7 +64,7 @@ The container's own context adds `allowPrivilegeEscalation: false` and `readOnly
 
 ### Environment
 
-`RUSTICDOC_STORE`, `AWS_REGION` and `RUSTICDOC_FONT_CACHE_DIR` are plain values. The credentials come from the secret: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `RUSTICDOC_API_KEY` and `RUSTICDOC_WEBHOOK_SECRET`.
+`RUSTICDOC_STORE`, `AWS_REGION`, `RUSTICDOC_FONT_CACHE_DIR` and `RUSTICDOC_ASSET_CACHE_DIR` are plain values. The credentials come from the secret: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `RUSTICDOC_API_KEY` and `RUSTICDOC_WEBHOOK_SECRET`.
 
 ### Probes
 
@@ -81,7 +81,7 @@ livenessProbe:
   timeoutSeconds: 6
 ```
 
-Both routes work without credentials, and then show only the status. `/ready` waits for this pod's copy of the stored fonts, so the pod isn't sent any documents before it has them, and it returns `503` for as long as a new pod can't reach the store. Keep liveness on `/health`, or a store outage would restart pods that haven't synced yet, for no benefit.
+Both routes work without credentials, and then show only the status. `/ready` waits for this pod's copies of the stored fonts and assets, so the pod isn't sent any documents before it has them, and it returns `503` for as long as a new pod can't reach the store. Keep liveness on `/health`, or a store outage would restart pods that haven't synced yet, for no benefit.
 
 ### Resources
 
@@ -103,11 +103,11 @@ volumes:
     emptyDir: { sizeLimit: 2Gi }
   - name: home
     emptyDir: { sizeLimit: 512Mi }
-  - name: font-copy
-    emptyDir: { sizeLimit: 2Gi }
+  - name: store-copy
+    emptyDir: { sizeLimit: 4Gi }
 ```
 
-All three belong to the pod and are mounted at `/tmp`, `/home/rusticdoc` and `/var/cache/rusticdoc`. Nothing in them has to survive the pod or be shared, and a new pod rebuilds its font copy from the bucket. The store's default limit on fonts, `RUSTICDOC_MAX_FONT_STORAGE`, is 1 GiB, so the 2 GiB `font-copy` volume holds it. If you raise that limit, raise the volume's too.
+All three belong to the pod and are mounted at `/tmp`, `/home/rusticdoc` and `/var/cache/rusticdoc`. Nothing in them has to survive the pod or be shared, and a new pod rebuilds its copies of the fonts and assets from the bucket. The store's default limits, `RUSTICDOC_MAX_FONT_STORAGE` and `RUSTICDOC_MAX_ASSET_STORAGE`, are 1 GiB each, so the 4 GiB `store-copy` volume holds both. If you raise a limit, raise the volume's too.
 
 ## The Service
 
@@ -121,5 +121,5 @@ This is a plain `ClusterIP` Service on port 9027, with no Ingress. The service s
 
 - `kubectl get pods` should show three ready pods.
 - Store a template through the Service and render it several times, so that more than one pod handles it. See [stored templates](/docs/guides/stored-templates/).
-- Upload a font, wait for `RUSTICDOC_STORE_SYNC_INTERVAL`, and list `/v1/fonts`.
+- Upload a font and an asset, wait for `RUSTICDOC_STORE_SYNC_INTERVAL`, then list `/v1/fonts` and render a template that names the asset, several times.
 - Watch memory while it handles your own documents, using [`/metrics`](/docs/operate/observability/) and your cluster's tools.

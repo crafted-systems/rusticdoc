@@ -473,6 +473,8 @@ fn barcodes_become_real_pngs_in_every_format() {
         let out = render(Format::Docx, &doc, json!({"v": value}));
         let png = bytes_of(&out, "word/media/rich1.png").unwrap();
         assert!(png.starts_with(b"\x89PNG"), "{kind}");
+        let svg = String::from_utf8(bytes_of(&out, "word/media/rich2.svg").unwrap()).unwrap();
+        assert!(svg.contains("width=\"100pt\""), "{kind}: {svg}");
         let xml = part(&out, "word/document.xml");
         assert!(xml.contains("<wp:extent cx=\"1270000\" "), "{kind}: {xml}");
     }
@@ -490,7 +492,10 @@ fn barcodes_become_real_pngs_in_every_format() {
     assert!(bytes_of(&out, "xl/media/rich1.png").is_some());
     let doc = odt("<text:p>{{ v | barcode(\"ean8\") }}</text:p>");
     let out = render(Format::Odt, &doc, json!({"v": "96385074"}));
-    assert!(bytes_of(&out, "Pictures/rich1.png").is_some());
+    // ODF frames list the SVG first and the PNG after it.
+    let svg = bytes_of(&out, "Pictures/rich1.svg").expect("an SVG");
+    assert!(svg.starts_with(b"<svg xmlns=\"http://www.w3.org/2000/svg\""));
+    assert!(bytes_of(&out, "Pictures/rich2.png").is_some());
 }
 
 #[test]
@@ -2213,8 +2218,10 @@ struct Case {
     chart: bool,
     /// Text that must show in the PDF, beyond what every format shows.
     text: &'static [&'static str],
-    /// The fewest images: logo, barcodes and the images of the rows.
+    /// The fewest images: the logo and the images of the rows.
     images: usize,
+    /// The barcodes that must scan, drawn as vectors.
+    codes: &'static [&'static str],
     pages: Option<u32>,
 }
 
@@ -2253,7 +2260,8 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
                 "sales",
                 "costs",
             ],
-            images: 5,
+            images: 3,
+            codes: &["SKU-42", "https://example.com/?a=1&b=2"],
             pages: Some(2),
         },
         Case {
@@ -2272,7 +2280,8 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
                 "sales",
                 "costs",
             ],
-            images: 5,
+            images: 3,
+            codes: &["SKU-42", "https://example.com/?a=1&b=2"],
             pages: Some(2),
         },
         Case {
@@ -2283,7 +2292,8 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
             text: &[
                 "Lamp", "Plug", "Keep", "Revenue", "January", "February", "sales", "costs",
             ],
-            images: 3,
+            images: 2,
+            codes: &["SKU-42"],
             pages: None,
         },
         Case {
@@ -2294,7 +2304,8 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
             text: &[
                 "Lamp", "Plug", "Keep", "Below", "Revenue", "January", "February", "sales", "costs",
             ],
-            images: 3,
+            images: 2,
+            codes: &["SKU-42"],
             pages: None,
         },
         Case {
@@ -2303,7 +2314,8 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
             format: Format::Pptx,
             chart: true,
             text: &["Revenue", "January", "February", "sales", "costs"],
-            images: 2,
+            images: 1,
+            codes: &["SKU-42"],
             pages: Some(1),
         },
         Case {
@@ -2312,7 +2324,8 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
             format: Format::Odp,
             chart: true,
             text: &["Revenue", "January", "February", "sales", "costs"],
-            images: 2,
+            images: 1,
+            codes: &["SKU-42"],
             pages: Some(1),
         },
     ];
@@ -2341,6 +2354,14 @@ fn libreoffice_opens_rich_output_and_shows_the_content() {
         assert!(!text.contains("{{"), "{}: {text}", case.file);
         let images = pdf_images(dir, &pdf);
         assert!(images.len() >= case.images, "{}: {images:?}", case.file);
+        let codes = pdf_barcodes(dir, &pdf);
+        for code in case.codes {
+            assert!(
+                codes.iter().any(|c| c == code),
+                "{}: {code:?} does not scan in {codes:?}",
+                case.file
+            );
+        }
         if let Some(pages) = case.pages {
             assert_eq!(pdf_pages(dir, &pdf), pages, "{}", case.file);
         }

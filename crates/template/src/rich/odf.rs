@@ -384,6 +384,27 @@ impl Odf<'_, '_> {
             )],
         );
         frame.set_attr("draw:style-name", &style);
+        if let Some(alt) = &picture.alt {
+            let desc = frame
+                .children
+                .iter()
+                .position(|n| matches!(n, Node::Elem(e) if e.name == "svg:desc"));
+            let empty = |e: &Elem| xml::to_xml(&e.children).trim().is_empty();
+            match desc {
+                Some(i) => {
+                    let replace = match &frame.children[i] {
+                        Node::Elem(e) => picture.alt_given || empty(e),
+                        _ => false,
+                    };
+                    if replace {
+                        frame.children[i] = Node::Raw(format!("<svg:desc>{}</svg:desc>", esc(alt)));
+                    }
+                }
+                None => frame
+                    .children
+                    .push(Node::Raw(format!("<svg:desc>{}</svg:desc>", esc(alt)))),
+            }
+        }
         if let Some(height) = placed.height {
             frame.set_attr("svg:height", &format!("{height:.2}pt"));
         }
@@ -892,7 +913,11 @@ impl Odf<'_, '_> {
             }
             _ => String::new(),
         };
-        Ok(self.frame_around(&style, &images, picture.width_pt, picture.height_pt))
+        let mut inner = images;
+        if let Some(alt) = &picture.alt {
+            inner.push_str(&format!("<svg:desc>{}</svg:desc>", esc(alt)));
+        }
+        Ok(self.frame_around(&style, &inner, picture.width_pt, picture.height_pt))
     }
 
     /// A chart is an embedded object of its own, framed like a picture at the

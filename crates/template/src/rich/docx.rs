@@ -8,8 +8,8 @@ use crate::rich::media::{self, Fit};
 use crate::rich::pkg::{Pkg, CHART_CT, OFFICE_RELS, REL_CHART, REL_HYPERLINK};
 use crate::rich::placeholder;
 use crate::rich::{
-    blank, emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments, serialize,
-    shell, text_node, Picture, Rich, Scope, Seg,
+    blank, descr, emu, ensure_ns, esc, has_mark, insert_ordered, max_id, misplaced, segments,
+    serialize, shell, text_node, Picture, Rich, Scope, Seg,
 };
 use crate::xml::{self, Elem, Node};
 use crate::TemplateError;
@@ -541,13 +541,14 @@ impl Docx<'_, '_> {
         let crop = framed_crop(picture);
         let (cx, cy) = (emu(picture.width_pt), emu(picture.height_pt));
         let id = self.doc_pr();
+        let descr = descr(picture);
         Ok(format!(
             "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">\
              <wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>\
-             <wp:docPr id=\"{id}\" name=\"Picture {id}\"/><wp:cNvGraphicFramePr>\
+             <wp:docPr id=\"{id}\" name=\"Picture {id}\"{descr}/><wp:cNvGraphicFramePr>\
              <a:graphicFrameLocks noChangeAspect=\"1\"/></wp:cNvGraphicFramePr><a:graphic>\
              <a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
-             <pic:pic><pic:nvPicPr><pic:cNvPr id=\"{id}\" name=\"Picture {id}\"/><pic:cNvPicPr/>\
+             <pic:pic><pic:nvPicPr><pic:cNvPr id=\"{id}\" name=\"Picture {id}\"{descr}/><pic:cNvPicPr/>\
              </pic:nvPicPr><pic:blipFill>{blip}{crop}<a:stretch><a:fillRect/>\
              </a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/>\
              <a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/>\

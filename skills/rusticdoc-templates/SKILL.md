@@ -73,7 +73,8 @@ Follow these steps in order. Don't render a template that hasn't validated.
 | Filter | Example |
 |---|---|
 | `image` | `{{ logo \| image(width=120) }}`. The value is base64, a data URL or `{"data": "…", "mime": "image/png"}`. **A URL is refused**: rusticdoc never fetches images |
-| `barcode` | `{{ sku \| barcode("code128") }}`, `{{ url \| barcode("qr", size=90) }}`. Also `ean13`, `ean8`, `upca`, `code39`, `code93`, `itf14`, `gs1-128`, `datamatrix`, `pdf417`, `aztec` and more |
+| `barcode` | `{{ sku \| barcode("code128") }}`, `{{ url \| barcode("qr", size=90) }}`. Also `ean13`, `ean8`, `upca`, `code39`, `code93`, `itf14`, `gs1-128`, `gs1-qr`, `swissqr`, `datamatrix`, `pdf417`, `aztec` and more. QR codes take `style="dots"` or `"rounded"`, `eye="circle"`, `color`, `gradient`, `logo` and `label`. Colours under 3:1 contrast are refused |
+| `qrdata` | `{{ net \| qrdata("wifi") \| barcode("qr") }}` builds checked QR text for `wifi`, `vcard`, `email`, `tel`, `sms`, `geo`, `event`, `epc` (SEPA), `swiss` and `gs1`. Plain text, so it works in every template |
 | `link` | `{{ url \| link("Pay now") }}` |
 | `color` | `{{ status \| color("#c00") }}`, `color(background="#eee")` |
 | `html` | `{{ body \| html }}`: a safe subset, native in DOCX and ODT, plain text elsewhere |
@@ -108,7 +109,7 @@ A template is an ordinary document with tags typed into its text. **Where a bloc
 ## 6. HTML templates
 
 - Write a whole page: `<!doctype html><html lang="en">`, a `<style>` block, and an `@page { size: A4; margin: 18mm; @bottom-center { content: "Page " counter(page) " of " counter(pages) } }` rule.
-- No JavaScript runs and nothing is fetched. A stylesheet, image or font goes in the same request as `assets` (`-F assets=@logo.png`), and the page refers to it by file name: `<img src="logo.png">`. A file the page names but wasn't sent shows nothing, with no error.
+- No JavaScript runs and nothing is fetched. A stylesheet, image or font goes in the same request as `assets` (`-F assets=@logo.png`), and the page refers to it by file name: `<img src="logo.png">`. A file can also be held by the service, mounted or uploaded, and named the same way (`references/assets.md`). A file the page names that was neither sent nor held shows nothing, with no error.
 - An image inside a flex row needs both `width` and `height`.
 - Use `break-inside: avoid` on table rows and `break-before: page` for new pages.
 - Values are escaped. A value used as a URL in `href` or `src`, or inside `<script>` or `<style>`, isn't made safe by escaping, so check it.
@@ -209,5 +210,6 @@ Read only what the task needs. The files are copies of the rusticdoc.com docs pa
 | `references/pdf-templates.md` | Filling PDF forms, tags in fields and annotations, flattening, overlays |
 | `references/translations.md` | `lang`, `t`, currencies, time zones, dictionaries |
 | `references/html.md` | Fulgur, assets, page layout and its limits |
+| `references/assets.md` | Images and stylesheets the service holds, and `asset()` in templates |
 | `references/batch.md` | One template rendered for each item of a list, returned as a ZIP |
 | `references/validate.md` | Validation results and what they find |

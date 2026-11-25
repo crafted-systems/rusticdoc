@@ -12,6 +12,7 @@ use image::{ImageEncoder, ImageFormat, ImageReader, Limits};
 use minijinja::value::{Value, ValueKind};
 use sha2::{Digest, Sha256};
 
+use crate::assets::Asset;
 use crate::rich::svg;
 
 /// The most bytes one image may hold.
@@ -122,8 +123,15 @@ fn side(object: &Value, key: &str) -> Result<Option<f64>, String> {
     Ok(Some(n))
 }
 
-/// Reads a data URI, raw base64, or a `{data, mime, width, height}` object.
+/// Reads a data URI, raw base64, a `{data, mime, width, height}` object, or
+/// what `asset` found.
 pub fn decode(value: &Value) -> Result<Input, String> {
+    if let Some(asset) = value.downcast_object_ref::<Asset>() {
+        return Ok(Input {
+            bytes: asset.read()?,
+            ..Input::default()
+        });
+    }
     if let Some(text) = value.as_str() {
         return from_text(text);
     }
@@ -333,6 +341,27 @@ fn from_svg(bytes: &[u8]) -> Result<Media, String> {
         physical_pt: pt,
         fallback: Some(Box::new(fallback)),
     })
+}
+
+/// A drawing made here, such as a barcode: the SVG as it is, since nothing
+/// outside wrote it, and a PNG of it for readers without SVG.
+pub fn vector(svg: String, physical_pt: (f64, f64), png: Media) -> Media {
+    let px = (
+        ((physical_pt.0 / PT_PER_PX).round() as u32).max(1),
+        ((physical_pt.1 / PT_PER_PX).round() as u32).max(1),
+    );
+    let fallback = Media { physical_pt, ..png };
+    let bytes = svg.into_bytes();
+    let hash = Sha256::digest(&bytes).into();
+    Media {
+        bytes,
+        ext: "svg",
+        mime: "image/svg+xml",
+        hash,
+        px,
+        physical_pt,
+        fallback: Some(Box::new(fallback)),
+    }
 }
 
 /// The printed size in points: as asked, keeping the aspect when one side is

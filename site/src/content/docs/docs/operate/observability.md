@@ -120,6 +120,7 @@ curl http://localhost:9027/metrics | grep '^# TYPE'
 | `rusticdoc_inflight` | Gauge | `stage` | Work in progress. `stage` is `pipeline` |
 | `rusticdoc_webhook_deliveries_total` | Counter | `outcome` | Webhook delivery attempts: `delivered`, `failed`, `gave_up` |
 | `rusticdoc_store_font_syncs_total` | Counter | `outcome` | Runs of the stored-font sync: `ok`, `changed`, `failed` |
+| `rusticdoc_store_asset_syncs_total` | Counter | `outcome` | Runs of the stored-asset sync, with the same outcomes |
 
 Both histograms have buckets that double from 0.01 to about 82 seconds. A family has no series until something has been counted in it, so `rusticdoc_webhook_deliveries_total` doesn't appear until the first delivery.
 
@@ -131,6 +132,7 @@ A few queries to start from:
 | 95th percentile of conversion time | `histogram_quantile(0.95, sum by (le) (rate(rusticdoc_stage_seconds_bucket{stage="convert"}[5m])))` |
 | Webhooks that were given up on | `rate(rusticdoc_webhook_deliveries_total{outcome="gave_up"}[1h])` |
 | A replica that can't sync fonts | `rate(rusticdoc_store_font_syncs_total{outcome="failed"}[5m]) > 0` |
+| A replica that can't sync assets | `rate(rusticdoc_store_asset_syncs_total{outcome="failed"}[5m]) > 0` |
 
 ## Health and readiness
 
@@ -142,7 +144,7 @@ curl http://localhost:9027/ready
 | Route | Returns | Use it for |
 |---|---|---|
 | `/health` | `200` whenever the service is responding | Liveness |
-| `/ready` | The same, or `503` with `{"status":"syncing"}` while a replica with a store hasn't synced its fonts yet | Readiness |
+| `/ready` | The same, or `503` with `{"status":"syncing"}` while a replica with a store hasn't synced its fonts and assets yet | Readiness |
 
 A caller the service knows gets the detail, and so does anyone when no credentials are configured:
 
@@ -153,7 +155,7 @@ A caller the service knows gets the detail, and so does anyone when no credentia
 | `engines.libreoffice`, `engines.qpdf` | Whether each engine is configured |
 | `details.libreoffice.status` | `up` or `down`, depending on whether it's configured |
 | `details.libreoffice.pool` | `workers`, `busy`, `idle`, `started`, `restarts` and `max_jobs` |
-| `details.store` | Only with a store: `fontsSynced` and `location` |
+| `details.store` | Only with a store: `fontsSynced`, `assetsSynced` and `location` |
 
 When credentials are configured, a caller without them only sees `{"status":"up"}`.
 

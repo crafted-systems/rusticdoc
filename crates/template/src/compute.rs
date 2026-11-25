@@ -33,6 +33,7 @@ pub const MAX_WORDS: f64 = 1e15;
 /// Adds the helpers to an environment. `lang` is the template's `lang`
 /// setting, the default language of `words`.
 pub fn add_filters(env: &mut Environment<'_>, lang: Option<&str>) {
+    crate::qrdata::add_filters(env);
     env.add_test("empty", is_empty);
     env.add_filter("truncate", truncate);
     env.add_filter("unaccent", unaccent);

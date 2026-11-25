@@ -51,16 +51,18 @@ The examples below take the sample invoice and replace the words `Billed to` in 
 |---|---|
 | `width`, `height` | Printed size in points, above 0 and at most 14400. If you give one, the aspect ratio is kept. If you give both, the image is stretched to them unless `fit` says otherwise |
 | `fit` | How the image sits in its box: `contain`, `cover` (or `fill`), `width` or `stretch`. See [fit](#fit) |
+| `alt` | The picture's alt text, read by screen readers. See [alt text](#alt-text) |
 
 Without a size, the picture prints at its natural size at 96 dpi, capped at a width of 450 points.
 
-The value has to carry the image's bytes, in one of three forms:
+The value has to carry the image's bytes, in one of three forms, or come from [`asset`](assets.md#use-one-in-an-office-template):
 
 | Form | Example |
 |---|---|
 | Base64 | `"iVBORw0KGgo..."` |
 | A data URL | `"data:image/png;base64,iVBORw0KGgo..."` |
 | An object | `{"data": "iVBORw0KGgo...", "mime": "image/png", "width": 30, "height": 30}` |
+| An asset the service holds | `{{ asset("brand/logo.png") \| image }}` in the template, with nothing in the data |
 
 In the object, `mime`, `width` and `height` are optional, and the filter's arguments override its sizes.
 
@@ -200,6 +202,7 @@ Cropping is done the way the office suites do it, with `a:srcRect` in DOCX, XLSX
 {{ url | barcode("qr", size=90) }}
 {{ gtin | barcode("ean13", text=true) }}
 {{ ticket | barcode("pdf417", width=220, ec=5) }}
+{{ url | barcode("qr", style="dots", eye="circle", color="#2a7a6f") }}
 ```
 
 The first argument names the symbology. It's required, and there's no default.
@@ -207,6 +210,8 @@ The first argument names the symbology. It's required, and there's no default.
 | Symbology | Accepts |
 |---|---|
 | `qr` | Any text a QR code can hold, encoded as UTF-8 |
+| `gs1-qr` | Application identifiers in parentheses, like `gs1-128`, in a QR code that starts with FNC1 |
+| `swissqr` | A Swiss QR-bill payload, which [`qrdata("swiss")`](filters.md#qrdata) builds |
 | `datamatrix` | ASCII text, up to what the largest Data Matrix holds |
 | `pdf417` | Any text a PDF417 symbol can hold |
 | `aztec` | Any text an Aztec code can hold |
@@ -224,21 +229,42 @@ The first argument names the symbology. It's required, and there's no default.
 
 If a check digit is wrong, the error gives the right one: `"5901234123458" has a wrong check digit: EAN-13 expects 7`. A value that's too long for its symbology gives `the value is too long for a QR code`, and so on.
 
-For `gs1-128`, each identifier is 2 to 4 digits in parentheses, followed by its data. Identifiers whose data has a fixed length in the GS1 tables, like `(01)` and `(17)`, are checked for that length, and `(00)`, `(01)` and `(02)` are checked for their check digit. The service puts the FNC1 characters where GS1 wants them, which is at the start and after each variable-length field that's followed by another. The text under the bars shows the parentheses.
+For `gs1-128` and `gs1-qr`, each identifier is 2 to 4 digits in parentheses, followed by its data. Identifiers whose data has a fixed length in the GS1 tables, like `(01)` and `(17)`, are checked for that length, and `(00)`, `(01)` and `(02)` are checked for their check digit. The service puts the FNC1 characters where GS1 wants them, which is at the start and after each variable-length field that's followed by another. In a QR code the start is a mode marker and the separator is the group separator character, `\x1D`, so a scanner returns `010950110153000310ABC123` for `(01)09501101530003(10)ABC123`. The text under a `gs1-128` code shows the parentheses.
+
+These arguments work with every symbology:
 
 | Argument | Meaning |
 |---|---|
-| `size` | Printed width in points, above 0 and at most 14400. The default is 144 for `qr`, `datamatrix`, `pdf417` and `aztec`, and 200 for the others |
+| `size` | Printed width in points, above 0 and at most 14400. The default is 144 for two-dimensional codes and 200 for the others |
 | `width` | The same as `size`. Give one or the other |
 | `height` | Printed height in points. A linear code's bars take whatever the text leaves. A `qr`, `datamatrix` or `aztec` code is square, so `height` alone sets both sides, and a `width` and `height` that differ are refused. A `pdf417` symbol stretches its rows to the height |
 | `text` | `true` prints the value under a linear code. EAN and UPC codes print their digits between guard bars that reach down, with the leading and trailing digits outside the bars. The default is `false`, and two-dimensional codes refuse it |
-| `font_size` | The text's size in points. The default is ten modules or an eighteenth of the width, whichever is smaller, kept between 6 and 12 points |
+| `font_size` | The size of the text or label in points. For text, the default is ten modules or an eighteenth of the width, whichever is smaller, kept between 6 and 12 points. For a label, it's a twelfth of the width, kept between 6 and 14 points |
 | `color` | The colour of the bars, as `#rgb` or `#rrggbb`. The default is black |
 | `background` | The space around the bars, as a colour or `transparent`. The default is white |
-| `quiet_zone` | The empty margin on each side, in modules, from 0 to 100. The default is 10 for linear codes, 4 for `qr` and 2 for the other two-dimensional codes |
+| `invert` | `true` allows bars lighter than the background, and makes the defaults white bars on black. See [colours](#colours-a-scanner-can-read) |
+| `quiet_zone` | The empty margin on each side, in modules, from 0 to 100. The default is 10 for linear codes, 4 for QR codes and 2 for the other two-dimensional codes |
 | `rotate` | `0`, `90`, `180` or `270` degrees clockwise. The printed width and height swap at 90 and 270 |
-| `ec` | Error correction: `L`, `M`, `Q` or `H` for `qr` (default `M`), a percentage from 5 to 95 for `aztec`, a level from 0 to 8 for `pdf417`. Other symbologies refuse it |
+| `ec` | Error correction: `L`, `M`, `Q` or `H` for QR codes (default `M`, or `H` with a logo), a percentage from 5 to 95 for `aztec`, a level from 0 to 8 for `pdf417`. Other symbologies refuse it |
+| `alt` | The picture's alt text, read by screen readers. See [alt text](#alt-text) |
 | `fit` | How the code sits in a placeholder picture. See [fit](#fit) |
+
+These work with `qr` and `gs1-qr`, and other symbologies refuse them:
+
+| Argument | Meaning |
+|---|---|
+| `style` | How the modules are drawn: `square`, `dots` or `rounded`. `rounded` joins neighbouring modules and rounds the outer corners. The default is `square` |
+| `module_scale` | The size of each module's mark, from 0.7 to 1, for gaps between dots or squares. The default is 1 |
+| `eye` | The frame of the three corner squares: `square`, `rounded` or `circle` |
+| `eye_center` | The middle of the corner squares, with the same choices. It takes the shape of `eye` unless you give it |
+| `eye_color`, `eye_center_color` | Colours for the frames and middles of the corner squares. They default to the bars' colour |
+| `gradient` | `linear` or `radial`, from `color` to `gradient_color` across the code |
+| `gradient_color` | The colour the gradient ends in. A gradient needs it |
+| `gradient_angle` | The direction of a linear gradient in degrees, clockwise from left to right. The default is 0 |
+| `logo` | A picture for the middle of the code, in any form `image` takes. See [logos](#logos) |
+| `logo_size` | The logo's width as a share of the code's, from 0.05 to 0.25. The default is 0.2 |
+| `label` | A line of text under the code, such as `Scan to pay`. Printable ASCII only. It adds to the height, so give `width` or `size` rather than `height` |
+| `version` | The QR version, from 1 to 40, for codes of one size across a loop. A value that doesn't fit is refused |
 
 The sample invoice already has a QR code in it, so you can see one without changing anything:
 
@@ -275,9 +301,99 @@ curl -F template=@tagged.docx -F "data=<invoice.json" \
   http://localhost:9027/v1/render -o out.docx
 ```
 
-A barcode counts as an image for placement and limits, and it fills a placeholder picture the way an image does. The bars are drawn with a whole number of device pixels per module so their edges stay sharp, and the image is then printed at the size you asked for.
+### QR code styles
+
+`style`, `eye` and `eye_center` change how a QR code looks without changing what it holds. These are dots with round corners, then rounded modules in one colour with a label under them:
+
+```bash
+mkdir t && cd t && unzip -q ../invoice.docx
+export TAG='{{ url | barcode("qr", style="dots", eye="circle") }}'
+TAG+=' {{ url | barcode("qr", style="rounded", eye="rounded",'
+TAG+=' color="#c2185b", label="Scan to pay", width=120) }}'
+perl -pi -e 's/Billed to/$ENV{TAG}/' word/document.xml
+zip -qr ../tagged.docx . && cd ..
+
+jq '. + {url: "https://example.com/pay/2041"}' invoice.json > with-url.json
+curl -F template=@tagged.docx -F "data=<with-url.json" \
+  http://localhost:9027/v1/render -o out.docx
+unzip -l out.docx | grep -c 'word/media/rich[0-9]*\.svg' | grep -x 3
+```
+
+The corner squares are what a scanner looks for first, so they keep their place and proportions whatever their shape. Timing and alignment patterns take the module style, as other generators draw them.
+
+Every combination of `style`, `eye` and `eye_center` reads back with ZXing. One pairing is harder for older decoders: a `circle` frame around a `square` or `rounded` middle. ZBar misses some of those at error correction `H`, which is why `eye_center` follows `eye` unless you set it.
+
+### Colours a scanner can read
+
+A scanner tells bars from background by how light they are, not by their hue. Every colour is checked against the background with the WCAG contrast ratio, and anything below 3:1 is refused. That's WCAG's minimum for graphical objects:
+
+```bash
+mkdir t && cd t && unzip -q ../invoice.docx
+perl -pi -e 's/Billed to/{{ "x" | barcode("qr", color="#ccc") }}/' \
+  word/document.xml
+zip -qr ../tagged.docx . && cd ..
+
+curl -F template=@tagged.docx -F "data=<invoice.json" \
+  http://localhost:9027/v1/render -o out.docx
+```
+
+The error reads `color #cccccc on background #ffffff has a contrast of 1.6:1; scanners need at least 3:1`. The check covers `color`, `eye_color`, `eye_center_color` and the end of a gradient, for every symbology. A `transparent` background is the page's, which the service can't see, so nothing is checked then.
+
+Bars lighter than their background are refused too, unless you pass `invert=true`. Phone cameras read light-on-dark QR codes, but many hand-held scanners and some apps don't. With `invert=true` and no colours, the code is white on black.
+
+### Logos
+
+`logo` puts a picture in the middle of a QR code. The modules under it are removed, not painted over, with a module of margin around the picture, and error correction restores what's missing. With a logo the default `ec` is `H`, and `L` is refused.
+
+```text
+{{ url | barcode("qr", logo=brand.mark, style="rounded", color="#2a7a6f") }}
+```
+
+How much a logo may hide depends on the error correction: at most 7.5% of the data modules at `M`, 12.5% at `Q` and 15% at `H`, which is half of what each level restores. The hole also stays clear of the corner squares and the timing patterns. If a logo doesn't fit, the service picks a larger version until it does, so a short value makes a denser code. With `version` set, it says what to change instead: `a logo 25% wide hides too much of this version 1 code at error correction H`.
+
+PNG, JPEG, GIF, WebP and SVG logos work, from the data or from an [asset](assets.md#use-one-in-an-office-template), as `logo=asset("brand/mark.svg")`. An SVG is cleaned as for `image` and stays a vector in the code.
+
+With a PNG, JPEG, GIF or WebP logo, the code's curves are written as short straight lines. Excel flattens the curves of any SVG that holds a raster picture so coarsely that rounded modules and round eyes stop scanning. Lines scan, though in Excel a small code's rounded corners look cut off. An SVG logo has no such problem, so use one if your documents open in Excel. A logo holds at most 2 MB, since a copy goes into each code that uses it, and at most 16 megapixels, since it is decoded to draw the PNG.
+
+### GS1 Digital Link and GS1 QR codes
+
+A GS1 Digital Link is a web address that carries a GTIN and its batch, serial or expiry, so one code works for a phone and for a till. [`qrdata("gs1")`](filters.md#qrdata) builds the address from an element string, and `barcode("qr")` draws it:
+
+```text
+{{ "(01)09506000134352(10)LOT7(17)261231" | qrdata("gs1") | barcode("qr") }}
+```
+
+That gives `https://id.gs1.org/01/09506000134352/10/LOT7?17=261231`. `gs1-qr` is the other way to put GS1 data in a QR code: the element string itself, with FNC1, for scanners in warehouses and hospitals rather than phones.
+
+### Swiss QR-bill
+
+`swissqr` draws the QR code of a Swiss QR-bill payment part from the payload [`qrdata("swiss")`](filters.md#qrdata) builds. The Swiss Implementation Guidelines fix its look, so it takes no colour, size, style or error correction. It's 46 mm wide with a quiet zone of at least 5 mm, at error correction `M`, with the Swiss cross in the middle and the modules under the cross removed.
+
+```text
+{{ bill | qrdata("swiss") | barcode("swissqr") }}
+```
+
+ZXing and rxing read it, and so do banking apps. ZBar finds nothing, because it takes the cross's black square for part of the symbol.
+
+### How the codes are drawn
+
+A barcode is an SVG, with a PNG of the same drawing for readers that don't show SVG. They're stored the way an SVG image is: DOCX, XLSX and PPTX show the PNG and carry the SVG as Office's SVG extension, and ODF frames list the SVG first and the PNG after it. Office and LibreOffice draw the SVG, so a code stays sharp at any print size, and the PDFs Word, Excel and LibreOffice make have it as vectors. Curves are cubic Béziers rather than SVG arcs, which every renderer draws the same way.
+
+The PNG has a whole number of pixels per module. Square codes in one colour are drawn without anti-aliasing, so their edges stay sharp. Dots, rounded shapes, gradients and logos are anti-aliased.
+
+A QR code whose modules would print smaller than 0.25 mm is refused, with the width it needs: `its modules would print 0.17 mm wide, and phones need at least 0.25 mm: make it at least 30 points wide, or the value shorter`. On packaging, GS1 asks for at least 0.396 mm. A rule of thumb for distance is a code a tenth as wide as the distance it's read from.
+
+A `quiet_zone` below 4 is allowed for QR codes, for a code inside a frame you draw yourself, but the frame then has to leave the margin clear.
+
+### Which decoders read them
 
 Every symbology decodes to its exact value with rxing, a port of ZXing. That holds for the PNG the service makes, with and without text, colours, a wider quiet zone and rotation, and for LibreOffice's PDF of the document at 300 dpi. ZBar reads the same PNGs for every linear code and QR, but it has no Data Matrix or Aztec reader. EAN and UPC codes come back with the check digit the service adds. Codabar comes back without its start and stop letters from rxing, and with them from ZBar.
+
+Every style, a logo of each kind, a label, gradients, the Swiss QR-bill code and the linear codes were checked in Word, PowerPoint and Excel 16.115 for Mac. Each draws them from the SVG, and every code scans from the PDF each one exports. Word shows the alt text.
+
+QR styles, colours, gradients, logos and labels are read back with rxing for every combination of `style`, `eye`, `eye_center`, `module_scale` and error correction, and from LibreOffice's PDF. ZXing reads them from the pictures and from the PDF at 150 and 300 dpi, and ZBar reads them all apart from the exceptions above.
+
+Text that isn't ASCII is written as UTF-8 with an ECI header that says so, which scanners need to show it right.
 
 At 100 dpi, a long Code 128 or Code 39 at the default size is too fine to read, so give it a larger `size` for screens. Try your codes on the scanner you'll use.
 
@@ -482,6 +598,19 @@ curl -F template=@tagged.pptx -F 'data={"_":1}' \
   http://localhost:9027/v1/render -o out.pptx
 ```
 
+## Alt text
+
+`alt` gives an image or a barcode the description a screen reader announces. It's plain text of up to 1000 characters.
+
+```text
+{{ logo | image(alt="Mawingu Coffee") }}
+{{ url | barcode("qr", alt="Pay this invoice online") }}
+```
+
+A barcode without `alt` is described by its kind, such as `QR code` or `EAN-13 barcode`, and never by its value, which can be a Wi-Fi password or a bank account. An image without `alt` has none. In DOCX, XLSX and PPTX it's the picture's `descr`; in ODF it's the frame's `svg:desc`.
+
+In a placeholder picture, `alt` replaces the alt text that held the tag. A barcode's default fills it only if the placeholder kept no text of its own beside the tag.
+
 ## Limits
 
 | What | Limit |
@@ -492,7 +621,9 @@ curl -F template=@tagged.pptx -F 'data={"_":1}' \
 | One WebP image | 25 megapixels, 16384 pixels a side |
 | Images and barcodes in one render | 200 |
 | Barcode value | 4 KB, and 4096 modules when linear |
-| Barcode image | 4 megapixels. The module gets smaller and the printed size doesn't |
+| Barcode PNG | 4 megapixels. The module gets smaller and the printed size doesn't |
+| Barcode logo | 2 MB and 16 megapixels |
+| Alt text | 1000 characters |
 | Charts in one render | 200 |
 | Values in one chart | 1,000 |
 | One `html` value | 1 MB, nested at most 64 deep |

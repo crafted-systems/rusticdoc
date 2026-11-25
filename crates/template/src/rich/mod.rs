@@ -18,6 +18,7 @@ mod odf;
 mod pkg;
 mod placeholder;
 mod pptx;
+mod qr;
 pub(crate) mod shift;
 mod svg;
 mod xlsx;
@@ -36,6 +37,7 @@ use crate::package::{self, Entry, MAX_TOTAL_BYTES};
 use crate::xml::{self, Elem, Node, Text};
 use crate::{Format, Location, TemplateError};
 
+pub(crate) use barcode::gs1_fields;
 pub use chart::Chart;
 pub use media::{Fit, Media};
 pub(crate) use placeholder::is_placeholder_tag;
@@ -51,6 +53,8 @@ const MARK_DIGIT: u32 = 0x10;
 const MAX_VALUES: usize = 100_000;
 /// The most charts one render may place.
 const MAX_CHARTS: usize = 200;
+/// The most bytes a barcode's logo may hold: it is copied into the SVG.
+const MAX_LOGO_BYTES: usize = 2 * 1024 * 1024;
 
 const NAMES: [&str; 8] = [
     "image",
@@ -83,6 +87,11 @@ pub struct Picture {
     pub fit: Option<Fit>,
     /// Whether the filter was given a size, which a placeholder refuses.
     pub sized: bool,
+    /// The alt text for screen readers.
+    pub alt: Option<String>,
+    /// Whether `alt` was given, rather than a barcode's default: only then
+    /// does it replace text a placeholder's own alt text keeps.
+    pub alt_given: bool,
 }
 
 /// What a colour applies to.
@@ -448,6 +457,25 @@ fn esc_attr(s: &str) -> String {
     xml::escape_attr(&clean)
 }
 
+/// A picture's alt text as a `descr` attribute, or nothing.
+fn descr(picture: &Picture) -> String {
+    picture
+        .alt
+        .as_deref()
+        .map(|a| format!(" descr=\"{}\"", esc_attr(a)))
+        .unwrap_or_default()
+}
+
+/// Sets a placeholder's alt text: always when the filter was given one,
+/// otherwise only where the template left none of its own.
+fn set_alt(carrier: &mut Elem, picture: &Picture) {
+    if let Some(alt) = &picture.alt {
+        if picture.alt_given || carrier.attr("descr").is_none_or(|d| d.trim().is_empty()) {
+            carrier.set_attr("descr", alt);
+        }
+    }
+}
+
 /// Points to English Metric Units.
 fn emu(pt: f64) -> i64 {
     ((pt * 12700.0).round() as i64).max(1)
@@ -613,6 +641,7 @@ fn register(state: &mut State, filter: &str, rich: Rich) -> Result<Value, Error>
     Ok(Value::from_object(Token { id, table }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn register_picture(
     state: &mut State,
     filter: &str,
@@ -620,6 +649,8 @@ fn register_picture(
     size: (f64, f64),
     fit: Option<Fit>,
     sized: bool,
+    alt: Option<String>,
+    alt_given: bool,
 ) -> Result<Value, Error> {
     let media = shared_table(state)
         .intern(media)
@@ -633,6 +664,8 @@ fn register_picture(
             height_pt: size.1,
             fit,
             sized,
+            alt,
+            alt_given,
         }),
     )
 }
@@ -707,6 +740,7 @@ fn image(state: &mut State, value: Value, kwargs: Kwargs) -> Result<Value, Error
     let width = points_kw("image", &kwargs, "width")?;
     let height = points_kw("image", &kwargs, "height")?;
     let fit = fit_kw("image", &kwargs)?;
+    let alt = alt_kw("image", &kwargs)?;
     no_more_kwargs("image", &kwargs)?;
     let sized = width.is_some() || height.is_some();
     if value.is_undefined() {
@@ -720,7 +754,8 @@ fn image(state: &mut State, value: Value, kwargs: Kwargs) -> Result<Value, Error
     if fit == Some(Fit::Width) {
         size.1 = size.0 / found.aspect();
     }
-    register_picture(state, "image", found, size, fit, sized)
+    let given = alt.is_some();
+    register_picture(state, "image", found, size, fit, sized, alt, given)
 }
 
 fn barcode_options(kwargs: &Kwargs) -> Result<(barcode::Options, Option<Fit>), Error> {
@@ -773,8 +808,163 @@ fn barcode_options(kwargs: &Kwargs) -> Result<(barcode::Options, Option<Fit>), E
     }
     let ec: Option<Value> = kwargs.get("ec").map_err(|e| fail(F, e))?;
     opts.ec = ec.filter(|v| !v.is_none()).map(|v| display(&v));
+    opts.invert = bool_kw(F, kwargs, "invert")?.unwrap_or(false);
+    let choice = |name: &str, allowed: &[&str]| -> Result<Option<String>, Error> {
+        let v: Option<Value> = kwargs.get(name).map_err(|e| fail(F, e))?;
+        match v {
+            Some(v) if !v.is_none() => match v.as_str() {
+                Some(s) if allowed.contains(&s) => Ok(Some(s.to_string())),
+                _ => {
+                    let (last, rest) = allowed.split_last().unwrap_or((&"", &[]));
+                    Err(fail(F, format!("{name} is {} or {last}", rest.join(", "))))
+                }
+            },
+            _ => Ok(None),
+        }
+    };
+    if let Some(s) = choice("style", &["square", "dots", "rounded"])? {
+        opts.style.shape = qr::Shape::parse(&s).unwrap_or_default();
+    }
+    if let Some(s) = choice("eye", &["square", "rounded", "circle"])? {
+        opts.style.eye = qr::EyeShape::parse(&s).unwrap_or_default();
+        // The centre follows the frame unless it is given: a round frame
+        // round a cornered centre is the pairing decoders find hardest.
+        opts.style.eye_center = opts.style.eye;
+    }
+    if let Some(s) = choice("eye_center", &["square", "rounded", "circle"])? {
+        opts.style.eye_center = qr::EyeShape::parse(&s).unwrap_or_default();
+    }
+    if let Some(scale) = number_kw(F, kwargs, "module_scale", 0.7, 1.0)? {
+        opts.style.scale = scale;
+    }
+    opts.eye_color = hex_kw(F, kwargs, "eye_color")?;
+    opts.eye_center_color = hex_kw(F, kwargs, "eye_center_color")?;
+    let gradient = choice("gradient", &["linear", "radial"])?;
+    let end = hex_kw(F, kwargs, "gradient_color")?;
+    let angle = number_kw(F, kwargs, "gradient_angle", -360.0, 360.0)?;
+    match (gradient, end) {
+        (Some(kind), Some(end)) => {
+            if kind == "radial" && angle.is_some() {
+                return Err(fail(F, "gradient_angle is for a linear gradient"));
+            }
+            opts.gradient = Some(barcode::Gradient {
+                radial: kind == "radial",
+                end,
+                angle: angle.unwrap_or(0.0),
+            });
+        }
+        (Some(_), None) => {
+            return Err(fail(
+                F,
+                "a gradient needs gradient_color, the colour it ends in",
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(fail(
+                F,
+                "gradient_color needs gradient=\"linear\" or \"radial\"",
+            ))
+        }
+        (None, None) if angle.is_some() => {
+            return Err(fail(F, "gradient_angle needs gradient=\"linear\""))
+        }
+        (None, None) => {}
+    }
+    let logo: Option<Value> = kwargs.get("logo").map_err(|e| fail(F, e))?;
+    let share = number_kw(F, kwargs, "logo_size", 0.05, 0.25)?;
+    match logo {
+        Some(v) if !v.is_none() => {
+            if v.is_undefined() {
+                return Err(fail(F, "logo is undefined"));
+            }
+            let input = media::decode(&v).map_err(|e| fail(F, format!("logo: {e}")))?;
+            if input.bytes.len() > MAX_LOGO_BYTES {
+                return Err(fail(
+                    F,
+                    format!("a logo holds at most {MAX_LOGO_BYTES} bytes"),
+                ));
+            }
+            let found = media::inspect(input.bytes, input.mime.as_deref())
+                .map_err(|e| fail(F, format!("logo: {e}")))?;
+            // A raster logo is decoded to draw the PNG, so its pixels count,
+            // not its bytes: a small file can unpack to gigabytes. An SVG's
+            // own pictures were checked when it was cleaned.
+            let pixels = u64::from(found.px.0) * u64::from(found.px.1);
+            if found.fallback.is_none() && pixels > svg::MAX_EMBEDDED_PIXELS {
+                return Err(fail(
+                    F,
+                    format!(
+                        "a logo has at most {} pixels, not {pixels}",
+                        svg::MAX_EMBEDDED_PIXELS
+                    ),
+                ));
+            }
+            opts.logo = Some(barcode::Logo {
+                media: Arc::new(found),
+                share: share.unwrap_or(0.2),
+            });
+        }
+        _ if share.is_some() => return Err(fail(F, "logo_size needs a logo")),
+        _ => {}
+    }
+    let label: Option<Value> = kwargs.get("label").map_err(|e| fail(F, e))?;
+    opts.label = label
+        .filter(|v| !v.is_none() && !v.is_undefined())
+        .map(|v| display(&v));
+    opts.version = whole("version", 40)?;
+    if opts.version == Some(0) {
+        return Err(fail(F, "version must be a whole number from 1 to 40"));
+    }
     let fit = fit_kw(F, kwargs)?;
     Ok((opts, fit))
+}
+
+/// A `true` or `false` argument.
+fn bool_kw(filter: &str, kwargs: &Kwargs, name: &str) -> Result<Option<bool>, Error> {
+    let v: Option<Value> = kwargs.get(name).map_err(|e| fail(filter, e))?;
+    match v {
+        Some(v) if v.kind() == ValueKind::Bool => Ok(Some(v.is_true())),
+        Some(v) if v.is_none() => Ok(None),
+        Some(_) => Err(fail(filter, format!("{name} is true or false"))),
+        None => Ok(None),
+    }
+}
+
+/// A number argument between `lo` and `hi`.
+fn number_kw(
+    filter: &str,
+    kwargs: &Kwargs,
+    name: &str,
+    lo: f64,
+    hi: f64,
+) -> Result<Option<f64>, Error> {
+    let v: Option<Value> = kwargs.get(name).map_err(|e| fail(filter, e))?;
+    match v {
+        Some(v) if !v.is_none() => v
+            .is_number()
+            .then(|| f64::try_from(v.clone()).ok())
+            .flatten()
+            .filter(|n| n.is_finite() && (lo..=hi).contains(n))
+            .map(Some)
+            .ok_or_else(|| fail(filter, format!("{name} must be a number from {lo} to {hi}"))),
+        _ => Ok(None),
+    }
+}
+
+/// The alt text argument: plain text, at most 1000 characters.
+fn alt_kw(filter: &str, kwargs: &Kwargs) -> Result<Option<String>, Error> {
+    let v: Option<Value> = kwargs.get("alt").map_err(|e| fail(filter, e))?;
+    match v {
+        Some(v) if v.is_undefined() => Err(fail(filter, "alt is undefined")),
+        Some(v) if !v.is_none() => {
+            let text: String = display(&v).chars().filter(|c| !xml_illegal(*c)).collect();
+            if text.chars().count() > 1000 {
+                return Err(fail(filter, "alt holds at most 1000 characters"));
+            }
+            Ok(Some(text))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn barcode_filter(
@@ -784,6 +974,7 @@ fn barcode_filter(
     kwargs: Kwargs,
 ) -> Result<Value, Error> {
     let (opts, fit) = barcode_options(&kwargs)?;
+    let alt = alt_kw("barcode", &kwargs)?;
     no_more_kwargs("barcode", &kwargs)?;
     let kind = kind.as_ref().and_then(|k| k.as_str()).ok_or_else(|| {
         fail(
@@ -797,7 +988,9 @@ fn barcode_filter(
     let sized = opts.size.is_some() || opts.width.is_some() || opts.height.is_some();
     let (found, size) =
         barcode::barcode(kind, &display(&value), &opts).map_err(|e| fail("barcode", e))?;
-    register_picture(state, "barcode", found, size, fit, sized)
+    let given = alt.is_some();
+    let alt = alt.or_else(|| barcode::alt_text(kind));
+    register_picture(state, "barcode", found, size, fit, sized, alt, given)
 }
 
 fn link(state: &mut State, value: Value, text: Option<Value>) -> Result<Value, Error> {
@@ -950,6 +1143,8 @@ pub fn add_filters(env: &mut Environment<'static>, mode: Mode) {
         }
         Mode::Check(format) | Mode::Render(format) => format,
     };
+    // With nowhere to look until a render says where.
+    crate::assets::add_function(env, &crate::assets::AssetDirs::default(), true);
     env.add_filter("image", image);
     env.add_filter("barcode", barcode_filter);
     env.add_filter("link", link);

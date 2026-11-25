@@ -34,7 +34,7 @@ const MAX_EXPANDED: u64 = 1_000_000;
 /// The deepest elements may nest.
 const MAX_DEPTH: u32 = 256;
 /// The most pixels a picture embedded in an SVG may have.
-const MAX_EMBEDDED_PIXELS: u64 = 16_000_000;
+pub const MAX_EMBEDDED_PIXELS: u64 = 16_000_000;
 /// The longest side of the PNG drawn for readers without SVG.
 const FALLBACK_SIDE: f32 = 2000.0;
 /// The most the PNG enlarges a small drawing.
@@ -221,6 +221,33 @@ fn render(tree: &usvg::Tree) -> Result<(Vec<u8>, (u32, u32)), String> {
         .write_image(&rgba, w, h, ExtendedColorType::Rgba8)
         .map_err(|e| format!("cannot encode the SVG image's PNG: {e}"))?;
     Ok((out, (w, h)))
+}
+
+/// Draws an SVG written here, such as a barcode, at exactly `w` by `h`
+/// pixels; its size attributes must be those pixels. `fonts` loads the
+/// system fonts, for a drawing that holds an SVG picture with text.
+pub fn draw_own(text: &str, w: u32, h: u32, fonts: bool) -> Result<tiny_skia::Pixmap, String> {
+    let tree = if fonts {
+        parse(text)?
+    } else {
+        let opts = usvg::Options {
+            image_href_resolver: usvg::ImageHrefResolver {
+                resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+                resolve_string: Box::new(|_, _| None),
+            },
+            ..usvg::Options::default()
+        };
+        usvg::Tree::from_str(text, &opts).map_err(|e| format!("cannot draw the barcode: {e}"))?
+    };
+    let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("the barcode is too large to draw")?;
+    let size = tree.size();
+    let (sx, sy) = (w as f32 / size.width(), h as f32 / size.height());
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(sx, sy),
+        &mut pixmap.as_mut(),
+    );
+    Ok(pixmap)
 }
 
 /// The deepest the elements of `text` nest, read without parsing, so that
