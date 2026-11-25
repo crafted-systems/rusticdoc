@@ -35,7 +35,7 @@ Mount a directory at `/assets`, or wherever `RUSTICDOC_ASSETS_DIR` points:
 ```bash
 docker run -d -p 127.0.0.1:9027:9027 \
   -v "$PWD/assets:/assets:ro" \
-  ghcr.io/crafted-systems/rusticdoc:0.3.0
+  ghcr.io/crafted-systems/rusticdoc:0.3.1
 ```
 
 Nothing needs reloading. A file is read when a template or page names it, so a file you add, change or remove counts from the next request. Files with other extensions or names that aren't allowed are passed over.
