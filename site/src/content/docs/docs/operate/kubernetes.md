@@ -15,7 +15,7 @@ The manifest runs three replicas on one S3-compatible bucket, which is the only 
 Download the manifest for this release:
 
 ```bash
-curl -fLO https://raw.githubusercontent.com/crafted-systems/rusticdoc/v0.2.0/deploy/kubernetes.yaml
+curl -fLO https://raw.githubusercontent.com/crafted-systems/rusticdoc/v0.3.0/deploy/kubernetes.yaml
 ```
 
 Create the secret:
@@ -31,7 +31,7 @@ Then change these in the file:
 
 | Field | Change it to |
 |---|---|
-| `image` | A version, `ghcr.io/crafted-systems/rusticdoc:0.2.0`. The manifest says `latest`, which moves to each new release when a pod restarts |
+| `image` | A version, `ghcr.io/crafted-systems/rusticdoc:0.3.0`. The manifest says `latest`, which moves to each new release when a pod restarts |
 | `RUSTICDOC_STORE` | Your bucket and prefix, in place of `s3://my-bucket/rusticdoc` |
 | `AWS_REGION` | Your bucket's region |
 | `AWS_ENDPOINT` | Add it for any store other than AWS, along with `AWS_ALLOW_HTTP` if the endpoint is plain HTTP |

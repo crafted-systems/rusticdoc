@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "paths": {
     "/health": {
@@ -5338,7 +5338,7 @@
           },
           "version": {
             "type": "string",
-            "example": "0.2.0"
+            "example": "0.3.0"
           }
         }
       }

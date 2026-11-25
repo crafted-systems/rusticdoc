@@ -9,23 +9,36 @@ sidebar:
 
 rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults and may add features, without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
-## Unreleased
+## 0.3.0
 
-Images and stylesheets can be [assets](/docs/guides/assets/) the service holds, so a logo no longer has to travel with every request.
+Released on 25 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.3.0`, for amd64 and arm64.
+
+Barcodes that are unlikely to scan are now refused, so check the templates that print them before you upgrade. These change from 0.2.0:
+
+- A barcode whose colour has a contrast below 3:1 against its background is refused, for every symbology. So are bars lighter than their background, unless `invert=true`.
+- A QR code whose modules would print smaller than 0.25 mm is refused.
+- Barcodes are drawn as SVG, with the PNG they used to be beside it, so a DOCX, XLSX or PPTX holds `richN.svg` next to each barcode's `richN.png`. Codes stay sharp when printed large, and LibreOffice's PDF has them as vectors.
+- A barcode has alt text that describes its kind, such as `QR code`, unless it's given its own.
+- With a store, `/ready` also waits for the replica's copy of the stored assets.
+- `deploy/kubernetes.yaml` calls its `font-copy` volume `store-copy`, and gives it 4 GiB, because it holds the assets too.
+
+Images and stylesheets can be [assets](/docs/guides/assets/) the service holds, so a logo no longer has to travel with every request:
 
 - Mount a directory at `/assets`, or wherever `RUSTICDOC_ASSETS_DIR` points. Changes in it need no reload.
-- Upload one file or a ZIP to `POST /v1/assets` when there's a store, and list, download and delete with `GET` and `DELETE`. Every replica gets a copy, `/ready` waits for it, and `RUSTICDOC_MAX_STORED_ASSETS`, `RUSTICDOC_MAX_ASSET_STORAGE` and `RUSTICDOC_ASSET_CACHE_DIR` bound and place it.
+- Upload one file or a ZIP to `POST /v1/assets` when there's a store, and list, download and delete with `GET` and `DELETE`. Every replica gets a copy, and `RUSTICDOC_MAX_STORED_ASSETS`, `RUSTICDOC_MAX_ASSET_STORAGE` and `RUSTICDOC_ASSET_CACHE_DIR` bound and place it.
 - HTML pages name an asset in `src`, `url()` or `<link rel="stylesheet">`, and Office templates with `{{ asset("logo.png") | image }}` or `barcode`'s `logo`.
 
-Barcodes are drawn as SVG, with the PNG they used to be beside it. Office and LibreOffice draw the SVG, so codes stay sharp when printed large and LibreOffice's PDF has them as vectors. A DOCX, XLSX or PPTX now holds `richN.svg` next to each barcode's `richN.png`.
+It also adds and fixes these:
 
 - QR codes take [styles](/docs/templates/rich-content/#qr-code-styles): `style` (`square`, `dots`, `rounded`), `module_scale`, `eye` and `eye_center` shapes, `eye_color`, `eye_center_color` and linear or radial `gradient`s.
 - A QR code can carry a [logo](/docs/templates/rich-content/#logos) in a hole cut from its modules, with `logo` and `logo_size`. The version grows until the logo fits what the error correction restores, which defaults to `H` with a logo.
 - `label` prints a line under a QR code, and `version` fixes its size.
 - `gs1-qr` draws GS1 element strings as a QR code with FNC1, and `swissqr` draws the [Swiss QR-bill](/docs/templates/rich-content/#swiss-qr-bill)'s code, 46 mm with its cross.
 - [`qrdata`](/docs/templates/filters/#qrdata) builds and checks the text for Wi-Fi, vCard and MECARD contacts, email, phone, text messages, places, events, SEPA transfers (EPC), Swiss QR-bills and GS1 Digital Links. It works in every template.
-- Barcode colours below a contrast of 3:1 against their background are refused, for every symbology, and so are bars lighter than the background unless `invert=true`. A QR code whose modules would print smaller than 0.25 mm is refused.
-- `image` and `barcode` take [`alt`](/docs/templates/rich-content/#alt-text) for screen readers, in every format. A barcode without it is described by its kind, such as `QR code`.
+- `image` and `barcode` take [`alt`](/docs/templates/rich-content/#alt-text) for screen readers, in every format.
+- The [`chart`](/docs/templates/rich-content/#chart) filter draws `area` and `scatter` charts, in every Office format.
+- A PDF response says how many pages it has in [`x-page-count`](/docs/guides/pipeline/), up to 32 MB.
+- `url` is updated to 2.5.9, which fixes RUSTSEC-2026-0592.
 
 ## 0.2.0
 

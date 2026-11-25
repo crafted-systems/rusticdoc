@@ -7,7 +7,7 @@ template: doc
 
 rusticdoc keeps document layout out of your code. Templates are ordinary Office files and PDF forms, so the layout changes in the editor, not in your codebase. rusticdoc fills them from JSON, converts them with LibreOffice and runs PDF operations on the result. It's written in Rust and ships as one hardened container image. You can call it over HTTP or run it as a command-line tool.
 
-The current release is 0.2.0. Read the [known limits](/docs/project/known-limits/) before you depend on it.
+The current release is 0.3.0. Read the [known limits](/docs/project/known-limits/) before you depend on it.
 
 ## Start here
 
