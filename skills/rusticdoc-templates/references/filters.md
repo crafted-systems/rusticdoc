@@ -606,6 +606,8 @@ That prints `https://example.com/01/09506000134352/10/AB%2F12?17=261231`.
 
 `range(3)` gives `[0, 1, 2]`, `dict(a=1)` gives an object, and `namespace(x=1)` gives an object a loop can change with `{% set ns.x = ... %}`.
 
+`asset("logo.png")` names an image or a stylesheet the service holds, mounted or uploaded. In an Office template it's a picture for `image` or a barcode's `logo`, and in a text template it prints the name. A name that isn't there is an error. See [assets](assets.md).
+
 `now()` works in every template and gives the time of the render in UTC, to the second, like `2026-11-06T10:20:00Z`. To pin it, send `ctx={"now":"2026-11-06T10:20:00Z"}` with the request, so the output is the same on every run:
 
 ```bash

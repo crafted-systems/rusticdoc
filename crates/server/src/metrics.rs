@@ -45,6 +45,8 @@ pub struct Metrics {
     pub webhooks: Family<OutcomeLabels, Counter>,
     /// Runs of the stored-font sync: `ok`, `changed`, `failed`.
     pub font_syncs: Family<OutcomeLabels, Counter>,
+    /// Runs of the stored-asset sync, by the same outcomes.
+    pub asset_syncs: Family<OutcomeLabels, Counter>,
 }
 
 impl Default for Metrics {
@@ -69,6 +71,12 @@ impl Metrics {
             "store_font_syncs",
             "Runs of the stored-font sync by outcome",
             font_syncs.clone(),
+        );
+        let asset_syncs = Family::<OutcomeLabels, Counter>::default();
+        registry.register(
+            "store_asset_syncs",
+            "Runs of the stored-asset sync by outcome",
+            asset_syncs.clone(),
         );
         registry.register(
             "requests",
@@ -99,6 +107,7 @@ impl Metrics {
             inflight,
             webhooks,
             font_syncs,
+            asset_syncs,
         }
     }
 

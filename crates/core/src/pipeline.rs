@@ -114,6 +114,7 @@ pub struct Pipeline {
     max_output: usize,
     /// Where template code runs.
     renderer: Renderer,
+    assets: rusticdoc_template::assets::AssetDirs,
 }
 
 impl Pipeline {
@@ -123,6 +124,7 @@ impl Pipeline {
             timeout,
             max_output: crate::limits::DEFAULT_MAX_RENDER_BYTES,
             renderer: Renderer::in_process(),
+            assets: Default::default(),
         }
     }
 
@@ -133,6 +135,12 @@ impl Pipeline {
 
     pub fn with_renderer(mut self, renderer: Renderer) -> Self {
         self.renderer = renderer;
+        self
+    }
+
+    /// Where HTML pages find the images and stylesheets they name.
+    pub fn with_assets(mut self, assets: rusticdoc_template::assets::AssetDirs) -> Self {
+        self.assets = assets;
         self
     }
 
@@ -316,6 +324,7 @@ impl Pipeline {
         let html_options = crate::html::HtmlOptions {
             landscape: options.landscape,
             pdfua,
+            library: self.assets.clone(),
         };
         let pdf = self
             .renderer

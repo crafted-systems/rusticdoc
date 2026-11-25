@@ -6,8 +6,10 @@
 //! Each object is written once and never changed, and a metadata object written
 //! after the content is what makes it exist, so replicas need no locks or
 //! coordination. Aliases and background jobs keep to that too: each change is a
-//! new object, and the newest one is what holds. Templates are read from the store. Fonts have to be files for
-//! LibreOffice, so each replica keeps a copy in sync with [`Store::sync_fonts`].
+//! new object, and the newest one is what holds. Assets are the exception: each is
+//! one object under its name, replaced whole by a single write. Templates are read from the store. Fonts have to be files for
+//! LibreOffice, so each replica keeps a copy in sync with [`Store::sync_fonts`], and
+//! of the assets, which render workers read, with [`Store::sync_assets`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -23,6 +25,8 @@ use object_store::prefix::PrefixStore;
 use object_store::{BackoffConfig, ClientConfigKey, ObjectStore, ObjectStoreExt as _, RetryConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use rusticdoc_template::assets;
 
 use crate::fonts::{FontFace, ParsedFont};
 use crate::job::Document;
@@ -86,6 +90,16 @@ pub struct FontMeta {
     pub uploaded_at: String,
 }
 
+/// A stored asset, as clients see it. Its name is what templates call it by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMeta {
+    pub name: String,
+    pub size: u64,
+    /// RFC 3339. When this content was stored.
+    pub uploaded_at: String,
+}
+
 /// One page of a caller's templates.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +127,27 @@ pub struct SyncReport {
     /// Fonts that could not be fetched, to try again next time.
     pub failed: usize,
     /// Fonts whose content does not match their id, left out.
+    pub corrupt: usize,
+}
+
+/// A stored asset as a listing gives it: what clients see, and what changes
+/// when it is replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AssetObject {
+    meta: AssetMeta,
+    version: String,
+}
+
+/// What one sync of the assets did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AssetSyncReport {
+    /// The copy on disk changed.
+    pub changed: bool,
+    /// Assets in the copy now.
+    pub assets: usize,
+    /// Assets that could not be fetched, to try again next time.
+    pub failed: usize,
+    /// Assets whose content is not what their name says, left out.
     pub corrupt: usize,
 }
 
@@ -169,6 +204,8 @@ pub struct Store {
     known_fonts: Mutex<HashMap<String, FontMeta>>,
     /// One sync at a time.
     syncing: tokio::sync::Mutex<()>,
+    /// The version of each asset in the copy, held while a sync runs.
+    copied_assets: tokio::sync::Mutex<HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for Store {
@@ -209,6 +246,11 @@ fn font_meta_path(id: &str) -> ObjectPath {
 
 fn font_data_path(id: &str) -> ObjectPath {
     ObjectPath::from(format!("fonts/data/{id}"))
+}
+
+/// One object per asset, under its name, so replacing one is a single write.
+fn asset_path(name: &str) -> ObjectPath {
+    ObjectPath::from(format!("assets/{name}"))
 }
 
 /// The id in a metadata object's name, if it is one.
@@ -298,6 +340,7 @@ impl Store {
             cache: Mutex::default(),
             known_fonts: Mutex::default(),
             syncing: tokio::sync::Mutex::new(()),
+            copied_assets: Default::default(),
         }
     }
 
@@ -510,7 +553,7 @@ impl Store {
     /// mistake loses nothing else.
     pub async fn sync_fonts(&self, dir: &Path) -> StoreResult<SyncReport> {
         let _one_at_a_time = self.syncing.lock().await;
-        create_owned_private_dir(dir)
+        create_owned_private_dir(dir, "RUSTICDOC_FONT_CACHE_DIR")
             .map_err(|e| StoreError::Backend(format!("{}: {e}", dir.display())))?;
         let prefix = ObjectPath::from("fonts/meta");
         let listed: Vec<_> = self.objects.list(Some(&prefix)).try_collect().await?;
@@ -1276,6 +1319,150 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Stores an asset under its name, replacing what was there.
+    pub async fn put_asset(&self, name: &str, bytes: Bytes) -> StoreResult<AssetMeta> {
+        assets::check_name(name).map_err(|_| StoreError::NotFound)?;
+        let size = bytes.len() as u64;
+        self.objects.put(&asset_path(name), bytes.into()).await?;
+        Ok(AssetMeta {
+            name: name.to_string(),
+            size,
+            uploaded_at: now(),
+        })
+    }
+
+    async fn asset_objects(&self) -> StoreResult<Vec<AssetObject>> {
+        let prefix = ObjectPath::from("assets");
+        let listed: Vec<_> = self.objects.list(Some(&prefix)).try_collect().await?;
+        let mut found: Vec<AssetObject> = listed
+            .into_iter()
+            .filter_map(|object| {
+                let name = object.location.as_ref().strip_prefix("assets/")?;
+                assets::check_name(name).ok()?;
+                Some(AssetObject {
+                    version: format!(
+                        "{}/{}/{}",
+                        object.e_tag.as_deref().unwrap_or(""),
+                        object.last_modified.timestamp_micros(),
+                        object.size
+                    ),
+                    meta: AssetMeta {
+                        name: name.to_string(),
+                        size: object.size,
+                        uploaded_at: object
+                            .last_modified
+                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    },
+                })
+            })
+            .collect();
+        found.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
+        Ok(found)
+    }
+
+    /// Every stored asset, by name.
+    pub async fn list_assets(&self) -> StoreResult<Vec<AssetMeta>> {
+        Ok(self
+            .asset_objects()
+            .await?
+            .into_iter()
+            .map(|object| object.meta)
+            .collect())
+    }
+
+    /// A stored asset's content.
+    pub async fn asset(&self, name: &str) -> StoreResult<Bytes> {
+        assets::check_name(name).map_err(|_| StoreError::NotFound)?;
+        self.read(&asset_path(name)).await
+    }
+
+    /// Deletes an asset. Each replica drops its copy at its next sync.
+    pub async fn delete_asset(&self, name: &str) -> StoreResult<()> {
+        assets::check_name(name).map_err(|_| StoreError::NotFound)?;
+        // S3 deletes what is not there without a word.
+        self.objects.head(&asset_path(name)).await?;
+        Ok(self.objects.delete(&asset_path(name)).await?)
+    }
+
+    /// Makes `dir` hold exactly the assets the store holds, as
+    /// [`Store::sync_fonts`] does for fonts. Only files named as a copy is are
+    /// ever removed.
+    pub async fn sync_assets(&self, dir: &Path) -> StoreResult<AssetSyncReport> {
+        let mut copied = self.copied_assets.lock().await;
+        let disk = |e: std::io::Error| StoreError::Backend(format!("{}: {e}", dir.display()));
+        prepare_asset_copy(dir).map_err(disk)?;
+        let wanted = self.asset_objects().await?;
+        let mut report = AssetSyncReport::default();
+
+        let files: HashSet<String> = wanted
+            .iter()
+            .map(|object| assets::copy_name(&object.meta.name))
+            .collect();
+        let mut on_disk = HashSet::new();
+        for entry in std::fs::read_dir(dir).map_err(disk)? {
+            let entry = entry.map_err(disk)?;
+            let Some(file) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            let leftover = file
+                .strip_prefix('.')
+                .and_then(|f| f.strip_suffix(".tmp"))
+                .is_some_and(assets::is_copy_name);
+            if leftover || (assets::is_copy_name(&file) && !files.contains(&file)) {
+                std::fs::remove_file(entry.path()).map_err(disk)?;
+                report.changed |= !leftover;
+            } else if assets::is_copy_name(&file) {
+                on_disk.insert(file);
+            }
+        }
+        copied.retain(|name, _| on_disk.contains(&assets::copy_name(name)));
+
+        // A copy left by an earlier process has no version, so it is fetched again.
+        let stale: Vec<AssetObject> = wanted
+            .iter()
+            .filter(|object| copied.get(&object.meta.name) != Some(&object.version))
+            .cloned()
+            .collect();
+        // Written as each arrives, so that no more than these are in memory.
+        let mut fetched = stream::iter(stale)
+            .map(|object| async move {
+                let read = self.read(&asset_path(&object.meta.name)).await;
+                (object, read)
+            })
+            .buffer_unordered(4);
+        while let Some((object, bytes)) = fetched.next().await {
+            let name = object.meta.name;
+            let bytes = match bytes {
+                Ok(bytes) => bytes,
+                // Deleted since the listing: the next sync drops the copy.
+                Err(StoreError::NotFound) => continue,
+                Err(e) => {
+                    tracing::warn!(asset = %name, error = %e, "could not fetch a stored asset");
+                    report.failed += 1;
+                    continue;
+                }
+            };
+            if let Err(e) = assets::check_content(&name, &bytes) {
+                tracing::error!(asset = %name, error = %e, "a stored asset is not what it says; left out");
+                report.corrupt += 1;
+                continue;
+            }
+            write_copy(dir, &assets::copy_name(&name), &bytes).map_err(disk)?;
+            copied.insert(name, object.version);
+            report.changed = true;
+        }
+        report.assets = wanted.len().saturating_sub(report.corrupt + report.failed);
+        Ok(report)
+    }
+}
+
+/// Makes the directory for the copy of the stored assets, and refuses one that
+/// someone else controls: whoever does chooses the logos documents carry.
+pub fn prepare_asset_copy(dir: &Path) -> std::io::Result<()> {
+    create_owned_private_dir(dir, "RUSTICDOC_ASSET_CACHE_DIR")
+}
+
 /// Creates a directory only this user can enter, if it is not there yet.
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
@@ -1288,15 +1475,15 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 /// Like `create_private_dir`, but refuses a directory that is already there and
 /// is not this user's to control: a link, another user's, or writable by others. The
 /// default sits in the shared temp directory, where anyone could make it first
-/// and so choose the fonts LibreOffice loads.
-fn create_owned_private_dir(path: &Path) -> std::io::Result<()> {
+/// and so choose the fonts LibreOffice loads. `variable` is the setting that moves it.
+fn create_owned_private_dir(path: &Path, variable: &str) -> std::io::Result<()> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     create_private_dir(path)?;
     let meta = std::fs::symlink_metadata(path)?;
     let refuse = |why: &str| {
         Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            format!("{why}; remove it, or set RUSTICDOC_FONT_CACHE_DIR to a directory of your own"),
+            format!("{why}; remove it, or set {variable} to a directory of your own"),
         ))
     };
     if !meta.file_type().is_dir() {
@@ -1337,24 +1524,36 @@ fn local_fonts(dir: &Path) -> std::io::Result<HashMap<String, PathBuf>> {
 }
 
 /// Writes a font so that a worker starting now sees all of it or none of it.
-/// fontconfig passes over names that start with a dot.
 fn write_font(dir: &Path, id: &str, bytes: &[u8]) -> std::io::Result<()> {
+    write_whole(
+        dir,
+        &format!(".{id}.tmp"),
+        &format!("{id}.{}", font_extension(bytes)),
+        bytes,
+    )
+}
+
+/// Writes an asset's copy so that a render sees the old one or the new one.
+fn write_copy(dir: &Path, file: &str, bytes: &[u8]) -> std::io::Result<()> {
+    write_whole(dir, &format!(".{file}.tmp"), file, bytes)
+}
+
+/// Writes `dir/file` whole, through `dir/temporary`. fontconfig passes over
+/// names that start with a dot.
+fn write_whole(dir: &Path, temporary: &str, file: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
-    let temporary = dir.join(format!(".{id}.tmp"));
+    let temporary = dir.join(temporary);
     // A new file only, never through a link: whatever is in the way fails the write.
-    let mut file = std::fs::OpenOptions::new()
+    let mut out = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&temporary)?;
-    file.write_all(bytes)?;
-    drop(file);
-    std::fs::rename(
-        &temporary,
-        dir.join(format!("{id}.{}", font_extension(bytes))),
-    )
+    out.write_all(bytes)?;
+    drop(out);
+    std::fs::rename(&temporary, dir.join(file))
 }
 
 #[cfg(test)]
@@ -1367,24 +1566,24 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
 
         let fresh = root.path().join("fresh");
-        create_owned_private_dir(&fresh).unwrap();
+        create_owned_private_dir(&fresh, "RUSTICDOC_FONT_CACHE_DIR").unwrap();
         let mode = std::fs::metadata(&fresh).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
-        create_owned_private_dir(&fresh).unwrap();
+        create_owned_private_dir(&fresh, "RUSTICDOC_FONT_CACHE_DIR").unwrap();
 
         let readable = root.path().join("readable");
         std::fs::create_dir(&readable).unwrap();
         std::fs::set_permissions(&readable, std::fs::Permissions::from_mode(0o755)).unwrap();
-        create_owned_private_dir(&readable).unwrap();
+        create_owned_private_dir(&readable, "RUSTICDOC_FONT_CACHE_DIR").unwrap();
 
         let open = root.path().join("open");
         std::fs::create_dir(&open).unwrap();
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(create_owned_private_dir(&open).is_err());
+        assert!(create_owned_private_dir(&open, "RUSTICDOC_FONT_CACHE_DIR").is_err());
 
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&fresh, &link).unwrap();
-        assert!(create_owned_private_dir(&link).is_err());
+        assert!(create_owned_private_dir(&link, "RUSTICDOC_FONT_CACHE_DIR").is_err());
     }
 
     #[tokio::test]

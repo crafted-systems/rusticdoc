@@ -57,13 +57,14 @@ The examples below take the sample invoice and replace the words `Billed to` in 
 
 Without a size, the picture prints at its natural size at 96 dpi, capped at a width of 450 points.
 
-The value has to carry the image's bytes, in one of three forms:
+The value has to carry the image's bytes, in one of three forms, or come from [`asset`](/docs/guides/assets/#use-one-in-an-office-template):
 
 | Form | Example |
 |---|---|
 | Base64 | `"iVBORw0KGgo..."` |
 | A data URL | `"data:image/png;base64,iVBORw0KGgo..."` |
 | An object | `{"data": "iVBORw0KGgo...", "mime": "image/png", "width": 30, "height": 30}` |
+| An asset the service holds | `{{ asset("brand/logo.png") \| image }}` in the template, with nothing in the data |
 
 In the object, `mime`, `width` and `height` are optional, and the filter's arguments override its sizes.
 
@@ -352,7 +353,7 @@ Bars lighter than their background are refused too, unless you pass `invert=true
 
 How much a logo may hide depends on the error correction: at most 7.5% of the data modules at `M`, 12.5% at `Q` and 15% at `H`, which is half of what each level restores. The hole also stays clear of the corner squares and the timing patterns. If a logo doesn't fit, the service picks a larger version until it does, so a short value makes a denser code. With `version` set, it says what to change instead: `a logo 25% wide hides too much of this version 1 code at error correction H`.
 
-PNG, JPEG, GIF, WebP and SVG logos work. An SVG is cleaned as for `image` and stays a vector in the code.
+PNG, JPEG, GIF, WebP and SVG logos work, from the data or from an [asset](/docs/guides/assets/#use-one-in-an-office-template), as `logo=asset("brand/mark.svg")`. An SVG is cleaned as for `image` and stays a vector in the code.
 
 With a PNG, JPEG, GIF or WebP logo, the code's curves are written as short straight lines. Excel flattens the curves of any SVG that holds a raster picture so coarsely that rounded modules and round eyes stop scanning. Lines scan, though in Excel a small code's rounded corners look cut off. An SVG logo has no such problem, so use one if your documents open in Excel. A logo holds at most 2 MB, since a copy goes into each code that uses it, and at most 16 megapixels, since it is decoded to draw the PNG.
 

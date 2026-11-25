@@ -146,7 +146,7 @@ Tags work in `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, PDF form fields 
 | `POST /v1/render/batch` | Renders one template per element of an array and returns a ZIP |
 | `POST /v1/convert` | Converts files with LibreOffice, or HTML with Fulgur, to PDF by default |
 | `POST /v1/pdf/*` | Merge, split, sign, fill forms, watermark, Factur-X and more |
-| `/v1/templates`, `/v1/fonts`, `/v1/jobs` | Stored templates, fonts, and background jobs |
+| `/v1/templates`, `/v1/fonts`, `/v1/assets`, `/v1/jobs` | Stored templates, fonts, images and stylesheets, and background jobs |
 
 Every operation has a curl example in the [API reference](https://rusticdoc.com/docs/reference/api/), and the service serves its own description at `/openapi.json`.
 
@@ -164,9 +164,10 @@ See the [CLI reference](https://rusticdoc.com/docs/reference/cli/).
 ## 🏗️ Deploy and operate
 
 - **Configure** everything with environment variables, all optional. See the [configuration reference](https://rusticdoc.com/docs/reference/configuration/).
-- **Store** templates, fonts and job results in S3 or a shared volume with `RUSTICDOC_STORE`. See [many containers](https://rusticdoc.com/docs/operate/many-containers/).
+- **Store** templates, fonts, assets and job results in S3 or a shared volume with `RUSTICDOC_STORE`. See [many containers](https://rusticdoc.com/docs/operate/many-containers/).
 - **Deploy** with [`deploy/compose.yaml`](deploy/compose.yaml) or [`deploy/kubernetes.yaml`](deploy/kubernetes.yaml). See [Kubernetes](https://rusticdoc.com/docs/operate/kubernetes/) and [sizing](https://rusticdoc.com/docs/operate/sizing/).
 - **Add fonts** by uploading, mounting or sending them, without a rebuild. See [fonts](https://rusticdoc.com/docs/guides/fonts/).
+- **Add logos and stylesheets** once, by uploading or mounting them, and name them from any template. See [assets](https://rusticdoc.com/docs/guides/assets/).
 - **Watch** it with Prometheus metrics, health routes and a request id that follows each request through the logs and webhooks. See [observability](https://rusticdoc.com/docs/operate/observability/).
 
 ## 🤖 Agents and SDKs

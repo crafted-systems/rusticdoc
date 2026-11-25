@@ -139,6 +139,7 @@ These work in Office templates only:
 | Write | What it prints | More |
 |---|---|---|
 | `{{ logo \| image(width=120) }}` | An image, from base64 in the data | [image](/docs/templates/rich-content/#image) |
+| `{{ asset("logo.png") \| image(width=120) }}` | An image the service holds, mounted or uploaded | [Assets](/docs/guides/assets/) |
 | `{{ photo \| image(fit="cover") }}` in a picture's alt text | Replaces that picture, keeping its frame | [Placeholder pictures](/docs/templates/rich-content/#placeholder-pictures) |
 | `{{ url \| barcode("qr", size=90) }}` | A QR code or barcode | [barcode](/docs/templates/rich-content/#barcode) |
 | `{{ url \| link("Pay now") }}` | A link | [link](/docs/templates/rich-content/#link) |

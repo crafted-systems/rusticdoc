@@ -126,6 +126,10 @@ const SAMPLES = {
   uploadFonts: [{ form: ['file=@brand-fonts.zip'] }],
   reload: [{ method: 'POST' }],
   deleteFont: [{ method: 'DELETE', params: { id: '$FONT' } }],
+  listAssets: [{}],
+  uploadAssets: [{ form: ['file=@logo.png', 'name=brand/logo.png'] }],
+  downloadAsset: [{ params: { name: 'brand/logo.png' }, out: 'logo.png' }],
+  deleteAsset: [{ method: 'DELETE', params: { name: 'brand/logo.png' } }],
 
   merge: [{ form: ['files=@a.pdf', 'files=@b.pdf', 'outputFilename=both'], out: 'both.pdf' }],
   split: [{ form: ['files=@report.pdf', 'splitMode=intervals', 'splitSpan=1'], out: 'pages.zip' }],
@@ -271,6 +275,7 @@ const TAGS = {
   templates: 'Templates',
   jobs: 'Jobs',
   fonts: 'Fonts',
+  assets: 'Assets',
   service: 'Service',
 };
 const tagName = (tag) => {

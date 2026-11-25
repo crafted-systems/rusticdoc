@@ -269,6 +269,12 @@ pub(crate) fn office_environment(
         if let Some(token) = value.downcast_object_ref::<rich::Token>() {
             return rich::write_token(out, token, mode);
         }
+        if value
+            .downcast_object_ref::<crate::assets::Asset>()
+            .is_some()
+        {
+            return Err(crate::assets::printed());
+        }
         if !matches!(state.auto_escape(), AutoEscape::Custom(c) if c == "xml") {
             // Turning escaping off must not let a value forge a marker.
             return minijinja::escape_formatter(out, state, &rich::scrubbed(value));

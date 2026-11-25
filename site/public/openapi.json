@@ -56,7 +56,7 @@
           "service"
         ],
         "summary": "Readiness",
-        "description": "Readiness: liveness, and with a store, this replica's copy of the stored fonts\nbeing complete. A load balancer should send no documents here before that,\nbecause they would quietly come out in a fallback font.",
+        "description": "Readiness: liveness, and with a store, this replica's copies of the stored\nfonts and assets being complete. A load balancer should send no documents here\nbefore that, because they would quietly come out in a fallback font or without\ntheir images.",
         "operationId": "ready",
         "responses": {
           "200": {
@@ -357,6 +357,260 @@
           },
           "404": {
             "description": "No such alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/assets": {
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "List assets",
+        "description": "Lists the images and stylesheets templates and pages can name: those in the\nmounted directory and, with a store, the uploaded ones.",
+        "operationId": "listAssets",
+        "responses": {
+          "200": {
+            "description": "The assets, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssetSchema"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "Upload assets",
+        "description": "Stores images and stylesheets for every caller and every replica: one file, or\na ZIP. An asset stored again under the same name is replaced. They are in use on\nthis replica when this returns, and on the others within `syncIntervalSeconds`.",
+        "operationId": "uploadAssets",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetUploadForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetsStored"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not assets, a bad name, or too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The store is full",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A mounted asset has the name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "RUSTICDOC_STORE is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/assets/{name}": {
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "Download an asset",
+        "description": "Downloads the asset a name stands for: the mounted one, else the stored one.",
+        "operationId": "downloadAsset",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The asset's name, folders included, from `GET /v1/assets`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryFile"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such asset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "Delete an asset",
+        "description": "Deletes a stored asset. It leaves this replica when this returns, and the\nothers within the sync interval. A mounted asset cannot be deleted this way.",
+        "operationId": "deleteAsset",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The asset's name, folders included, from `GET /v1/assets`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such stored asset",
             "content": {
               "application/json": {
                 "schema": {
@@ -3069,6 +3323,94 @@
           }
         }
       },
+      "AssetSchema": {
+        "type": "object",
+        "description": "An asset templates and pages can name.",
+        "required": [
+          "name",
+          "type",
+          "size",
+          "mounted"
+        ],
+        "properties": {
+          "mounted": {
+            "type": "boolean",
+            "description": "True when it is in the mounted directory, which wins over a stored asset\nof the same name."
+          },
+          "name": {
+            "type": "string",
+            "description": "What templates and pages call it, its folders included.",
+            "example": "brand/logo.png"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "type": {
+            "type": "string",
+            "description": "`image` or `stylesheet`."
+          },
+          "uploadedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339. Absent for mounted assets."
+          }
+        }
+      },
+      "AssetUploadForm": {
+        "type": "object",
+        "description": "The multipart form `POST /v1/assets` accepts.",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "One PNG, JPEG, GIF, SVG, WebP or CSS file, or a ZIP of them, where each\nfile's path is its name."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name to store one file under, with folders if it has any, such as\n`brand/logo.png`. The file's own name by default."
+          }
+        }
+      },
+      "AssetsStored": {
+        "type": "object",
+        "description": "What an upload stored.",
+        "required": [
+          "assets",
+          "skipped",
+          "syncIntervalSeconds"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssetSchema"
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedSchema"
+            },
+            "description": "Files in the ZIP that were left out, and why."
+          },
+          "syncIntervalSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "In use on this replica now, and on the others within this many seconds.",
+            "minimum": 0
+          }
+        }
+      },
       "BinaryFile": {
         "type": "string",
         "format": "binary",
@@ -5031,6 +5373,10 @@
     {
       "name": "fonts",
       "description": "List, upload and delete fonts, and reload a mounted directory"
+    },
+    {
+      "name": "assets",
+      "description": "List, upload, download and delete the images and stylesheets templates and pages name"
     },
     {
       "name": "service",

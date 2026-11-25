@@ -5,7 +5,9 @@ use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder
 use utoipa::{Modify, OpenApi};
 
 use crate::error::ErrorBody;
-use crate::routes::{aliases, convert, fonts, forms, health, jobs, pdf, pdfops, render, templates};
+use crate::routes::{
+    aliases, assets, convert, fonts, forms, health, jobs, pdf, pdfops, render, templates,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -54,6 +56,10 @@ use crate::routes::{aliases, convert, fonts, forms, health, jobs, pdf, pdfops, r
         fonts::upload,
         fonts::remove,
         fonts::reload,
+        assets::list,
+        assets::upload,
+        assets::content,
+        assets::remove,
         forms::fields,
         forms::fill,
         forms::overlay,
@@ -103,6 +109,9 @@ use crate::routes::{aliases, convert, fonts, forms, health, jobs, pdf, pdfops, r
         pdfops::SignForm,
         fonts::FontSchema,
         fonts::Reloaded,
+        assets::AssetUploadForm,
+        assets::AssetsStored,
+        assets::AssetSchema,
         forms::FillForm,
         forms::FieldsForm,
         forms::OverlayForm,
@@ -119,6 +128,7 @@ use crate::routes::{aliases, convert, fonts, forms, health, jobs, pdf, pdfops, r
         (name = "templates", description = "Store a template, name it with an alias, and render it by id or alias from any replica"),
         (name = "jobs", description = "Requests run in the background with `Prefer: respond-async`, and their results"),
         (name = "fonts", description = "List, upload and delete fonts, and reload a mounted directory"),
+        (name = "assets", description = "List, upload, download and delete the images and stylesheets templates and pages name"),
         (name = "service", description = "Health, version, metrics"),
     ),
     modifiers(&Security)

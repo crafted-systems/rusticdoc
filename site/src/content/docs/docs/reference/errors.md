@@ -53,7 +53,7 @@ You also get this code when a step that needs a PDF runs on something else, with
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `quota_exceeded` | Stored templates, fonts or background-job results are at a limit | Delete some, or raise `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS` or `RUSTICDOC_MAX_FONT_STORAGE`. For job results, wait for earlier ones to expire or raise `RUSTICDOC_MAX_JOB_STORAGE` |
+| `quota_exceeded` | Stored templates, fonts, assets or background-job results are at a limit | Delete some, or raise `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE`, `RUSTICDOC_MAX_STORED_ASSETS` or `RUSTICDOC_MAX_ASSET_STORAGE`. For job results, wait for earlier ones to expire or raise `RUSTICDOC_MAX_JOB_STORAGE` |
 | `url_not_allowed` | A webhook or `downloadFrom` URL fails an allow or deny list | Change the URL, or the lists in `RUSTICDOC_WEBHOOK_ALLOW_LIST`, `RUSTICDOC_WEBHOOK_DENY_LIST`, `RUSTICDOC_DOWNLOAD_FROM_ALLOW_LIST` or `RUSTICDOC_DOWNLOAD_FROM_DENY_LIST` |
 
 A private address gets a `400`, not a `403`.
@@ -74,6 +74,7 @@ curl -F templateHash=deadbeef -F "data=<letter.json" \
 
 | Code | Meaning | What to do |
 |---|---|---|
+| `asset_mounted` | An [asset](/docs/guides/assets/) was uploaded under a name that's in the mounted directory, which wins | Use another name, or change the mounted file |
 | `job_not_done` | The [background job](/docs/guides/background-jobs/)'s result was asked for before the job ended | Poll `GET /v1/jobs/{id}` until `status` is `done`, waiting as `Retry-After` says |
 | `job_failed` | The job failed, so it has no result | Read `error` in `GET /v1/jobs/{id}`. A job that stopped because its container did has the code `job_lost` there, and you should send the request again |
 

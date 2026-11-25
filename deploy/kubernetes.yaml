@@ -40,6 +40,7 @@ spec:
             - { name: RUSTICDOC_STORE, value: "s3://my-bucket/rusticdoc" }
             - { name: AWS_REGION, value: us-east-1 }
             - { name: RUSTICDOC_FONT_CACHE_DIR, value: /var/cache/rusticdoc/fonts }
+            - { name: RUSTICDOC_ASSET_CACHE_DIR, value: /var/cache/rusticdoc/assets }
             - name: AWS_ACCESS_KEY_ID
               valueFrom: { secretKeyRef: { name: rusticdoc, key: s3-access-key } }
             - name: AWS_SECRET_ACCESS_KEY
@@ -49,7 +50,8 @@ spec:
             - name: RUSTICDOC_WEBHOOK_SECRET
               valueFrom: { secretKeyRef: { name: rusticdoc, key: webhook-secret } }
           # Open without credentials, showing only the status. /ready waits for this
-          # pod's copy of the stored fonts, so it gets no documents before they arrive.
+          # pod's copies of the stored fonts and assets, so it gets no documents before
+          # they arrive.
           readinessProbe:
             httpGet: { path: /ready, port: http }
             periodSeconds: 5
@@ -72,15 +74,15 @@ spec:
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
             - { name: home, mountPath: /home/rusticdoc }
-            - { name: font-copy, mountPath: /var/cache/rusticdoc }
+            - { name: store-copy, mountPath: /var/cache/rusticdoc }
       # All the pod's own: nothing here has to survive it or be shared.
       volumes:
         - name: tmp
           emptyDir: { sizeLimit: 2Gi }
         - name: home
           emptyDir: { sizeLimit: 512Mi }
-        - name: font-copy
-          emptyDir: { sizeLimit: 2Gi }
+        - name: store-copy
+          emptyDir: { sizeLimit: 4Gi }
 ---
 apiVersion: v1
 kind: Service

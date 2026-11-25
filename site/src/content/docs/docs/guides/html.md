@@ -5,7 +5,7 @@ description: Turn HTML and CSS you write for print into PDF with Fulgur, a layou
 sidebar: { order: 2 }
 ---
 
-HTML goes to [Fulgur](https://github.com/fulgur-rs/fulgur), a layout engine written in Rust that writes the PDF itself. It needs no browser, runs no JavaScript and fetches nothing, so the images, stylesheets and fonts a page uses travel with the request.
+HTML goes to [Fulgur](https://github.com/fulgur-rs/fulgur), a layout engine written in Rust that writes the PDF itself. It needs no browser, runs no JavaScript and fetches nothing, so the images, stylesheets and fonts a page uses travel with the request, or are [assets the service holds](/docs/guides/assets/).
 
 ```bash test
 curl -F files=@invoice.html -F assets=@invoice.css -F assets=@logo.png \
@@ -23,15 +23,15 @@ Fulgur suits HTML written to be printed: invoices, statements, reports and lette
 |---|---|
 | Flexbox, grid, tables, borders, backgrounds and rounded corners | JavaScript, which never runs |
 | `@page` size and margins, page counters, headers and footers in margin boxes, running elements | Fetching a URL. There's no route that renders one |
-| `break-before`, `break-after`, `break-inside`, orphans and widows | `<link href>`, `@import` and `url()` that name a file. Send the file as an asset instead |
-| PNG, JPEG, GIF and SVG images sent as assets | |
+| `break-before`, `break-after`, `break-inside`, orphans and widows | `<link href>` and `url()` that name a file anywhere else, and `@import`. Send the file as an asset, or give it to the service |
+| PNG, JPEG, GIF and SVG images, as assets | |
 | Bookmarks from headings, and tagged PDF/UA-1 | |
 
 Fulgur's own [CSS support reference](https://github.com/fulgur-rs/fulgur/blob/main/docs/css-support.md) lists every property. Fulgur hasn't reached version 1.0 yet, so check a new template's output before you rely on it.
 
 ## Assets
 
-Send each file the page needs as `assets`. The service checks them before it lays anything out.
+A file that many pages use, like a logo, can be [mounted or uploaded once](/docs/guides/assets/) and then named by any page. Send the others with the request, as `assets`. The service checks them before it lays anything out.
 
 | Asset | Extensions | How the page uses it |
 |---|---|---|
@@ -41,7 +41,7 @@ Send each file the page needs as `assets`. The service checks them before it lay
 
 Anything else in `assets`, like a `.js` file, gets a `400` that names the file. A request can hold at most 200 assets.
 
-If a page names a file it wasn't sent, nothing shows there and there's no error. A `file://` or `http://` address shows nothing either, and nothing is read or fetched.
+If a page names a file that wasn't sent and that the service doesn't hold, nothing shows there and there's no error. A `file://` or `http://` address shows nothing either, and nothing is read or fetched.
 
 ## Page layout
 

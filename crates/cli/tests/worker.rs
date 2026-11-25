@@ -187,6 +187,24 @@ async fn html_becomes_a_pdf_in_the_worker_with_no_libreoffice() {
     assert!(body.starts_with(b"%PDF-"));
 }
 
+#[tokio::test]
+async fn the_worker_finds_mounted_assets() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("logo.png"), PNG).unwrap();
+    let service = start(&[("RUSTICDOC_ASSETS_DIR", dir.path().to_str().unwrap())]);
+    let client = wait_until_up(&service).await;
+    let html = br#"<img src="{{ asset('logo.png') }}" width="40" height="40">"#;
+    let url = format!("{}/v1/render", service.base);
+    let (status, body) = post_parts(&client, &url, &[("template", "t.html", html)]).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert!(String::from_utf8_lossy(&body).contains(r#"src="logo.png""#));
+    let url = format!("{}/v1/convert", service.base);
+    let (status, pdf) = post_parts(&client, &url, &[("files", "t.html", &body)]).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&pdf));
+    let pdf = String::from_utf8_lossy(&pdf);
+    assert!(pdf.contains("/Subtype /Image") || pdf.contains("/Subtype/Image"));
+}
+
 /// `RLIMIT_AS` means nothing on macOS, so this one only runs on Linux.
 #[cfg(target_os = "linux")]
 #[tokio::test]
