@@ -18,7 +18,7 @@ docker run -d --name rusticdoc --restart unless-stopped \
   --env-file rusticdoc.env \
   -v "$PWD/fonts:/fonts:ro" \
   -v "$PWD/assets:/assets:ro" \
-  -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.2.0
+  -p 127.0.0.1:9027:9027 ghcr.io/crafted-systems/rusticdoc:0.3.0
 ```
 
 [Install](/docs/start/install/) explains the hardening flags. The others are for:
