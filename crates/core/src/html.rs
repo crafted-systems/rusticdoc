@@ -340,7 +340,7 @@ mod tests {
         }
         let dirs = AssetDirs {
             mounted: Some(dir.path().to_path_buf()),
-            stored: None,
+            ..AssetDirs::default()
         };
         (dir, dirs)
     }

@@ -31,7 +31,7 @@ Fulgur's own [CSS support reference](https://github.com/fulgur-rs/fulgur/blob/ma
 
 ## Assets
 
-A file that many pages use, like a logo, can be [mounted or uploaded once](/docs/guides/assets/) and then named by any page. Send the others with the request, as `assets`. The service checks them before it lays anything out.
+A file that many pages use, like a logo, can be [mounted or uploaded once](/docs/guides/assets/) and then named by any page, or [sent in a ZIP](/docs/guides/assets/#send-a-library) with its folders. Send the others with the request, as `assets`. The service checks them before it lays anything out.
 
 | Asset | Extensions | How the page uses it |
 |---|---|---|

@@ -68,6 +68,8 @@ A file in any other format gets `501 not_supported` if you send `data` with it, 
 | `outputFilename` | Text | The result's file name, without an extension |
 | `files` | Files | Extra PDFs for the `merge` step. Every file part after the template lands here, except the ones under the fields below |
 | `fonts` | Files | Fonts for this request only. See [fonts](/docs/guides/fonts/) |
+| `assetLibrary` | File | A ZIP of images and stylesheets for this request's template and pages to name. See [assets](/docs/guides/assets/#send-a-library) |
+| `assetLibraryHash` | Text | The hex SHA-256 of an `assetLibrary` this caller sent recently, in its place |
 | `watermark`, `stamp` | Files | Image or PDF marks for those steps |
 | `underlay` | File | The PDF that the `underlay` step lays the document over |
 | `embeds` | Files | Attachments for the `embed` step |

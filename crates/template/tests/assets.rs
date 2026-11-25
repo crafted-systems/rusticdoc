@@ -26,6 +26,7 @@ fn held() -> Held {
     Held {
         options: RenderOptions {
             assets: AssetDirs {
+                sent: None,
                 mounted: Some(mounted),
                 stored: Some(stored),
             },

@@ -33,6 +33,8 @@ pub struct AppState {
     pub fonts_synced: Arc<std::sync::atomic::AtomicBool>,
     /// Where templates and pages find the assets they name.
     pub assets: rusticdoc_core::assets::AssetDirs,
+    /// The asset libraries requests brought.
+    pub libraries: rusticdoc_core::libraries::Libraries,
     /// True once this replica's copy of the stored assets is complete, which
     /// `/ready` waits for too: without it documents would lack their logos.
     pub assets_synced: Arc<std::sync::atomic::AtomicBool>,
@@ -102,6 +104,7 @@ impl AppState {
             }),
             fonts_synced: Default::default(),
             assets,
+            libraries: rusticdoc_core::libraries::Libraries::new(config.max_asset_library_space),
             assets_synced: Default::default(),
             asset_uploads: Arc::new(tokio::sync::Semaphore::new(1)),
             font_uploads: Arc::new(tokio::sync::Semaphore::new(1)),

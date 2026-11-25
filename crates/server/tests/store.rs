@@ -2459,3 +2459,281 @@ async fn a_corrupt_asset_is_left_out_and_an_asset_sync_touches_only_what_it_wrot
     assetsync::run_once(&pair.state_b).await.unwrap();
     assert_eq!(written(&copy), before);
 }
+
+fn no_store(configure: impl Fn(&mut Config)) -> (Router, tempfile::TempDir) {
+    let mount = tempfile::tempdir().unwrap();
+    let mut config = Config {
+        libreoffice_bin: None,
+        assets_dir: mount.path().to_path_buf(),
+        ..Config::default()
+    };
+    configure(&mut config);
+    (app(AppState::new(config)), mount)
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    rusticdoc_core::template::template_hash(bytes)
+}
+
+/// The width of a page's linked `page.css`, so a test can tell libraries apart.
+async fn page_width(router: &Router, extra: &[Part<'_>], key: Option<&str>) -> Option<u32> {
+    let html = b"<link rel=\"stylesheet\" href=\"brand/page.css\"><p>x</p>";
+    let mut parts: Vec<Part<'_>> = vec![("files", Some("p.html"), html)];
+    parts.extend_from_slice(extra);
+    let res = router
+        .clone()
+        .oneshot(post_as("/v1/convert", &parts, key))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let pdf = String::from_utf8_lossy(&bytes(res).await).into_owned();
+    let at = pdf.find("/MediaBox").unwrap();
+    [200, 300, 400]
+        .into_iter()
+        .find(|w| pdf[at..at + 24].contains(&format!(" {w}")))
+}
+
+fn css(width: u32) -> Vec<u8> {
+    zip_of(&[(
+        "brand/page.css",
+        format!("@page {{ size: {width}pt 500pt }}").as_bytes(),
+    )])
+}
+
+#[tokio::test]
+async fn a_request_brings_its_own_asset_library_and_no_other_request_sees_it() {
+    let (router, mount) = no_store(|_| {});
+    std::fs::create_dir_all(mount.path().join("brand")).unwrap();
+    std::fs::write(
+        mount.path().join("brand/page.css"),
+        "@page { size: 200pt 500pt }",
+    )
+    .unwrap();
+    let zips = [css(300), css(400)];
+    fn with(zip: &[u8]) -> [Part<'_>; 1] {
+        [("assetLibrary", Some("library.zip"), zip)]
+    }
+    assert_eq!(page_width(&router, &[], None).await, Some(200));
+    // At the same moment, each gets its own, over the mounted one.
+    let (a, b) = (with(&zips[0]), with(&zips[1]));
+    let (first, second) =
+        tokio::join!(page_width(&router, &a, None), page_width(&router, &b, None));
+    assert_eq!((first, second), (Some(300), Some(400)));
+    assert_eq!(page_width(&router, &[], None).await, Some(200));
+    // A stylesheet sent as `assets` still comes last, so it wins.
+    let sent = [
+        with(&zips[0])[0],
+        ("assets", Some("own.css"), b"@page { size: 400pt 500pt }"),
+    ];
+    assert_eq!(page_width(&router, &sent, None).await, Some(400));
+    // It belongs to the request, not to the service.
+    assert_eq!(
+        asset_names(&router).await,
+        [("brand/page.css".to_string(), true)]
+    );
+}
+
+#[tokio::test]
+async fn an_asset_library_reaches_templates_batches_validation_and_stored_templates() {
+    let (router, _mount) = no_store(|_| {});
+    let zip = zip_of(&[("brand/logo.png", DOT)]);
+    let library: Part<'_> = ("assetLibrary", Some("library.zip"), &zip);
+    let template: Part<'_> = (
+        "template",
+        Some("t.html"),
+        b"<img src=\"{{ asset('brand/logo.png') }}\" width=\"40\" height=\"40\">{{ n }}",
+    );
+    let data: Part<'_> = ("data", None, br#"{"n":1,"rows":[{"a":1},{"a":2}]}"#);
+
+    let without: &[Part<'_>] = &[template, data];
+    assert_eq!(
+        status(&router, post("/v1/render", without)).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // Wherever the part comes in the form, it is not the template.
+    let steps: Part<'_> = ("steps", None, b"convert");
+    for parts in [
+        &[library, template, data, steps],
+        &[template, data, steps, library],
+    ] {
+        let res = router
+            .clone()
+            .oneshot(post("/v1/render", parts))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(pdf_has_image(&bytes(res).await));
+    }
+    let res = router
+        .clone()
+        .oneshot(post("/v1/templates/validate", &[template, data, library]))
+        .await
+        .unwrap();
+    assert_eq!(json(res).await["ok"], true);
+
+    let split: Part<'_> = ("splitBy", None, b"rows");
+    let res = router
+        .clone()
+        .oneshot(post(
+            "/v1/render/batch",
+            &[template, data, split, steps, library],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes(res).await)).unwrap();
+    assert_eq!(zip.len(), 2);
+    for i in 0..2 {
+        let mut pdf = Vec::new();
+        std::io::Read::read_to_end(&mut zip.by_index(i).unwrap(), &mut pdf).unwrap();
+        assert!(pdf_has_image(&pdf), "document {i}");
+    }
+
+    // With a stored template, from JSON, by the library's hash.
+    let pair = two_replicas(|_| {});
+    let id = store_text(&pair.a, "t.html", template.2, None).await;
+    let by_id: &[Part<'_>] = &[("templateId", None, id.as_bytes()), data, library];
+    assert_eq!(
+        status(&pair.a, post("/v1/render", by_id)).await,
+        StatusCode::OK
+    );
+    let body = |zip: &[u8]| serde_json::json!({"templateId": id, "data": {"n": 1}, "assetLibraryHash": sha256(zip)});
+    let sent = zip_of(&[("brand/logo.png", DOT)]);
+    assert_eq!(
+        status(&pair.a, post_json("/v1/render", body(&sent), None)).await,
+        StatusCode::OK
+    );
+    // Another replica has not seen it.
+    let res = pair
+        .b
+        .clone()
+        .oneshot(post_json("/v1/render", body(&sent), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json(res).await["error"], "asset_library_not_cached");
+    let file = serde_json::json!({"templateId": id, "assetLibrary": "library.zip"});
+    assert_eq!(
+        status(&pair.a, post_json("/v1/render", file, None)).await,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn an_asset_library_outlives_its_request_while_a_background_job_needs_it() {
+    let pair = two_replicas(|c| c.max_asset_library_space = 16 * 1024);
+    let zip = zip_of(&[("brand/logo.png", DOT)]);
+    let parts: &[Part<'_>] = &[
+        (
+            "template",
+            Some("t.html"),
+            b"<img src=\"{{ asset('brand/logo.png') }}\" width=\"40\" height=\"40\">",
+        ),
+        ("data", None, br#"{"n":1}"#),
+        ("steps", None, b"convert"),
+        ("assetLibrary", Some("library.zip"), &zip),
+    ];
+    let mut req = post("/v1/render", parts);
+    req.headers_mut()
+        .insert("prefer", "respond-async".parse().unwrap());
+    let res = pair.a.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let location = res.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    // Others may come and push it out of the cache meanwhile.
+    for width in [200, 300, 400] {
+        let other = css(width);
+        let parts: &[Part<'_>] = &[
+            ("files", Some("p.html"), b"<p>x</p>"),
+            ("assetLibrary", Some("library.zip"), &other),
+        ];
+        let status = status(&pair.a, post("/v1/convert", parts)).await;
+        assert!(
+            status == StatusCode::OK || status == StatusCode::SERVICE_UNAVAILABLE,
+            "{status}"
+        );
+    }
+    let job = job_until_ended(&pair.a, &location, None).await;
+    assert_eq!(job["status"], "done", "{job}");
+    let res = pair
+        .a
+        .clone()
+        .oneshot(call("GET", &format!("{location}/result"), None))
+        .await
+        .unwrap();
+    assert!(pdf_has_image(&bytes(res).await));
+}
+
+#[tokio::test]
+async fn an_asset_library_is_recalled_by_hash_and_sent_once() {
+    let (router, _mount) = no_store(|_| {});
+    let zip = css(300);
+    let hash = sha256(&zip);
+    let by_hash = [("assetLibraryHash", None, hash.as_bytes())];
+    let refused = |extra: Vec<Part<'_>>| {
+        let mut parts: Vec<Part<'_>> = vec![("files", Some("p.html"), b"<p>x</p>")];
+        parts.extend(extra);
+        post("/v1/convert", &parts)
+    };
+    assert_eq!(
+        status(&router, refused(by_hash.to_vec())).await,
+        StatusCode::NOT_FOUND
+    );
+    let library = [("assetLibrary", Some("library.zip"), &zip[..])];
+    assert_eq!(page_width(&router, &library, None).await, Some(300));
+    assert_eq!(page_width(&router, &by_hash, None).await, Some(300));
+    // One or the other, once, and a file.
+    for extra in [
+        vec![library[0], by_hash[0]],
+        vec![library[0], library[0]],
+        vec![("assetLibrary", None, b"library.zip")],
+        vec![("assetLibrary", Some("logo.png"), DOT)],
+    ] {
+        assert_eq!(
+            status(&router, refused(extra)).await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+}
+
+#[tokio::test]
+async fn asset_libraries_stay_within_their_disk() {
+    let (router, _mount) = no_store(|c| c.max_asset_library_space = 16 * 1024);
+    let send = |zip: Vec<u8>| {
+        let router = router.clone();
+        async move {
+            let parts: &[Part<'_>] = &[
+                ("files", Some("p.html"), b"<p>x</p>"),
+                ("assetLibrary", Some("library.zip"), &zip),
+            ];
+            let res = router.oneshot(post("/v1/convert", parts)).await.unwrap();
+            (res.status(), json_or_null(res).await)
+        }
+    };
+    // A small ZIP that expands past it is refused as it expands.
+    let (code, body) = send(zip_of(&[("a.css", &vec![b' '; 4 * 1024 * 1024])])).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    assert!(
+        body["message"].as_str().unwrap().contains("bytes of disk"),
+        "{body}"
+    );
+    // More than fit, one after another: the older ones make room.
+    for width in [200, 300, 400] {
+        assert_eq!(send(css(width)).await.0, StatusCode::OK);
+    }
+    let hash = sha256(&css(200));
+    let parts: &[Part<'_>] = &[
+        ("files", Some("p.html"), b"<p>x</p>"),
+        ("assetLibraryHash", None, hash.as_bytes()),
+    ];
+    assert_eq!(
+        status(&router, post("/v1/convert", parts)).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+async fn json_or_null(res: axum::response::Response) -> serde_json::Value {
+    serde_json::from_slice(&bytes(res).await).unwrap_or_default()
+}

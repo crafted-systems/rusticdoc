@@ -435,6 +435,7 @@ pub fn convert_options(form: &Form) -> ApiResult<rusticdoc_core::convert::Conver
             .map(|a| (a.name.clone(), a.bytes.clone()))
             .collect();
     }
+    o.sent_assets = form.library.clone();
     o.validate()?;
     Ok(o)
 }

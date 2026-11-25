@@ -205,6 +205,39 @@ async fn the_worker_finds_mounted_assets() {
     assert!(pdf.contains("/Subtype /Image") || pdf.contains("/Subtype/Image"));
 }
 
+#[tokio::test]
+async fn the_worker_reads_a_requests_asset_library() {
+    let tmp = tempfile::tempdir().unwrap();
+    let service = start(&[("TMPDIR", tmp.path().to_str().unwrap())]);
+    let client = wait_until_up(&service).await;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file("brand/logo.png", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    std::io::Write::write_all(&mut zip, PNG).unwrap();
+    let zip = zip.finish().unwrap().into_inner();
+    let html = br#"<img src="{{ asset('brand/logo.png') }}" width="40" height="40">"#;
+    let url = format!("{}/v1/render", service.base);
+    let (status, _) = post_parts(&client, &url, &[("template", "t.html", html)]).await;
+    assert_eq!(status, 422);
+    let library = ("assetLibrary", "library.zip", &zip[..]);
+    let (status, page) = post_parts(&client, &url, &[("template", "t.html", html), library]).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&page));
+    let url = format!("{}/v1/convert", service.base);
+    let (status, pdf) = post_parts(&client, &url, &[("files", "t.html", &page), library]).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&pdf));
+    let pdf = String::from_utf8_lossy(&pdf);
+    assert!(pdf.contains("/Subtype /Image") || pdf.contains("/Subtype/Image"));
+    // The same ZIP twice is one copy.
+    let copies = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .filter(|entry| {
+            let name = entry.as_ref().unwrap().file_name();
+            name.to_string_lossy().starts_with("rusticdoc-library-")
+        })
+        .count();
+    assert_eq!(copies, 1);
+}
+
 /// `RLIMIT_AS` means nothing on macOS, so this one only runs on Linux.
 #[cfg(target_os = "linux")]
 #[tokio::test]

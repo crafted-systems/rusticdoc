@@ -324,7 +324,10 @@ impl Pipeline {
         let html_options = crate::html::HtmlOptions {
             landscape: options.landscape,
             pdfua,
-            library: self.assets.clone(),
+            library: rusticdoc_template::assets::AssetDirs {
+                sent: options.sent_assets.clone(),
+                ..self.assets.clone()
+            },
         };
         let pdf = self
             .renderer

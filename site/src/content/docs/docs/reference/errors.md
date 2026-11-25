@@ -63,6 +63,7 @@ A private address gets a `400`, not a `403`.
 | Code | Meaning | What to do |
 |---|---|---|
 | `not_found` | No stored template, alias, font or job with that id or name, including a job another key started and a job whose result has expired | Check the id. See [scope](/docs/guides/stored-templates/#scope) |
+| `asset_library_not_cached` | `assetLibraryHash` isn't one this replica still has | Send the ZIP. See [sending a library](/docs/guides/assets/#send-a-library) |
 | `template_not_cached` | `templateHash` isn't in this replica's memory | Send the file. See [sending a hash](/docs/guides/pipeline/#sending-a-hash) |
 
 ```bash test=fail
@@ -132,7 +133,7 @@ An unhandled fault also returns `500`, with no JSON body.
 |---|---|---|
 | `timeout` | The job ran past its limit | Raise `RUSTICDOC_API_TIMEOUT` (default `30s`) or `RUSTICDOC_BATCH_TIMEOUT` (default `5m`), or send less work |
 | `engine_unavailable` | An engine isn't configured, or conversion is disabled with `RUSTICDOC_CONVERT_DISABLED` | Check `GET /v1/version` and the settings |
-| `busy` | Request bodies in memory have reached `RUSTICDOC_MAX_INFLIGHT_BYTES`, or the service is shutting down. Comes with `Retry-After: 5` | Retry after that time |
+| `busy` | Request bodies in memory have reached `RUSTICDOC_MAX_INFLIGHT_BYTES`, the [asset libraries](/docs/guides/assets/#send-a-library) in use have all of `RUSTICDOC_MAX_ASSET_LIBRARY_SPACE`, or the service is shutting down. The first comes with `Retry-After: 5` | Retry after that time, or in a few seconds |
 | `store_unavailable` | The store can't be reached | Retry. Check the store. Requests that send their template as a file keep working |
 
 `/ready` also returns `503`, with `{"status":"syncing"}`, while a new replica copies its fonts. That isn't an error body (see [running many containers](/docs/operate/many-containers/)).

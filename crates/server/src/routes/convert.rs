@@ -1,3 +1,4 @@
+use axum::Extension;
 use axum::extract::{Multipart, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
@@ -5,6 +6,7 @@ use rusticdoc_core::convert::{self, ConvertOptions};
 use rusticdoc_core::{Document, Format, Output, RenderRequest, Step};
 use utoipa::ToSchema;
 
+use crate::auth::Principal;
 use crate::error::{ApiError, ApiResult, BinaryFile, ErrorBody};
 use crate::jobs::Delivery;
 use crate::routes::form::{Form, request_id, zip};
@@ -47,6 +49,15 @@ pub struct ConvertForm {
     /// the whole page. Nothing is fetched from anywhere else.
     #[schema(value_type = Vec<String>, format = Binary, required = false)]
     pub assets: Option<Vec<String>>,
+    /// A ZIP of images and stylesheets for this request's HTML pages to
+    /// name, as an upload to `/v1/assets`. A name in it wins over a mounted or a
+    /// stored one.
+    #[schema(rename = "assetLibrary", value_type = String, format = Binary, required = false)]
+    pub asset_library: Option<String>,
+    /// The hex SHA-256 of an `assetLibrary` this caller sent recently, in place of
+    /// the file.
+    #[schema(rename = "assetLibraryHash")]
+    pub asset_library_hash: Option<String>,
     #[schema(rename = "outputFilename")]
     pub output_filename: Option<String>,
 }
@@ -68,6 +79,7 @@ pub struct ConvertForm {
 )]
 pub async fn convert(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
     multipart: Multipart,
@@ -88,6 +100,7 @@ pub async fn convert(
         )));
     }
     let to = Format::parse(form.field("to").unwrap_or("pdf"))?;
+    form.open_library(&state, &principal).await?;
     let options = options::convert_options(&form)?;
     // PDF/A and PDF/UA are exported natively by LibreOffice here, so they
     // leave the post-processing chain.

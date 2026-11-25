@@ -13,6 +13,7 @@ pub mod error;
 pub mod fonts;
 pub mod html;
 pub mod job;
+pub mod libraries;
 pub mod limits;
 pub mod pdfform;
 pub mod pdfops;

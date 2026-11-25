@@ -3457,6 +3457,18 @@
           "files"
         ],
         "properties": {
+          "assetLibrary": {
+            "type": "string",
+            "format": "binary",
+            "description": "A ZIP of images and stylesheets for this request's HTML pages to\nname, as an upload to `/v1/assets`. A name in it wins over a mounted or a\nstored one."
+          },
+          "assetLibraryHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The hex SHA-256 of an `assetLibrary` this caller sent recently, in place of\nthe file."
+          },
           "assets": {
             "type": "array",
             "items": {
@@ -3544,6 +3556,18 @@
           "template"
         ],
         "properties": {
+          "assetLibrary": {
+            "type": "string",
+            "format": "binary",
+            "description": "A ZIP of images and stylesheets the template may name, as on `/v1/render`."
+          },
+          "assetLibraryHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The hex SHA-256 of an `assetLibrary` this caller sent recently, in place of\nthe file."
+          },
           "ctx": {
             "description": "Visible as `ctx`, as JSON text."
           },
@@ -4250,6 +4274,18 @@
         "type": "object",
         "description": "The fields `POST /v1/templates/{id}/preview` accepts, as JSON or as a\nmultipart form.",
         "properties": {
+          "assetLibrary": {
+            "type": "string",
+            "format": "binary",
+            "description": "A ZIP of images and stylesheets the template may name, as on `/v1/render`.\nMultipart only."
+          },
+          "assetLibraryHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The hex SHA-256 of an `assetLibrary` this caller sent recently, in place of\nthe file."
+          },
           "ctx": {
             "description": "Visible as `ctx`."
           },
@@ -4318,6 +4354,18 @@
         "type": "object",
         "description": "The multipart form `/v1/render`, `/v1/render/batch` and\n`/v1/templates/validate` accept.",
         "properties": {
+          "assetLibrary": {
+            "type": "string",
+            "format": "binary",
+            "description": "A ZIP of images and stylesheets for this request's templates and pages to\nname, as an upload to `/v1/assets`. A name in it wins over a mounted or a\nstored one."
+          },
+          "assetLibraryHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The hex SHA-256 of an `assetLibrary` this caller sent recently, in place of\nthe file."
+          },
           "assets": {
             "type": "array",
             "items": {
@@ -4764,6 +4812,13 @@
           "templateId"
         ],
         "properties": {
+          "assetLibraryHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The hex SHA-256 of an `assetLibrary` this caller sent recently in a\nmultipart form."
+          },
           "batchName": {
             "type": [
               "string",

@@ -583,6 +583,14 @@ pub struct PreviewForm {
     /// What turns HTML into PDF: `fulgur` (default) or `libreoffice`.
     #[schema(rename = "htmlEngine")]
     pub html_engine: Option<String>,
+    /// A ZIP of images and stylesheets the template may name, as on `/v1/render`.
+    /// Multipart only.
+    #[schema(rename = "assetLibrary", value_type = String, format = Binary, required = false)]
+    pub asset_library: Option<String>,
+    /// The hex SHA-256 of an `assetLibrary` this caller sent recently, in place of
+    /// the file.
+    #[schema(rename = "assetLibraryHash")]
+    pub asset_library_hash: Option<String>,
 }
 
 /// Preview a template
@@ -611,11 +619,12 @@ pub struct PreviewForm {
 )]
 pub async fn preview(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
     req: Request,
 ) -> ApiResult<Response> {
     let store = store_of(&state)?;
-    let ask = PreviewAsk::read(&state, req).await?;
+    let ask = PreviewAsk::read(&state, &principal, req).await?;
     let (_, template) = resolve(&store, SCOPE, &id).await?;
     ask.draw(&state, template).await
 }
@@ -644,6 +653,13 @@ pub struct DraftPreviewForm {
     /// What turns HTML into PDF: `fulgur` (default) or `libreoffice`.
     #[schema(rename = "htmlEngine")]
     pub html_engine: Option<String>,
+    /// A ZIP of images and stylesheets the template may name, as on `/v1/render`.
+    #[schema(rename = "assetLibrary", value_type = String, format = Binary, required = false)]
+    pub asset_library: Option<String>,
+    /// The hex SHA-256 of an `assetLibrary` this caller sent recently, in place of
+    /// the file.
+    #[schema(rename = "assetLibraryHash")]
+    pub asset_library_hash: Option<String>,
 }
 
 /// Preview a file
@@ -663,8 +679,12 @@ pub struct DraftPreviewForm {
     ),
     security(("api_key" = []), ("bearer" = []))
 )]
-pub async fn draft_preview(State(state): State<AppState>, req: Request) -> ApiResult<Response> {
-    let mut ask = PreviewAsk::read(&state, req).await?;
+pub async fn draft_preview(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    req: Request,
+) -> ApiResult<Response> {
+    let mut ask = PreviewAsk::read(&state, &principal, req).await?;
     let template = ask.form.require_file("the template as a 'template' file")?;
     ask.draw(&state, template).await
 }
@@ -681,7 +701,7 @@ struct PreviewAsk {
 }
 
 impl PreviewAsk {
-    async fn read(state: &AppState, req: Request) -> ApiResult<Self> {
+    async fn read(state: &AppState, caller: &Principal, req: Request) -> ApiResult<Self> {
         // Before any work: without the drawing engine none of it is any use.
         if state.config.pdftoppm_bin.is_none() {
             return Err(ApiError::new(
@@ -695,6 +715,7 @@ impl PreviewAsk {
         // First, because the first file left is the template.
         let data = form.json("data")?;
         let ctx = form.json("ctx")?;
+        form.open_library(state, caller).await?;
         let render_choices = crate::routes::render::render_options(&mut form, state)?;
         let page = match form.field("page").map(str::trim).filter(|p| !p.is_empty()) {
             None => 1,

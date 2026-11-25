@@ -18,7 +18,7 @@ An empty variable counts as unset.
 
 A bad value doesn't always stop the service. These do stop it from starting, with a message that names the problem:
 
-- A bad value in `RUSTICDOC_STORE`, `RUSTICDOC_API_KEY`, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_JOB_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE`, `RUSTICDOC_MAX_STORED_ASSETS`, `RUSTICDOC_MAX_ASSET_STORAGE` or `RUSTICDOC_STORE_SYNC_INTERVAL`.
+- A bad value in `RUSTICDOC_STORE`, `RUSTICDOC_API_KEY`, `RUSTICDOC_JOB_TTL`, `RUSTICDOC_RENDER_MODE`, `RUSTICDOC_MAX_TEMPLATE_BYTES`, `RUSTICDOC_MAX_TEMPLATES`, `RUSTICDOC_MAX_TEMPLATE_STORAGE`, `RUSTICDOC_MAX_JOB_STORAGE`, `RUSTICDOC_MAX_STORED_FONTS`, `RUSTICDOC_MAX_FONT_STORAGE`, `RUSTICDOC_MAX_STORED_ASSETS`, `RUSTICDOC_MAX_ASSET_STORAGE`, `RUSTICDOC_MAX_ASSET_LIBRARY_SPACE` or `RUSTICDOC_STORE_SYNC_INTERVAL`.
 - A [removed setting](#removed-settings).
 - A `RUSTICDOC_PDF_ENGINES_*` list that names an unknown engine.
 - An invalid regular expression in an allow or deny list.
@@ -113,6 +113,7 @@ See [sizing](/docs/operate/sizing/) for how these add up.
 | `RUSTICDOC_PDFTOPPM_BIN` | The first of `/usr/bin/pdftoppm`, `/opt/homebrew/bin/pdftoppm`, `/usr/local/bin/pdftoppm` | Path to poppler's pdftoppm, which draws template previews. `none` disables previews |
 | `RUSTICDOC_FONTS_DIR` | `/fonts` | Mounted fonts, which LibreOffice picks up |
 | `RUSTICDOC_ASSETS_DIR` | `/assets` | Mounted images and stylesheets that templates and HTML pages name. It need not exist, and changes in it need no reload. See [assets](/docs/guides/assets/) |
+| `RUSTICDOC_MAX_ASSET_LIBRARY_SPACE` | `512MB` | Maximum disk the [asset libraries](/docs/guides/assets/#send-a-library) sent with requests take in the temp directory, the ones kept for `assetLibraryHash` included |
 
 The service doesn't search your `PATH` for engines.
 

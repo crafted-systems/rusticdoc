@@ -3919,6 +3919,7 @@ dependencies = [
  "tokio",
  "tracing-subscriber",
  "utoipa",
+ "zip",
 ]
 
 [[package]]

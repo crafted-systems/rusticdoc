@@ -73,6 +73,9 @@ pub struct ConvertOptions {
     /// Images, stylesheets and fonts an HTML page names by file name, for
     /// Fulgur. LibreOffice never sees them.
     pub assets: Vec<(String, bytes::Bytes)>,
+    /// The library the request brought, where an HTML page's assets are looked
+    /// for first. LibreOffice never sees it either.
+    pub sent_assets: Option<rusticdoc_template::assets::SentAssets>,
     /// `UseTaggedPDF`, implied by `pdfua`.
     pub generate_tagged_pdf: bool,
     /// Refresh indexes and tables of contents before exporting.
@@ -151,6 +154,7 @@ impl Default for ConvertOptions {
             fonts: Vec::new(),
             html_engine: crate::html::HtmlEngine::default(),
             assets: Vec::new(),
+            sent_assets: None,
             generate_tagged_pdf: false,
             update_indexes: false,
             initial_view: 0,

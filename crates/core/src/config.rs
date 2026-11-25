@@ -52,6 +52,8 @@ pub struct Config {
     pub max_stored_assets: usize,
     /// Most bytes of assets the store may hold. Every replica copies them to disk.
     pub max_asset_storage: u64,
+    /// Most disk the asset libraries sent with requests may take.
+    pub max_asset_library_space: u64,
     /// This replica's copy of the stored assets, on its own disk.
     pub asset_cache_dir: PathBuf,
     /// How often a replica looks for fonts and assets added, changed or deleted
@@ -268,6 +270,7 @@ impl Default for Config {
             font_cache_dir: std::env::temp_dir().join("rusticdoc-stored-fonts"),
             max_stored_assets: 2_000,
             max_asset_storage: 1024 * 1024 * 1024,
+            max_asset_library_space: 512 * 1024 * 1024,
             asset_cache_dir: std::env::temp_dir().join("rusticdoc-stored-assets"),
             store_sync_interval: Duration::from_secs(30),
             api_key: None,
@@ -465,6 +468,14 @@ impl Config {
                 _ => c
                     .problems
                     .push(format!("RUSTICDOC_MAX_ASSET_STORAGE: bad size '{v}'")),
+            }
+        }
+        if let Some(v) = get("MAX_ASSET_LIBRARY_SPACE") {
+            match parse_bytes(&v) {
+                Some(n) if n > 0 => c.max_asset_library_space = n as u64,
+                _ => c
+                    .problems
+                    .push(format!("RUSTICDOC_MAX_ASSET_LIBRARY_SPACE: bad size '{v}'")),
             }
         }
         if let Some(v) = get("ASSET_CACHE_DIR") {
@@ -682,6 +693,7 @@ impl Config {
     /// directory, then the copy of the stored ones when there is a store.
     pub fn asset_dirs(&self) -> rusticdoc_template::assets::AssetDirs {
         rusticdoc_template::assets::AssetDirs {
+            sent: None,
             mounted: Some(self.assets_dir.clone()),
             stored: self.store.as_ref().map(|_| self.asset_cache_dir.clone()),
         }

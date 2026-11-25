@@ -1,12 +1,13 @@
 //! Assets a service holds: images and stylesheets that templates and pages
-//! name instead of carrying. They come from a mounted directory and from a
-//! replica's copy of the uploaded ones, and the mounted one wins where both
-//! have a name.
+//! name instead of carrying. They come from the library a request brought, from
+//! a mounted directory and from a replica's copy of the uploaded ones, and the
+//! first of those that has a name wins.
 //!
 //! A name is a relative path of plain characters. It is checked before it goes
 //! near a file system, so neither a template nor its data can name anything
-//! outside the two directories.
+//! outside those directories.
 
+use std::any::Any;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -131,10 +132,48 @@ pub struct MountedAsset {
     pub size: u64,
 }
 
+/// The library a request brought, unpacked to a directory under the names
+/// [`copy_name`] gives. A worker is sent the path alone; whoever made the
+/// directory holds it for as long as anything here does.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SentAssets {
+    dir: PathBuf,
+    #[serde(skip)]
+    _keep: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl SentAssets {
+    /// `keep` is what removes the directory once nothing reads from it.
+    pub fn new(dir: PathBuf, keep: Arc<dyn Any + Send + Sync>) -> Self {
+        Self {
+            dir,
+            _keep: Some(keep),
+        }
+    }
+}
+
+impl std::fmt::Debug for SentAssets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SentAssets").field(&self.dir).finish()
+    }
+}
+
+impl PartialEq for SentAssets {
+    fn eq(&self, other: &Self) -> bool {
+        self.dir == other.dir
+    }
+}
+
+impl Eq for SentAssets {}
+
 /// Where assets are read from. Files are read when they are used, so a change
 /// to either directory is seen by the next render.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetDirs {
+    /// The library this request brought.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<SentAssets>,
     /// The mounted directory. It need not exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mounted: Option<PathBuf>,
@@ -145,7 +184,7 @@ pub struct AssetDirs {
 
 impl AssetDirs {
     pub fn is_empty(&self) -> bool {
-        self.mounted.is_none() && self.stored.is_none()
+        self.sent.is_none() && self.mounted.is_none() && self.stored.is_none()
     }
 
     /// The mounted file an asset name stands for, if there is one.
@@ -157,16 +196,16 @@ impl AssetDirs {
             .filter(|path| path.is_file())
     }
 
-    /// The file an asset name stands for: the mounted one, else the copy of
-    /// the uploaded one.
+    /// The file an asset name stands for: the one the request brought, else the
+    /// mounted one, else the copy of the uploaded one.
     pub fn find(&self, name: &str) -> Option<PathBuf> {
         check_name(name).ok()?;
-        self.mounted_file(name).or_else(|| {
-            self.stored
-                .as_ref()
-                .map(|dir| dir.join(copy_name(name)))
-                .filter(|path| path.is_file())
-        })
+        let copy = |dir: &PathBuf| Some(dir.join(copy_name(name))).filter(|path| path.is_file());
+        self.sent
+            .as_ref()
+            .and_then(|sent| copy(&sent.dir))
+            .or_else(|| self.mounted_file(name))
+            .or_else(|| self.stored.as_ref().and_then(copy))
     }
 
     /// An asset's bytes, or `None` when there is none of that name.
@@ -372,6 +411,7 @@ mod tests {
         std::fs::write(stored.join(copy_name("brand/a.css")), "stored").unwrap();
         std::fs::write(stored.join(copy_name("b.css")), "stored b").unwrap();
         let dirs = AssetDirs {
+            sent: None,
             mounted: Some(mount.clone()),
             stored: Some(stored),
         };
@@ -394,13 +434,44 @@ mod tests {
     }
 
     #[test]
+    fn what_the_request_brought_wins_and_a_worker_gets_its_path() {
+        let root = tempfile::tempdir().unwrap();
+        let (mount, sent) = (root.path().join("mount"), root.path().join("sent"));
+        std::fs::create_dir_all(&mount).unwrap();
+        std::fs::create_dir_all(&sent).unwrap();
+        std::fs::write(mount.join("a.css"), "mounted").unwrap();
+        std::fs::write(mount.join("b.css"), "mounted b").unwrap();
+        std::fs::write(sent.join(copy_name("a.css")), "sent").unwrap();
+        let held = Arc::new(());
+        let dirs = AssetDirs {
+            sent: Some(SentAssets::new(sent.clone(), held.clone())),
+            mounted: Some(mount),
+            stored: None,
+        };
+        assert!(!dirs.is_empty());
+        let wire = serde_json::to_value(&dirs).unwrap();
+        assert_eq!(wire["sent"], sent.to_str().unwrap());
+        let worker: AssetDirs = serde_json::from_value(wire).unwrap();
+        assert_eq!(worker, dirs);
+        for dirs in [&dirs, &worker] {
+            assert_eq!(dirs.read("a.css").unwrap().unwrap(), b"sent");
+            assert_eq!(dirs.read("b.css").unwrap().unwrap(), b"mounted b");
+        }
+        let copy = dirs.clone();
+        drop(dirs);
+        assert_eq!(Arc::strong_count(&held), 2);
+        drop(copy);
+        assert_eq!(Arc::strong_count(&held), 1);
+    }
+
+    #[test]
     fn a_mounted_file_over_the_limit_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let file = std::fs::File::create(dir.path().join("big.png")).unwrap();
         file.set_len(MAX_ASSET_BYTES + 1).unwrap();
         let dirs = AssetDirs {
             mounted: Some(dir.path().to_path_buf()),
-            stored: None,
+            ..AssetDirs::default()
         };
         assert!(dirs.read("big.png").unwrap_err().contains("larger than"));
     }

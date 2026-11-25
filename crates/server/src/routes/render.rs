@@ -227,6 +227,15 @@ pub struct RenderForm {
     /// the whole page. Nothing is fetched from anywhere else.
     #[schema(value_type = Vec<String>, format = Binary, required = false)]
     pub assets: Option<Vec<String>>,
+    /// A ZIP of images and stylesheets for this request's templates and pages to
+    /// name, as an upload to `/v1/assets`. A name in it wins over a mounted or a
+    /// stored one.
+    #[schema(rename = "assetLibrary", value_type = String, format = Binary, required = false)]
+    pub asset_library: Option<String>,
+    /// The hex SHA-256 of an `assetLibrary` this caller sent recently, in place of
+    /// the file.
+    #[schema(rename = "assetLibraryHash")]
+    pub asset_library_hash: Option<String>,
     /// For `underlay`: the PDF the document is laid over, page by page, such
     /// as letterhead or a pre-printed form.
     #[schema(value_type = String, format = Binary, required = false)]
@@ -305,6 +314,10 @@ pub struct RenderJson {
     /// For `/v1/render/batch`: each file's name, as a template.
     #[schema(rename = "batchName")]
     pub batch_name: Option<String>,
+    /// The hex SHA-256 of an `assetLibrary` this caller sent recently in a
+    /// multipart form.
+    #[schema(rename = "assetLibraryHash")]
+    pub asset_library_hash: Option<String>,
     /// URLs to fetch as further inputs, as on the multipart form.
     #[schema(rename = "downloadFrom", value_type = Option<Vec<Object>>)]
     pub download_from: Option<serde_json::Value>,
@@ -358,6 +371,7 @@ pub async fn render(
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    form.open_library(&state, &principal).await?;
     let render_choices = render_options(&mut form, &state)?;
     let stored = templates::named_in(&mut form, &state).await?;
     let from_store = stored.is_some();
@@ -515,7 +529,10 @@ pub(crate) fn render_options(
         currency,
         translations,
         dictionary,
-        assets: state.assets.clone(),
+        assets: rusticdoc_core::assets::AssetDirs {
+            sent: form.library.clone(),
+            ..state.assets.clone()
+        },
     })
 }
 
@@ -633,6 +650,7 @@ pub async fn run(
 )]
 pub async fn batch(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Hook(hook): Hook,
     headers: HeaderMap,
     req: Request,
@@ -643,6 +661,7 @@ pub async fn batch(
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    form.open_library(&state, &principal).await?;
     let render_choices = render_options(&mut form, &state)?;
     let stored = templates::named_in(&mut form, &state).await?;
     let template = match stored {
@@ -768,6 +787,7 @@ pub async fn batch(
             let mut req = RenderRequest::new(rendered);
             req.templating = false;
             req.steps = steps.clone();
+            req.convert_options.sent_assets = render_choices.assets.sent.clone();
             req.output_name = Some(safe_file_name(&name, &(index + 1).to_string()));
             outputs.push(execute(&st, req).await?);
         }
@@ -861,11 +881,16 @@ pub struct Validation {
     responses((status = 200, description = "The validation result", body = Validation), (status = 400, description = "The request is wrong", body = ErrorBody)),
     security(("api_key" = []), ("bearer" = []))
 )]
-pub async fn validate(State(state): State<AppState>, req: Request) -> ApiResult<Json<Validation>> {
+pub async fn validate(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    req: Request,
+) -> ApiResult<Json<Validation>> {
     let mut form = Form::from_request(req, &state).await?;
     // First, because the first file left is the template.
     let data = form.json("data")?;
     let ctx = form.json("ctx")?;
+    form.open_library(&state, &principal).await?;
     let render_choices = render_options(&mut form, &state)?;
     let template = match templates::named_in(&mut form, &state).await? {
         Some(template) => template,
