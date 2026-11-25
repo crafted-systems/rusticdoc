@@ -2215,6 +2215,16 @@
         "responses": {
           "200": {
             "description": "The rendered file",
+            "headers": {
+              "X-Page-Count": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "How many pages the file has, when it is a PDF of up to 32 MB"
+              }
+            },
             "content": {
               "application/octet-stream": {
                 "schema": {

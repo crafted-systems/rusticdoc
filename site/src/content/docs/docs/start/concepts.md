@@ -31,6 +31,7 @@ The response headers tell you what happened:
 | `x-request-id` | The id of this request. The same id appears in the logs |
 | `server-timing` | How long each stage took, such as `template;dur=4, convert;dur=222, pdfa;dur=228` |
 | `x-fonts-used` | The fonts the converted document used |
+| `x-page-count` | How many pages a PDF result has |
 
 ## Template
 

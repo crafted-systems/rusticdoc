@@ -196,6 +196,7 @@ The file is named after `outputFilename`, or after the template if you didn't se
 | `x-request-id` | Every response | The id of this request, which also appears in the logs and on webhook deliveries. Send your own `X-Request-Id` to set it |
 | `content-disposition` | Files | `attachment; filename="..."` |
 | `x-fonts-used` | PDF results of up to 32 MB | The fonts named in the PDF, like `LiberationSans, LiberationSans-Bold`. Check it to catch a font that fell back. See [fonts](fonts.md) |
+| `x-page-count` | PDF results of up to 32 MB, and every page preview | How many pages the document has |
 | `server-timing` | Files | Milliseconds per stage, like `template;dur=18, convert;dur=67` |
 | `x-rusticdoc-version` | Authenticated routes, and every route when no credentials are configured | The service version |
 | `x-content-type-options` | Every response | `nosniff` |
@@ -206,6 +207,7 @@ curl -F template=@invoice.docx -F "data=<invoice.json" -F steps=convert \
   http://localhost:9027/v1/render -D headers.txt -o invoice.pdf
 grep -qi "^x-request-id: order-2041" headers.txt
 grep -qi "^x-fonts-used:" headers.txt
+grep -qi "^x-page-count:" headers.txt
 ```
 
 ## Sending a hash
