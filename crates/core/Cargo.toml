@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 async-trait = "0.1.92"
+base64 = "0.23.1"
 # The private-key operations of PDF signing. RustCrypto's `rsa` has an unpatched
 # timing advisory (RUSTSEC-2023-0071), and the server already builds aws-lc-rs.
 aws-lc-rs = "1.19.0"

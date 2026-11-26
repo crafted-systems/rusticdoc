@@ -107,7 +107,8 @@ struct RenderArgs {
     /// comes last and uses RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT.
     #[arg(short, long, default_value = "")]
     steps: String,
-    /// Output format for `convert`.
+    /// Output format for `convert`: pdf, docx, xlsx, pptx, odt, ods, odp,
+    /// html (images inside), txt or eml (an email ready to send).
     #[arg(long, default_value = "pdf")]
     to: String,
     /// PDF/A level for `pdfa`.
@@ -140,6 +141,8 @@ struct RenderArgs {
 struct ConvertArgs {
     /// Documents to convert.
     files: Vec<PathBuf>,
+    /// Output format: pdf, docx, xlsx, pptx, odt, ods, odp, html (images
+    /// inside), txt or eml (an email ready to send).
     #[arg(long, default_value = "pdf")]
     to: String,
     /// Export PDF/A at this level instead of plain PDF.

@@ -12,7 +12,7 @@ curl -F files=@invoice.html -F assets=@invoice.css -F assets=@logo.png \
 head -c4 invoice.pdf | grep -q %PDF
 ```
 
-`.html`, `.htm` and `.xhtml` files go to Fulgur whenever the output is PDF, both on `/v1/convert` and in a `convert` step on [`/v1/render`](https://rusticdoc.com/docs/guides/pipeline/). Every other format still goes to LibreOffice.
+`.html`, `.htm` and `.xhtml` files go to Fulgur whenever the output is PDF, both on `/v1/convert` and in a `convert` step on [`/v1/render`](https://rusticdoc.com/docs/guides/pipeline/). With `to=html` or `to=eml` the page comes back as one HTML file or an email, with its assets inside, as [HTML and email](email.md) describes. Every other format still goes to LibreOffice.
 
 ## What it is for
 

@@ -82,6 +82,7 @@ pub fn content_type_for(ext: &str) -> &'static str {
         "xml" => "application/xml",
         "svg" => "image/svg+xml",
         "zip" => "application/zip",
+        "eml" => "message/rfc822",
         _ => "application/octet-stream",
     }
 }
@@ -97,8 +98,11 @@ pub enum Format {
     Odt,
     Ods,
     Odp,
+    /// HTML with its images inside, as `data:` URIs.
     Html,
     Txt,
+    /// An email: the HTML with its images as `cid:` parts, and a text part.
+    Eml,
 }
 
 impl Format {
@@ -113,6 +117,7 @@ impl Format {
             "odp" => Format::Odp,
             "html" => Format::Html,
             "txt" => Format::Txt,
+            "eml" => Format::Eml,
             other => {
                 return Err(Error::InvalidRequest(format!(
                     "unknown output format '{other}'"
@@ -132,6 +137,24 @@ impl Format {
             Format::Odp => "odp",
             Format::Html => "html",
             Format::Txt => "txt",
+            Format::Eml => "eml",
+        }
+    }
+
+    /// What LibreOffice exports for this format: an email starts as HTML.
+    pub fn export_extension(self) -> &'static str {
+        match self {
+            Format::Eml => "html",
+            other => other.extension(),
+        }
+    }
+
+    /// HTML or an email, packed with the images LibreOffice writes beside it.
+    pub fn packed(self) -> Option<crate::htmlpack::Packed> {
+        match self {
+            Format::Html => Some(crate::htmlpack::Packed::Html),
+            Format::Eml => Some(crate::htmlpack::Packed::Eml),
+            _ => None,
         }
     }
 }

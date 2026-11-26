@@ -12,6 +12,7 @@ pub mod dictionaries;
 pub mod error;
 pub mod fonts;
 pub mod html;
+pub mod htmlpack;
 pub mod job;
 pub mod libraries;
 pub mod limits;

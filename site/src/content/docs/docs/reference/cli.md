@@ -59,7 +59,7 @@ Options:
   -s, --steps <STEPS>
           Steps in order: convert, pdfa, metadata, encrypt, merge, sign. `sign` comes last and uses RUSTICDOC_SIGNING_KEY and RUSTICDOC_SIGNING_CERT [default: ""]
       --to <TO>
-          Output format for `convert` [default: pdf]
+          Output format for `convert`: pdf, docx, xlsx, pptx, odt, ods, odp, html (images inside), txt or eml (an email ready to send) [default: pdf]
       --pdfa <PDFA>
           PDF/A level for `pdfa` [default: PDF/A-2b]
       --metadata <METADATA>
@@ -91,7 +91,7 @@ Arguments:
   [FILES]...  Documents to convert
 
 Options:
-      --to <TO>                    [default: pdf]
+      --to <TO>                    Output format: pdf, docx, xlsx, pptx, odt, ods, odp, html (images inside), txt or eml (an email ready to send) [default: pdf]
   -v, --verbose...                 Log verbosity: -v for debug, -vv for trace
       --pdfa <PDFA>                Export PDF/A at this level instead of plain PDF
       --merge                      Merge all inputs into one PDF

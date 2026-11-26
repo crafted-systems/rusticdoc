@@ -4,7 +4,7 @@
 
 Convert one or more uploaded documents with LibreOffice, or HTML with Fulgur, and merge or finish the result with PDF options.
 
-`POST /v1/convert` converts files with LibreOffice, with no templating involved. The exception is HTML going to PDF, which [Fulgur](https://rusticdoc.com/docs/guides/html/) lays out.
+`POST /v1/convert` converts files with LibreOffice, with no templating involved. The exceptions are HTML going to PDF, which [Fulgur](https://rusticdoc.com/docs/guides/html/) lays out, and HTML going to `html` or `eml`, which is [packed with its images](https://rusticdoc.com/docs/guides/email/) and not converted.
 
 ```bash
 curl -F files=@report.docx http://localhost:9027/v1/convert -o report.pdf
@@ -21,7 +21,9 @@ head -c4 report.pdf | grep -q %PDF
 | `docx`, `odt` | Word processing |
 | `xlsx`, `ods` | Spreadsheets |
 | `pptx`, `odp` | Presentations |
-| `html`, `txt` | Web page, plain text. `txt` is for word processing files, and a spreadsheet or presentation gets `500 engine_failed` |
+| `html` | One web page, with its images inside. See [HTML and email](https://rusticdoc.com/docs/guides/email/) |
+| `eml` | An email ready to send, with its images attached and a text part. See [HTML and email](https://rusticdoc.com/docs/guides/email/) |
+| `txt` | Plain text. It's for word processing files, and a spreadsheet or presentation gets `500 engine_failed` |
 
 ```bash
 curl -F files=@sheet.xlsx -F to=ods \

@@ -27,7 +27,9 @@ pub struct ConvertForm {
     /// One or more documents.
     #[schema(value_type = Vec<String>, format = Binary)]
     pub files: Vec<String>,
-    /// Output format. Default `pdf`.
+    /// Output format: `pdf`, `docx`, `xlsx`, `pptx`, `odt`, `ods`, `odp`,
+    /// `html` (images inside), `txt` or `eml` (an email ready to send).
+    /// Default `pdf`.
     pub to: Option<String>,
     /// PDF/A level: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`, `PDF/A-4`.
     pub pdfa: Option<String>,

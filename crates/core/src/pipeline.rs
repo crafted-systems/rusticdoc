@@ -336,6 +336,37 @@ impl Pipeline {
         Ok(Document::new(doc.with_extension("pdf"), pdf))
     }
 
+    /// An HTML page as one HTML file or one email, with no engine: its
+    /// assets, sent or held by the service, go inside it. LibreOffice would
+    /// rewrite the page's markup, which an email's author chose with care.
+    async fn pack_page(
+        &self,
+        doc: &Document,
+        packed: crate::htmlpack::Packed,
+        options: &ConvertOptions,
+        ext: &str,
+    ) -> Result<Document> {
+        if self.engines.office_routes_disabled {
+            return Err(Error::EngineUnavailable(
+                "conversion is disabled on this service".into(),
+            ));
+        }
+        let html = doc.bytes.clone();
+        let sent = options.assets.clone();
+        let library = rusticdoc_template::assets::AssetDirs {
+            sent: options.sent_assets.clone(),
+            ..self.assets.clone()
+        };
+        let bytes =
+            tokio::task::spawn_blocking(move || page_with_assets(&html, &sent, &library, packed))
+                .await
+                .map_err(|e| Error::Engine {
+                    engine: "html",
+                    message: e.to_string(),
+                })??;
+        Ok(Document::new(doc.with_extension(ext), bytes))
+    }
+
     /// One document through one step; `Merge` and `Split` are handled by
     /// the caller because they change the number of documents.
     async fn one(&self, step: &Step, doc: &Document, options: &ConvertOptions) -> Result<Document> {
@@ -344,6 +375,10 @@ impl Pipeline {
         Ok(match step {
             Step::Convert { to: Format::Pdf } if self.fulgur_takes(doc, options) => {
                 self.fulgur(doc, options, options.pdfua).await?
+            }
+            Step::Convert { to } if crate::html::is_html(doc) && to.packed().is_some() => {
+                let packed = to.packed().expect("checked");
+                self.pack_page(doc, packed, options, to.extension()).await?
             }
             Step::Convert { to } => {
                 check_convertible(doc)?;
@@ -438,6 +473,59 @@ pub fn check_steps(steps: &[Step]) -> Result<()> {
 
 /// A step may send LibreOffice what `/v1/convert` would, or a text template it
 /// has just filled.
+/// Packs a page with the assets it names: those sent, then those the library
+/// holds. A stylesheet sent and not linked applies to the whole page, as it
+/// does when Fulgur lays the page out.
+fn page_with_assets(
+    html: &[u8],
+    sent: &[(String, bytes::Bytes)],
+    library: &rusticdoc_template::assets::AssetDirs,
+    packed: crate::htmlpack::Packed,
+) -> Result<Vec<u8>> {
+    use crate::htmlpack::{self, Files};
+    use rusticdoc_template::assets::{AssetKind, kind_of};
+
+    let mut files: Files = sent.iter().cloned().collect();
+    let linked = htmlpack::stylesheet_names(html);
+    let sheets: Vec<bytes::Bytes> = sent
+        .iter()
+        .filter(|(name, _)| kind_of(name) == Some(AssetKind::Stylesheet))
+        .filter(|(name, _)| !linked.contains(name))
+        .map(|(_, bytes)| bytes.clone())
+        .collect();
+    let mut held = 0;
+    let mut fetch = |name: &str, files: &mut Files| -> Result<()> {
+        if files.contains_key(name) || kind_of(name).is_none() || library.is_empty() {
+            return Ok(());
+        }
+        let Some(bytes) = library.read(name).map_err(Error::InvalidRequest)? else {
+            return Ok(());
+        };
+        held += 1;
+        if held > crate::html::MAX_ASSETS {
+            return Err(Error::InvalidRequest(format!(
+                "the page names more than the {} assets one conversion may carry",
+                crate::html::MAX_ASSETS
+            )));
+        }
+        files.insert(name.to_string(), bytes.into());
+        Ok(())
+    };
+    for name in &linked {
+        fetch(name, &mut files)?;
+    }
+    let mut images = htmlpack::image_names(html);
+    for sheet in linked.iter().filter_map(|n| files.get(n)).chain(&sheets) {
+        images.extend(htmlpack::image_names(sheet));
+    }
+    for name in images {
+        if kind_of(&name) == Some(AssetKind::Image) {
+            fetch(&name, &mut files)?;
+        }
+    }
+    htmlpack::pack(html, &files, &sheets, packed, limits::MAX_OUTPUT_BYTES)
+}
+
 fn check_convertible(doc: &Document) -> Result<()> {
     if crate::convert::accepts(doc) || template::is_text_template(&doc.extension()) {
         return Ok(());

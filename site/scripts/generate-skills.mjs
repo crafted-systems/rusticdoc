@@ -23,7 +23,7 @@ const REFERENCES = {
   'rusticdoc-templates': [
     'templates/syntax', 'templates/filters', 'templates/conditions', 'templates/calculations',
     'templates/office', 'templates/rich-content', 'templates/pdf-templates', 'templates/translations',
-    'templates/batch', 'templates/validate', 'guides/html', 'guides/assets',
+    'templates/batch', 'templates/validate', 'guides/html', 'guides/email', 'guides/assets',
   ],
   'rusticdoc-api': [
     'guides/pipeline', 'guides/pdf-operations', 'guides/convert', 'guides/stored-templates',

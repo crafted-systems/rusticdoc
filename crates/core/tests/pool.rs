@@ -50,6 +50,22 @@ for line in sys.stdin:
     if MODE == "fail":
         print(json.dumps({{"id": req["id"], "ok": False, "error": "no filter for that"}}), flush=True)
         continue
+    if MODE == "html":
+        # As LibreOffice's HTML export does: images beside the page. A link
+        # beside it must not be followed out of the job's directory.
+        out_dir = os.path.dirname(req["output"])
+        with open(os.path.join(out_dir, "output_html_1a2b.png"), "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\nimage")
+        secret = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret.png")
+        with open(secret, "wb") as f:
+            f.write(b"SECRET")
+        os.symlink(secret, os.path.join(out_dir, "link.png"))
+        with open(req["output"], "w") as f:
+            f.write('<html><head><title>Filter %s</title></head><body><p>Hello</p>'
+                    '<img src="output_html_1a2b.png"><img src="link.png">'
+                    '<img src="input.docx"></body></html>' % req["filter"])
+        print(json.dumps({{"id": req["id"], "ok": True, "pages": 1, "ms": 1}}), flush=True)
+        continue
     with open(req["output"], "w") as f:
         json.dump(req, f)
     print(json.dumps({{"id": req["id"], "ok": True, "pages": 1, "ms": 1}}), flush=True)
@@ -118,6 +134,47 @@ async fn converts_through_the_bridge() {
     assert_eq!(health["busy"], 0);
     assert_eq!(health["started"], 1);
     assert_eq!(health["restarts"], 0);
+}
+
+#[tokio::test]
+async fn html_and_email_carry_the_images_written_beside_the_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let lo = pool(&dir, "html", 1);
+    let out = lo
+        .convert(&docx(), Format::Html, None, Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(out.name, "report.html");
+    let html = String::from_utf8(out.bytes.to_vec()).unwrap();
+    assert!(html.contains("<title>Filter html</title>"), "{html}");
+    assert!(
+        html.contains(r#"<img src="data:image/png;base64,iVBORw0KGgppbWFnZQ==">"#),
+        "{html}"
+    );
+    // Neither a link nor the input is read.
+    assert!(
+        html.contains(r#"<img src="link.png"><img src="input.docx">"#),
+        "{html}"
+    );
+
+    let out = lo
+        .convert(&docx(), Format::Eml, None, Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(out.name, "report.eml");
+    assert_eq!(out.content_type(), "message/rfc822");
+    let eml = String::from_utf8(out.bytes.to_vec()).unwrap();
+    // LibreOffice was asked for HTML.
+    assert!(
+        eml.starts_with("MIME-Version: 1.0\r\nSubject: Filter html\r\n"),
+        "{eml}"
+    );
+    assert_eq!(eml.matches("Content-ID: <").count(), 1, "{eml}");
+    assert!(
+        eml.contains("Content-ID: <1.output_html_1a2b.png@rusticdoc>"),
+        "{eml}"
+    );
+    assert!(!eml.contains("U0VDUkVU"), "the linked file was read: {eml}");
 }
 
 #[tokio::test]

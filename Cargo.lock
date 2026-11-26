@@ -3928,6 +3928,7 @@ version = "0.3.1"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "cmpv2",

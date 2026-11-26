@@ -334,7 +334,7 @@ impl LibreOffice {
         let job_dir = worker.dir().join(format!("job-{}", worker.jobs));
         tokio::fs::create_dir(&job_dir).await?;
         let input = job_dir.join(format!("input.{ext}"));
-        let output = job_dir.join(format!("output.{}", to.extension()));
+        let output = job_dir.join(format!("output.{}", to.export_extension()));
         if options.single_page_sheets {
             let (bytes, ext) = (doc.bytes.clone(), ext.clone());
             let bytes = tokio::task::spawn_blocking(move || sheets::reset_scroll(bytes, &ext))
@@ -352,7 +352,7 @@ impl LibreOffice {
             id: worker.next_request_id(),
             input: &input,
             output: &output,
-            filter: to.extension(),
+            filter: to.export_extension(),
             filter_options: if to == Format::Pdf {
                 &options.filter_data()
             } else {
@@ -412,13 +412,34 @@ impl LibreOffice {
                     total_ms = started.elapsed().as_millis(),
                     "converted"
                 );
-                tokio::fs::read(&output)
-                    .await
-                    .map(|bytes| Document::new(doc.with_extension(to.extension()), bytes))
-                    .map_err(|_| Error::Engine {
+                match tokio::fs::read(&output).await {
+                    Err(_) => Err(Error::Engine {
                         engine: "libreoffice",
                         message: format!("no {} was produced for {}", to.extension(), doc.name),
-                    })
+                    }),
+                    Ok(bytes) => match to.packed() {
+                        None => Ok(Document::new(doc.with_extension(to.extension()), bytes)),
+                        Some(packed) => {
+                            let dir = job_dir.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let files = beside(&dir, &["input.", "output."]);
+                                crate::htmlpack::pack(
+                                    &bytes,
+                                    &files,
+                                    &[],
+                                    packed,
+                                    crate::limits::MAX_OUTPUT_BYTES,
+                                )
+                            })
+                            .await
+                            .map_err(|e| Error::Engine {
+                                engine: "libreoffice",
+                                message: e.to_string(),
+                            })?
+                            .map(|bytes| Document::new(doc.with_extension(to.extension()), bytes))
+                        }
+                    },
+                }
             }
         };
         let _ = tokio::fs::remove_dir_all(&job_dir).await;
@@ -667,6 +688,27 @@ async fn disk_passes(dir: &Path, limit: u64) {
             return;
         }
     }
+}
+
+/// The regular files directly in `dir`, by name, except those whose names
+/// start with one of `skip`: the images an HTML export writes beside the page.
+/// Links and directories are left out, so nothing outside `dir` is read.
+fn beside(dir: &Path, skip: &[&str]) -> crate::htmlpack::Files {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Default::default();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            if skip.iter().any(|s| name.starts_with(s)) {
+                return None;
+            }
+            let bytes = std::fs::read(e.path()).ok()?;
+            Some((name, bytes::Bytes::from(bytes)))
+        })
+        .collect()
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {

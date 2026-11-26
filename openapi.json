@@ -3545,7 +3545,7 @@
               "string",
               "null"
             ],
-            "description": "Output format. Default `pdf`."
+            "description": "Output format: `pdf`, `docx`, `xlsx`, `pptx`, `odt`, `ods`, `odp`,\n`html` (images inside), `txt` or `eml` (an email ready to send).\nDefault `pdf`."
           }
         }
       },
@@ -4715,7 +4715,7 @@
               "string",
               "null"
             ],
-            "description": "Output format for `convert`. Default `pdf`."
+            "description": "Output format for `convert`: `pdf`, `docx`, `xlsx`, `pptx`, `odt`,\n`ods`, `odp`, `html` (images inside), `txt` or `eml` (an email ready\nto send). Default `pdf`."
           },
           "translations": {
             "type": [
@@ -4934,7 +4934,7 @@
               "string",
               "null"
             ],
-            "description": "Output format for `convert`. Default `pdf`."
+            "description": "Output format for `convert`: `pdf`, `docx`, `xlsx`, `pptx`, `odt`,\n`ods`, `odp`, `html` (images inside), `txt` or `eml` (an email ready\nto send). Default `pdf`."
           },
           "translations": {
             "type": [
