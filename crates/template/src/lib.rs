@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use minijinja::value::Value;
+use minijinja::State;
 use serde::{Deserialize, Serialize};
 
 pub mod assets;
@@ -29,6 +30,7 @@ mod qrdata;
 mod rich;
 mod sanitize;
 mod sheet;
+mod suggest;
 pub mod translate;
 mod workbook;
 mod xml;
@@ -759,7 +761,11 @@ fn validate_within(
     }
 
     // A probing render finds every undefined value and loops over scalars.
-    let records: Arc<Mutex<Vec<(usize, Severity, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    // Each record: the tag, how bad, what, and a name that differs from the
+    // one written only in case.
+    type Record = (usize, Severity, String, Option<String>);
+    let records: Arc<Mutex<Vec<Record>>> = Arc::new(Mutex::new(Vec::new()));
+    let texts: Arc<Vec<String>> = Arc::new(compiled.table.iter().map(|t| t.text.clone()).collect());
     let source = program::emit(&compiled.parts, &compiled.table, Mode::Probe);
     let mut env = format.environment(&compiled.settings);
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
@@ -809,19 +815,28 @@ fn validate_within(
         },
     );
     let rec = records.clone();
-    env.add_filter("__probe", move |v: Value, id: usize| {
+    let tx = texts.clone();
+    env.add_filter("__probe", move |state: &State, v: Value, id: usize| {
         if v.is_undefined() {
+            let hint = tx.get(id).and_then(|t| suggest::case_hint(state, t));
             if let Ok(mut r) = rec.lock() {
-                r.push((id, Severity::Error, "value is undefined".to_string()));
+                r.push((id, Severity::Error, "value is undefined".to_string(), hint));
             }
         }
         v
     });
     let rec = records.clone();
-    env.add_filter("__probe_iter", move |v: Value, id: usize| {
+    let tx = texts;
+    env.add_filter("__probe_iter", move |state: &State, v: Value, id: usize| {
         if v.is_undefined() {
+            let hint = tx.get(id).and_then(|t| suggest::case_hint(state, t));
             if let Ok(mut r) = rec.lock() {
-                r.push((id, Severity::Error, "loop over an undefined value".into()));
+                r.push((
+                    id,
+                    Severity::Error,
+                    "loop over an undefined value".into(),
+                    hint,
+                ));
             }
             return Value::from(Vec::<Value>::new());
         }
@@ -831,6 +846,7 @@ fn validate_within(
                     id,
                     Severity::Warning,
                     format!("loop over a {} rather than an array", v.kind()),
+                    None,
                 ));
             }
             return Value::from(Vec::<Value>::new());
@@ -848,11 +864,26 @@ fn validate_within(
         }
     }
     if let Ok(records) = records.lock() {
-        for (id, severity, message) in records.iter() {
+        for (id, severity, message, hint) in records.iter() {
             let tag = &compiled.table[*id];
+            let hint = hint
+                .as_ref()
+                .map(|h| format!(" (did you mean `{h}`?)"))
+                .unwrap_or_default();
+            // The strict render may have reported this tag first, and only
+            // the first report of a tag is kept, so the hint goes on it too.
+            if !hint.is_empty() {
+                if let Some(d) = diags.iter_mut().find(|d| {
+                    d.severity == *severity
+                        && d.location.as_ref() == Some(&tag.loc)
+                        && !d.message.contains("did you mean")
+                }) {
+                    d.message.push_str(&hint);
+                }
+            }
             diags.push(Diagnostic {
                 severity: *severity,
-                message: format!("{message}: {}", tag.text),
+                message: format!("{message}: {}{hint}", tag.text),
                 location: Some(tag.loc.clone()),
             });
         }

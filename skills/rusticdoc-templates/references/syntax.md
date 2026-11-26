@@ -122,6 +122,8 @@ Nothing flags the first line as a mistake, so check the totals the first time yo
 
 An undefined value stops the render. A missing variable never prints as nothing, so a typo can't reach a customer as a blank.
 
+Names are case-sensitive: `{{ Balance }}` doesn't find `balance` in the data. [Validating](validate.md) an Office template suggests the name you probably meant.
+
 ```bash
 printf 'Hello {{ nobody }}\n' > missing.txt
 curl -F template=@missing.txt -F 'data={"somebody":"Ada"}' \
