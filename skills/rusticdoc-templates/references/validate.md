@@ -116,6 +116,7 @@ In an Office template:
 | Tags where no rule applies | `'{% else %}' ... needs its own paragraph between ...`, with both positions named |
 | A filter that doesn't exist | `unknown filter: filter nosuch is unknown` |
 | A missing value | `undefined value`, or `value is undefined: {{ w }}` |
+| A name the data has in another case | The same, ending `` (did you mean `customer.name`?) `` |
 | A bad argument to a rich filter | `image: too many arguments: unknown keyword argument 'foo'` |
 | A loop over something that isn't a list | A warning: `loop over a number rather than an array: {% for i in n %}` |
 | Text that looks like a broken tag | A warning: `text looks like an unterminated tag` |
