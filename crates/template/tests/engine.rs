@@ -977,3 +977,36 @@ fn of_two_entries_with_one_name_only_one_is_read_and_written() {
         .count();
     assert_eq!(contents, 1);
 }
+
+#[test]
+fn undefined_values_suggest_a_name_that_differs_only_in_case() {
+    let doc = docx(
+        &(p("{{ Customer.Name }}")
+            + &p("{% for it in Items %}{{ it.Name }} {{ it.QTY * 2 }}{% endfor %}")
+            + &p("{% if customer.VIP %}yes{% endif %}")
+            + &p("{{ customer.phone }}")),
+    );
+    let diags = validate(Format::Docx, &doc, &items());
+    let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+    let has = |needle: &str| messages.iter().any(|m| m.contains(needle));
+    assert!(has("did you mean `customer.name`?"), "{messages:#?}");
+    assert!(has("did you mean `items`?"), "{messages:#?}");
+    assert!(has("did you mean `customer.vip`?"), "{messages:#?}");
+    // A value missing whatever the case gets no hint.
+    let phone = diags
+        .iter()
+        .find(|d| d.message.contains("customer.phone"))
+        .expect("phone is reported");
+    assert!(!phone.message.contains("did you mean"), "{messages:#?}");
+
+    // Inside a loop the hint follows the loop variable.
+    let doc = docx(&p("{% for it in items %}{{ it.Name }}{% endfor %}"));
+    let diags = validate(Format::Docx, &doc, &items());
+    let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("did you mean `it.name`?")),
+        "{messages:#?}"
+    );
+}
