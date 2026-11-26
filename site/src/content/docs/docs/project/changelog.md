@@ -9,6 +9,12 @@ sidebar:
 
 rusticdoc follows [ZeroVer](https://0ver.org/), so its versions stay below 1.0. A new minor number, like 0.2.0, may change behaviour you rely on, and its entry here says what changed. A new patch number, like 0.1.1, fixes faults and may add features, without changing what works. Pin the exact version, and read the entry before you move to a new minor one.
 
+## Unreleased
+
+- [`to=eml`](/docs/guides/email/) turns a document or an HTML template into an email ready to send: a MIME message with the HTML, its images attached by `cid:`, a plain-text part, and the page's `<title>` as the subject. It works on `/v1/convert`, in a `convert` step and in the CLI.
+- `to=html` returns one file with its images inside as `data:` URIs. Before, the pictures of a document LibreOffice exported were lost, because only the page came back.
+- An HTML template or page converted to `html` or `eml` no longer goes through LibreOffice, which rewrote its markup. It comes back as written, with its assets inside it, and `htmlEngine` doesn't apply.
+
 ## 0.3.1
 
 Released on 25 November 2026. The image is `ghcr.io/crafted-systems/rusticdoc:0.3.1`, for amd64 and arm64. Nothing that worked in 0.3.0 changes.

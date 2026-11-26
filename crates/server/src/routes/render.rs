@@ -74,7 +74,9 @@ pub struct RenderForm {
     /// cannot be combined with `encrypt`.
     #[schema(example = "convert,pdfa,encrypt")]
     pub steps: Option<String>,
-    /// Output format for `convert`. Default `pdf`.
+    /// Output format for `convert`: `pdf`, `docx`, `xlsx`, `pptx`, `odt`,
+    /// `ods`, `odp`, `html` (images inside), `txt` or `eml` (an email ready
+    /// to send). Default `pdf`.
     pub to: Option<String>,
     /// PDF/A level for `pdfa`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`.
     pub pdfa: Option<String>,
@@ -292,7 +294,9 @@ pub struct RenderJson {
     /// The steps in order, as a list or as comma-separated text.
     #[schema(value_type = Option<Vec<String>>, example = json!(["convert", "pdfa"]))]
     pub steps: Option<serde_json::Value>,
-    /// Output format for `convert`. Default `pdf`.
+    /// Output format for `convert`: `pdf`, `docx`, `xlsx`, `pptx`, `odt`,
+    /// `ods`, `odp`, `html` (images inside), `txt` or `eml` (an email ready
+    /// to send). Default `pdf`.
     pub to: Option<String>,
     /// PDF/A level for `pdfa`.
     pub pdfa: Option<String>,

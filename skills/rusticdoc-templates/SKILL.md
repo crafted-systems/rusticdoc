@@ -210,6 +210,7 @@ Read only what the task needs. The files are copies of the rusticdoc.com docs pa
 | `references/pdf-templates.md` | Filling PDF forms, tags in fields and annotations, flattening, overlays |
 | `references/translations.md` | `lang`, `t`, currencies, time zones, dictionaries |
 | `references/html.md` | Fulgur, assets, page layout and its limits |
+| `references/email.md` | `to=eml` emails and `to=html` pages with their images inside |
 | `references/assets.md` | Images and stylesheets the service holds, and `asset()` in templates |
 | `references/batch.md` | One template rendered for each item of a list, returned as a ZIP |
 | `references/validate.md` | Validation results and what they find |

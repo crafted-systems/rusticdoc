@@ -2082,6 +2082,216 @@ async fn html_converts_with_fulgur_and_its_assets() {
 }
 
 #[tokio::test]
+async fn html_packs_into_one_page_or_an_email_with_its_assets() {
+    let router = app(AppState::new(config()));
+    let logo = b"\x89PNG\r\n\x1a\nnot really".to_vec();
+    let page = br#"<html><head><link rel="stylesheet" href="site.css"></head><body><img src="logo.png"><img src="https://cdn.example.com/x.png"></body></html>"#;
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/convert",
+            &[
+                ("files", Some("invoice.html"), page.to_vec()),
+                ("to", None, b"html".to_vec()),
+                ("assets", Some("logo.png"), logo.clone()),
+                (
+                    "assets",
+                    Some("site.css"),
+                    b"body{background:url(logo.png)}".to_vec(),
+                ),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"invoice.html\""
+    );
+    let out = text(res).await;
+    assert_eq!(out.matches("data:image/png;base64,").count(), 2, "{out}");
+    assert!(
+        out.contains("<style>\nbody{background:url(data:image/png"),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"<img src="https://cdn.example.com/x.png">"#),
+        "{out}"
+    );
+    assert!(
+        !out.contains("site.css") && !out.contains("\"logo.png\""),
+        "{out}"
+    );
+
+    // A filled template as an email, its logo attached by Content-ID.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/render",
+            &[
+                (
+                    "template",
+                    Some("letter.html"),
+                    b"<title>Invoice {{ number }}</title><p>Dear {{ name }}</p><img src=\"logo.png\">"
+                        .to_vec(),
+                ),
+                ("data", None, br#"{"name":"Ada","number":42}"#.to_vec()),
+                ("steps", None, b"convert".to_vec()),
+                ("to", None, b"eml".to_vec()),
+                ("assets", Some("logo.png"), logo),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_TYPE).unwrap(),
+        "message/rfc822"
+    );
+    assert_eq!(
+        res.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"letter.eml\""
+    );
+    let eml = text(res).await;
+    assert!(
+        eml.starts_with("MIME-Version: 1.0\r\nSubject: Invoice 42\r\n"),
+        "{eml}"
+    );
+    assert!(eml.contains("Content-ID: <1.logo.png@rusticdoc>"), "{eml}");
+    assert!(
+        eml.contains("Content-Type: text/plain; charset=utf-8"),
+        "{eml}"
+    );
+
+    // Only convert accepts the new formats, and nothing else changes.
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/convert",
+            &[("files", Some("a.html"), "<p>x</p>"), ("to", None, "msg")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let mut c = config();
+    c.convert_disabled = true;
+    let res = app(AppState::new(c))
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("a.html"), "<p>x</p>"),
+                ("steps", None, "convert"),
+                ("to", None, "eml"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn html_files_convert_to_email() {
+    let router = app(AppState::new(config()));
+    let logo = b"\x89PNG\r\n\x1a\nnot really".to_vec();
+    let page = b"<html><head><title>Spring news</title></head><body><img src=\"logo.png\"><p>Hello</p></body></html>";
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/convert",
+            &[
+                ("files", Some("news.html"), page.to_vec()),
+                ("to", None, b"eml".to_vec()),
+                ("assets", Some("logo.png"), logo.clone()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CONTENT_TYPE).unwrap(),
+        "message/rfc822"
+    );
+    assert_eq!(
+        res.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"news.eml\""
+    );
+    let eml = text(res).await;
+    assert!(
+        eml.starts_with("MIME-Version: 1.0\r\nSubject: Spring news\r\n"),
+        "{eml}"
+    );
+    assert!(eml.contains("Content-ID: <1.logo.png@rusticdoc>"), "{eml}");
+
+    // Several pages come back as a ZIP of emails.
+    let res = router
+        .clone()
+        .oneshot(post_binary(
+            "/v1/convert",
+            &[
+                ("files", Some("a.html"), b"<p>A</p>".to_vec()),
+                ("files", Some("b.htm"), b"<p>B</p>".to_vec()),
+                ("to", None, b"eml".to_vec()),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let zip = bytes_of(res).await;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    let mut names: Vec<String> = archive
+        .file_names()
+        .map(|n| n.unwrap().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a.eml", "b.eml"]);
+    let mut first = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("a.eml").unwrap(), &mut first).unwrap();
+    assert!(first.starts_with("MIME-Version: 1.0\r\n"), "{first}");
+
+    // An email is not a PDF: merging and PDF steps are refused. (Encryption
+    // needs qpdf, which this service lacks, so it would answer 503 first.)
+    for extra in [("merge", "true"), ("watermarkSource", "text")] {
+        let mut parts = vec![
+            ("files", Some("a.html"), "<p>A</p>"),
+            ("to", None, "eml"),
+            (extra.0, None, extra.1),
+        ];
+        if extra.0 == "watermarkSource" {
+            parts.push(("watermarkExpression", None, "DRAFT"));
+        }
+        let res = router
+            .clone()
+            .oneshot(post_form("/v1/convert", &parts))
+            .await
+            .unwrap();
+        let status = res.status();
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{extra:?}: {}",
+            text(res).await
+        );
+    }
+    let res = router
+        .clone()
+        .oneshot(post_form(
+            "/v1/render",
+            &[
+                ("template", Some("a.html"), "<p>A</p>"),
+                ("steps", None, "convert,watermark"),
+                ("to", None, "eml"),
+                ("watermarkSource", None, "text"),
+                ("watermarkExpression", None, "DRAFT"),
+            ],
+        ))
+        .await
+        .unwrap();
+    let status = res.status();
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{}", text(res).await);
+}
+
+#[tokio::test]
 async fn disabling_conversion_stops_fulgur_too() {
     let mut c = config();
     c.convert_disabled = true;

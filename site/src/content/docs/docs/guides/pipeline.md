@@ -88,7 +88,7 @@ Steps run in the order `steps` lists them, each on the document or documents in 
 
 | Step | Fields | What it does |
 |---|---|---|
-| `convert` | `to`, default `pdf`: `pdf`, `docx`, `xlsx`, `pptx`, `odt`, `ods`, `odp`, `html`, `txt` | Converts with LibreOffice |
+| `convert` | `to`, default `pdf`: `pdf`, `docx`, `xlsx`, `pptx`, `odt`, `ods`, `odp`, `html`, `txt`, `eml` | Converts with LibreOffice. `html` and `eml` carry their images, see [HTML and email](/docs/guides/email/) |
 | `pdfa` | `pdfa`, default `PDF/A-2b`: `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b`, `PDF/A-4` | Exports as PDF/A with LibreOffice |
 | `pdfua` | None | Exports as PDF/UA with LibreOffice |
 | `merge` | `files` | Appends the extra PDFs, in the order sent. After a `split`, it joins the parts back together |

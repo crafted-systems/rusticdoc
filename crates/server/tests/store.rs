@@ -2534,6 +2534,49 @@ async fn a_request_brings_its_own_asset_library_and_no_other_request_sees_it() {
 }
 
 #[tokio::test]
+async fn an_asset_library_reaches_html_pages_packed_into_an_email_or_one_file() {
+    let (router, _mount) = no_store(|_| {});
+    let zip = zip_of(&[("brand/logo.png", DOT)]);
+    let library: Part<'_> = ("assetLibrary", Some("library.zip"), &zip);
+    let page: &[u8] =
+        b"<html><head><title>Hello</title></head><body><img src=\"brand/logo.png\"></body></html>";
+
+    let template: Part<'_> = ("template", Some("t.html"), page);
+    let parts: &[Part<'_>] = &[
+        template,
+        ("data", None, b"{}"),
+        ("steps", None, b"convert"),
+        ("to", None, b"eml"),
+        library,
+    ];
+    let res = router
+        .clone()
+        .oneshot(post("/v1/render", parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let eml = String::from_utf8(bytes(res).await).unwrap();
+    assert!(
+        eml.contains("Content-ID: <1.brand_logo.png@rusticdoc>"),
+        "{eml}"
+    );
+
+    let parts: &[Part<'_>] = &[
+        ("files", Some("page.html"), page),
+        ("to", None, b"html"),
+        library,
+    ];
+    let res = router
+        .clone()
+        .oneshot(post("/v1/convert", parts))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = String::from_utf8(bytes(res).await).unwrap();
+    assert!(html.contains("src=\"data:image/png;base64,"), "{html}");
+}
+
+#[tokio::test]
 async fn an_asset_library_reaches_templates_batches_validation_and_stored_templates() {
     let (router, _mount) = no_store(|_| {});
     let zip = zip_of(&[("brand/logo.png", DOT)]);
